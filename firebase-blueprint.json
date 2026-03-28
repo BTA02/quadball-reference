@@ -1,0 +1,334 @@
+{
+  "entities": {
+    "Game": {
+      "title": "Game",
+      "description": "A specific match between two teams.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique Game ID."
+        },
+        "seasonId": {
+          "type": "string",
+          "description": "An ID for identifying a season. For now, it will just be the calendar year"
+        },
+        "homeTeamId": {
+          "type": "string"
+        },
+        "awayTeamId": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "seasonId",
+        "homeTeamId",
+        "awayTeamId"
+      ]
+    },
+    "Video": {
+      "title": "Video",
+      "description": "A YouTube video recording of a game.",
+      "type": "object",
+      "properties": {
+        "youtubeId": {
+          "type": "string",
+          "description": "The YouTube ID."
+        },
+        "videoId": {
+          "type": "string",
+          "description": "Unique ID for the recording."
+        },
+        "gameId": {
+          "type": "string",
+          "description": "The ID of the game this video records."
+        },
+        "title": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "youtubeId",
+        "videoId",
+        "gameId",
+        "title",
+        "createdAt"
+      ]
+    },
+    "Event": {
+      "title": "Event",
+      "description": "A timestamped event in a video.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "videoId": {
+          "type": "string",
+          "description": "Firestore ID of the video."
+        },
+        "gameId": {
+          "type": "string",
+          "description": "Unique ID for the game."
+        },
+        "userId": {
+          "type": "string"
+        },
+        "userName": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "goal",
+            "assist",
+            "shot",
+            "gameStart",
+            "gamePause",
+            "gameResume",
+            "gameEnd",
+            "foul",
+            "card",
+            "substitution",
+            "control_change",
+            "turnover",
+            "takeaway",
+            "block",
+            "flag_released",
+            "seeker_enters",
+            "flag_catch"
+          ]
+        },
+        "videoTime": {
+          "type": "number",
+          "description": "Time in seconds from the start of the video."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "upvotes": {
+          "type": "number",
+          "description": "Number of upvotes."
+        },
+        "downvotes": {
+          "type": "number",
+          "description": "Number of downvotes."
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "verified",
+            "rejected"
+          ]
+        },
+        "playerId": {
+          "type": "string",
+          "description": "The player who performed the action."
+        },
+        "subPlayerId": {
+          "type": "string",
+          "description": "For substitutions: the player coming in."
+        },
+        "relatedEventId": {
+          "type": "string",
+          "description": "The ID of a related event (e.g., a goal for an assist)."
+        },
+        "teamId": {
+          "type": ["string", "null"],
+          "description": "The team this event belongs to. Required for all team-attributable events (goal, shot, assist, foul, card, turnover, takeaway, block, substitution). For control_change: the team gaining possession, or null if neither team has control."
+        },
+        "position": {
+          "type": ["string", "null"],
+          "enum": ["chaser", "keeper", "beater", "seeker", null],
+          "description": "For substitutions: the position being filled (chaser, keeper, beater, seeker)."
+        }
+      },
+      "required": [
+        "videoId",
+        "gameId",
+        "userId",
+        "type",
+        "videoTime"
+      ]
+    },
+    "Player": {
+      "title": "Player",
+      "description": "A global player record.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "firstName": {
+          "type": "string"
+        },
+        "lastName": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "firstName",
+        "lastName"
+      ]
+    },
+    "Team": {
+      "title": "Team",
+      "description": "A team record.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "Season": {
+      "title": "Season",
+      "description": "A season record.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "Roster": {
+      "title": "Roster",
+      "description": "A team's roster for a specific season.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "teamId": {
+          "type": "string"
+        },
+        "seasonId": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "teamId",
+        "seasonId"
+      ]
+    },
+    "RosterPlayer": {
+      "title": "RosterPlayer",
+      "description": "A player's assignment to a roster.",
+      "type": "object",
+      "properties": {
+        "playerId": {
+          "type": "string"
+        },
+        "number": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "playerId",
+        "number"
+      ]
+    },
+    "Vote": {
+      "title": "Vote",
+      "description": "A vote for an event's accuracy.",
+      "type": "object",
+      "properties": {
+        "eventId": {
+          "type": "string"
+        },
+        "userId": {
+          "type": "string"
+        },
+        "isAccurate": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "eventId",
+        "userId",
+        "isAccurate"
+      ]
+    }
+  },
+  "firestore": {
+    "/games/{gameId}": {
+      "schema": "Game",
+      "description": "Collection of games."
+    },
+    "/videos/{videoId}": {
+      "schema": "Video",
+      "description": "Collection of video recordings."
+    },
+    "/events/{eventId}": {
+      "schema": "Event",
+      "description": "Collection of events across all videos."
+    },
+    "/events/{eventId}/votes/{voteId}": {
+      "schema": "Vote",
+      "description": "Votes for a specific event."
+    },
+    "/players/{playerId}": {
+      "schema": "Player",
+      "description": "Global player records."
+    },
+    "/teams/{teamId}": {
+      "schema": "Team",
+      "description": "Team records."
+    },
+    "/seasons/{seasonId}": {
+      "schema": "Season",
+      "description": "Season records."
+    },
+    "/rosters/{rosterId}": {
+      "schema": "Roster",
+      "description": "Team rosters for seasons."
+    },
+    "/rosters/{rosterId}/players/{playerId}": {
+      "schema": "RosterPlayer",
+      "description": "Players assigned to a specific roster."
+    }
+  }
+}

@@ -1,0 +1,204 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    // Collection: games
+    // Fields: id, seasonId, homeTeamId, awayTeamId, createdAt
+    //
+    // Collection: videos
+    // Fields: youtubeId, videoId, gameId, title, createdAt
+    //
+    // Collection: events
+    // Fields: videoId, gameId, userId, userName, type, videoTime, createdAt, votes, status, playerId, subPlayerId, teamId
+    // Event types: goal, shot, assist, foul, card, substitution, control_change, turnover, takeaway, block, gameStart, gamePause, gameResume, gameEnd, flag_released, seeker_enters, flag_catch
+    // teamId: required for team-attributable events; null on control_change means no team has possession
+    //
+    // Collection: players
+    // Fields: firstName, lastName, createdAt
+    //
+    // Collection: teams
+    // Fields: name, createdAt
+    //
+    // Collection: seasons
+    // Fields: name, league (optional), year (optional), description (optional), id (optional), createdAt
+    //
+    // Collection: rosters
+    // Fields: teamId, seasonId, createdAt
+    //
+    // Collection: rosters/{rosterId}/players
+    // Fields: playerId, number, createdAt
+    // ===============================================================
+
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (
+          (request.auth.token.email == "andrew.axtell@gmail.com" && request.auth.token.email_verified == true) ||
+          (exists(/databases/$(database)/documents/appConfig/roles) && request.auth.token.email in get(/databases/$(database)/documents/appConfig/roles).data.trusted) ||
+          (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
+        );
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function isValidGame(data) {
+      return data.id is string && data.id.size() > 0 &&
+             (data.seasonId == null || data.seasonId is string) &&
+             (data.homeTeamId == null || data.homeTeamId is string) &&
+             (data.awayTeamId == null || data.awayTeamId is string) &&
+             (data.createdAt == null || data.createdAt is timestamp);
+    }
+
+    function isValidVideo(data) {
+      return data.videoId is string && data.videoId.size() > 0 &&
+             (data.youtubeId == null || data.youtubeId is string) &&
+             (data.gameId == null || data.gameId is string) &&
+             (data.title == null || data.title is string) &&
+             (data.createdAt == null || data.createdAt is timestamp);
+    }
+
+    function isValidEvent(data) {
+      return data.videoId is string && data.gameId is string &&
+             data.userId is string && data.userName is string &&
+             data.type is string &&
+             data.videoTime is number &&
+             data.votes is number &&
+             data.status is string &&
+             (data.createdAt == null || data.createdAt is timestamp) &&
+             (!('teamId' in data) || data.teamId == null || data.teamId is string);
+    }
+
+    function isValidPlayer(data) {
+      return (data.firstName == null || data.firstName is string) &&
+             (data.lastName == null || data.lastName is string) &&
+             (data.createdAt == null || data.createdAt is timestamp);
+    }
+
+    function isValidTeam(data) {
+      return hasOnlyAllowedFields(['name', 'createdAt']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100;
+    }
+
+    function isValidSeason(data) {
+      return (data.name is string && data.name.size() > 0 && data.name.size() < 100) &&
+             (data.createdAt == null || data.createdAt is timestamp) &&
+             (!('id' in data) || data.id is string) &&
+             (!('league' in data) || data.league is string) &&
+             (!('year' in data) || data.year is string) &&
+             (!('description' in data) || data.description is string);
+    }
+
+    function isValidRoster(data) {
+      return hasOnlyAllowedFields(['teamId', 'seasonId', 'createdAt']) &&
+             data.teamId is string && data.seasonId is string;
+    }
+
+    function isValidRosterPlayer(data) {
+      return hasOnlyAllowedFields(['playerId', 'number', 'createdAt']) &&
+             data.playerId is string && data.number is string;
+    }
+
+    // Aggregated Stats & Lists
+    match /aggregated/{docId} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+
+    // Games
+    match /games/{gameId} {
+      allow read: if true;
+      allow create: if (isAuthenticated() && isValidGame(request.resource.data)) || isAdmin();
+      allow update: if (isAuthenticated() && isValidGame(request.resource.data)) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // Videos
+    match /videos/{videoId} {
+      allow read: if true;
+      allow create: if (isAuthenticated() && isValidVideo(request.resource.data)) || isAdmin();
+      allow update: if (isAuthenticated() && isValidVideo(request.resource.data)) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // Players
+    match /players/{playerId} {
+      allow read: if true;
+      allow create: if (isAuthenticated() && isValidPlayer(request.resource.data)) || isAdmin();
+      allow update: if (isAuthenticated() && isValidPlayer(request.resource.data)) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // Teams
+    match /teams/{teamId} {
+      allow read: if true;
+      allow create: if isAuthenticated() && isValidTeam(request.resource.data);
+      allow update: if isAuthenticated() && isValidTeam(request.resource.data);
+      allow delete: if isAuthenticated();
+    }
+
+    // Seasons
+    match /seasons/{seasonId} {
+      allow read: if true;
+      allow create: if isAuthenticated() && isValidSeason(request.resource.data);
+      allow update: if isAuthenticated() && isValidSeason(request.resource.data);
+      allow delete: if isAuthenticated();
+    }
+
+    // Rosters
+    match /rosters/{rosterId} {
+      allow read: if true;
+      allow create: if isAuthenticated() && isValidRoster(request.resource.data);
+      allow update: if isAuthenticated() && isValidRoster(request.resource.data);
+      allow delete: if isAuthenticated();
+
+      match /players/{playerId} {
+        allow read: if true;
+        allow create: if isAuthenticated() && isValidRosterPlayer(request.resource.data);
+        allow update: if isAuthenticated() && isValidRosterPlayer(request.resource.data);
+        allow delete: if isAuthenticated();
+      }
+    }
+
+    // Events (Legacy)
+    match /events/{eventId} {
+      allow read: if true;
+      allow create: if isAdmin();
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // Role Assignments & System Config
+    match /appConfig/{docId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin() || (isAuthenticated() && get(/databases/$(database)/documents/appConfig/roles).data.trusted.hasAny([request.auth.token.email]));
+    }
+
+    // GameEvents (Modern Array-Based Schema)
+    match /gameEvents/{gameId} {
+      allow read: if true;
+      allow create: if isAuthenticated() || isAdmin();
+      allow update: if isAuthenticated() || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // Votes
+    match /events/{eventId}/votes/{voteId} {
+      allow read: if true;
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow update: if isOwner(resource.data.userId);
+      allow delete: if isOwner(resource.data.userId);
+    }
+  }
+}

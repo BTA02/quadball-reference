@@ -1,0 +1,5 @@
+{
+  "name": "YouTube Sports Stats Tracker",
+  "description": "Track game events, goals, and player stats in real-time while watching YouTube videos with a crowdsourced consensus model.",
+  "requestFramePermissions": []
+}
