@@ -88,24 +88,59 @@ interface SeekerStatsViewProps {
   teams: Team[];
   games: Game[];
   seasons: Season[];
+  statsFilter?: 'all' | 'verified' | 'legacy';
+  seasonId?: string;
+  onSeasonChange?: (val: string) => void;
+  teamId?: string;
+  onTeamChange?: (val: string) => void;
+  search?: string;
+  onSearchChange?: (val: string) => void;
 }
 
-export default function SeekerStatsView({ players, events, teams, games, seasons }: SeekerStatsViewProps) {
-  const [search, setSearch] = useState('');
-  const [seasonFilter, setSeasonFilter] = useState('');
-  const [teamFilter, setTeamFilter] = useState('');
+export default function SeekerStatsView({ 
+  players, events, teams, games, seasons, statsFilter = 'all',
+  seasonId: seasonFilter = '', onSeasonChange: setSeasonFilter,
+  teamId: teamFilter = '', onTeamChange: setTeamFilter,
+  search = '', onSearchChange: setSearch
+}: SeekerStatsViewProps) {
   const [minGames, setMinGames] = useState(1);
   const [page, setPage] = useState(1);
   const [sortKey, setSortKey] = useState('catches');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const perPage = 25;
 
-  useEffect(() => { setPage(1); }, [search, seasonFilter, teamFilter, minGames]);
+  useEffect(() => { setPage(1); }, [seasonFilter, teamFilter, minGames]);
 
   const handleSort = (key: string) => {
     if (key === sortKey) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
     else { setSortKey(key); setSortDir('desc'); }
   };
+
+  const filteredSeasons = useMemo(() => {
+    let sArr = [...seasons];
+    if (statsFilter === 'all') {
+      sArr = sArr.filter(sea => {
+        const yearMatch = sea.name.match(/\d{4}/);
+        return yearMatch ? parseInt(yearMatch[0]) > 2020 : true;
+      });
+    }
+    return sArr.sort((a, b) => b.name.localeCompare(a.name));
+  }, [seasons, statsFilter]);
+
+  const filteredTeams = useMemo(() => {
+    if (statsFilter !== 'all') return teams;
+    const seasonIdsAfter2020 = new Set(filteredSeasons.map(s => s.id));
+    const teamsWithGamesAfter2020 = new Set<string>();
+    games.forEach(g => {
+      if (seasonIdsAfter2020.has(g.seasonId)) {
+        teamsWithGamesAfter2020.add(g.homeTeamId);
+        teamsWithGamesAfter2020.add(g.awayTeamId);
+      }
+    });
+    return teams
+      .filter(t => teamsWithGamesAfter2020.has(t.id))
+      .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  }, [teams, games, filteredSeasons, statsFilter]);
 
   const filters = useMemo(() => ({ seasonId: seasonFilter || undefined, teamId: teamFilter || undefined }), [seasonFilter, teamFilter]);
 
@@ -139,15 +174,15 @@ export default function SeekerStatsView({ players, events, teams, games, seasons
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <select value={seasonFilter} onChange={e => setSeasonFilter(e.target.value)}
+          <select value={seasonFilter} onChange={e => setSeasonFilter?.(e.target.value)}
             className="pl-2 pr-1 py-1 bg-white border border-gray-200 rounded-md text-xs outline-none focus:border-amber-400 cursor-pointer">
             <option value="">All Seasons</option>
-            {seasons.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            {filteredSeasons.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
-          <select value={teamFilter} onChange={e => setTeamFilter(e.target.value)}
+          <select value={teamFilter} onChange={e => setTeamFilter?.(e.target.value)}
             className="pl-2 pr-1 py-1 bg-white border border-gray-200 rounded-md text-xs outline-none focus:border-amber-400 cursor-pointer">
             <option value="">All Teams</option>
-            {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+            {filteredTeams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
           </select>
           <div className="flex items-center gap-1 bg-white border border-gray-200 rounded-md px-2 py-1">
             <span className="text-xs text-gray-500 font-medium">Min GP:</span>
@@ -156,7 +191,7 @@ export default function SeekerStatsView({ players, events, teams, games, seasons
           </div>
           <div className="relative">
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-400" />
-            <input type="text" placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)}
+            <input type="text" placeholder="Search..." value={search} onChange={e => setSearch?.(e.target.value)}
               className="pl-6 pr-2 py-1 bg-white border border-gray-200 rounded-md text-xs outline-none focus:border-amber-400 w-32" />
           </div>
         </div>

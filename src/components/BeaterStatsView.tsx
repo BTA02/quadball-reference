@@ -9,8 +9,10 @@ import {
 import {
   computeBeaterSoloStats,
   computeBeaterPairStats,
+  computeTeamBeaterStats,
   BeaterSoloStats,
   BeaterPairStats,
+  TeamBeaterStats
 } from '../lib/statsComputations';
 
 interface Player { id: string; firstName: string; lastName: string; preferredName?: string; nickname?: string; [k: string]: any; }
@@ -84,30 +86,66 @@ interface BeaterStatsViewProps {
   teams: Team[];
   games: Game[];
   seasons: Season[];
+  statsFilter?: 'all' | 'verified' | 'legacy';
+  seasonId?: string;
+  onSeasonChange?: (val: string) => void;
+  teamId?: string;
+  onTeamChange?: (val: string) => void;
+  search?: string;
+  onSearchChange?: (val: string) => void;
 }
 
-export default function BeaterStatsView({ players, events, teams, games, seasons }: BeaterStatsViewProps) {
-  const [tab, setTab] = useState<'pairs' | 'solo'>('pairs');
-  const [search, setSearch] = useState('');
-  const [seasonFilter, setSeasonFilter] = useState('');
-  const [teamFilter, setTeamFilter] = useState('');
+export default function BeaterStatsView({ 
+  players, events, teams, games, seasons, statsFilter = 'all',
+  seasonId: seasonFilter = '', onSeasonChange: setSeasonFilter,
+  teamId: teamFilter = '', onTeamChange: setTeamFilter,
+  search = '', onSearchChange: setSearch
+}: BeaterStatsViewProps) {
+  const [tab, setTab] = useState<'pairs' | 'solo' | 'team'>('pairs');
   const [minGames, setMinGames] = useState(1);
   const [page, setPage] = useState(1);
   const [sortKey, setSortKey] = useState('plusMinus');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const perPage = 25;
 
-  useEffect(() => { setPage(1); }, [search, seasonFilter, teamFilter, minGames, tab]);
+  useEffect(() => { setPage(1); }, [search, seasonFilter, teamFilter, minGames]);
 
   const handleSort = (key: string) => {
     if (key === sortKey) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
     else { setSortKey(key); setSortDir('desc'); }
   };
+  
+  const filteredSeasons = useMemo(() => {
+    let sArr = [...seasons];
+    if (statsFilter === 'all') {
+      sArr = sArr.filter(sea => {
+        const yearMatch = sea.name.match(/\d{4}/);
+        return yearMatch ? parseInt(yearMatch[0]) > 2020 : true;
+      });
+    }
+    return sArr.sort((a, b) => b.name.localeCompare(a.name));
+  }, [seasons, statsFilter]);
+
+  const filteredTeams = useMemo(() => {
+    if (statsFilter !== 'all') return teams;
+    const seasonIdsAfter2020 = new Set(filteredSeasons.map(s => s.id));
+    const teamsWithGamesAfter2020 = new Set<string>();
+    games.forEach(g => {
+      if (seasonIdsAfter2020.has(g.seasonId)) {
+        teamsWithGamesAfter2020.add(g.homeTeamId);
+        teamsWithGamesAfter2020.add(g.awayTeamId);
+      }
+    });
+    return teams
+      .filter(t => teamsWithGamesAfter2020.has(t.id))
+      .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  }, [teams, games, filteredSeasons, statsFilter]);
 
   const filters = useMemo(() => ({ seasonId: seasonFilter || undefined, teamId: teamFilter || undefined }), [seasonFilter, teamFilter]);
 
   const soloStats = useMemo(() => computeBeaterSoloStats(events, players, games, filters), [events, players, games, filters]);
   const pairStats = useMemo(() => computeBeaterPairStats(events, players, games, filters), [events, players, games, filters]);
+  const teamStats = useMemo(() => computeTeamBeaterStats(events, players, teams, games, filters), [events, players, teams, games, filters]);
 
   const filteredSolo = useMemo(() => {
     let d = soloStats.filter(s => s.gamesPlayed >= minGames);
@@ -121,7 +159,13 @@ export default function BeaterStatsView({ players, events, teams, games, seasons
     return sortBy(d, sortKey as keyof BeaterPairStats, sortDir);
   }, [pairStats, search, minGames, sortKey, sortDir]);
 
-  const data: any[] = tab === 'solo' ? filteredSolo : filteredPairs;
+  const filteredTeam = useMemo(() => {
+    let d = teamStats.filter(s => s.gamesPlayed >= minGames);
+    if (search) { const q = search.toLowerCase(); d = d.filter(s => s.teamName.toLowerCase().includes(q)); }
+    return sortBy(d, sortKey as keyof TeamBeaterStats, sortDir);
+  }, [teamStats, search, minGames, sortKey, sortDir]);
+
+  const data: any[] = tab === 'team' ? filteredTeam : tab === 'solo' ? filteredSolo : filteredPairs;
   const totalPages = Math.ceil(data.length / perPage) || 1;
   const paged = data.slice((page - 1) * perPage, page * perPage);
 
@@ -136,8 +180,14 @@ export default function BeaterStatsView({ players, events, teams, games, seasons
         <div className="flex items-center gap-4">
           <h2 className="text-lg font-bold text-gray-900">Beaters</h2>
           <div className="flex text-xs text-gray-400 gap-3 font-mono">
-            <span>{soloStats.length} beaters</span>
-            <span>{pairStats.length} pairs</span>
+            {tab === 'team' ? (
+              <span>{teamStats.length} teams</span>
+            ) : (
+              <>
+                <span>{soloStats.length} beaters</span>
+                <span>{pairStats.length} pairs</span>
+              </>
+            )}
             <span>{avgCtrl}% avg ctrl</span>
           </div>
         </div>
@@ -148,19 +198,23 @@ export default function BeaterStatsView({ players, events, teams, games, seasons
               Pairs
             </button>
             <button onClick={() => { setTab('solo'); setSortKey('plusMinus'); setSortDir('desc'); }}
-              className={cn('px-3 py-1 font-medium transition-colors', tab === 'solo' ? 'bg-purple-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50')}>
+              className={cn('px-3 py-1 font-medium transition-colors border-l border-gray-200', tab === 'solo' ? 'bg-purple-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50')}>
               Solo
             </button>
+            <button onClick={() => { setTab('team'); setSortKey('controlPct'); setSortDir('desc'); }}
+              className={cn('px-3 py-1 font-medium transition-colors border-l border-gray-200', tab === 'team' ? 'bg-purple-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50')}>
+              Team
+            </button>
           </div>
-          <select value={seasonFilter} onChange={e => setSeasonFilter(e.target.value)}
+          <select value={seasonFilter} onChange={e => setSeasonFilter?.(e.target.value)}
             className="pl-2 pr-1 py-1 bg-white border border-gray-200 rounded-md text-xs outline-none focus:border-purple-400 cursor-pointer">
             <option value="">All Seasons</option>
-            {seasons.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            {filteredSeasons.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
-          <select value={teamFilter} onChange={e => setTeamFilter(e.target.value)}
+          <select value={teamFilter} onChange={e => setTeamFilter?.(e.target.value)}
             className="pl-2 pr-1 py-1 bg-white border border-gray-200 rounded-md text-xs outline-none focus:border-purple-400 cursor-pointer">
             <option value="">All Teams</option>
-            {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+            {filteredTeams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
           </select>
           <div className="flex items-center gap-1 bg-white border border-gray-200 rounded-md px-2 py-1">
             <span className="text-xs text-gray-500 font-medium">Min GP:</span>
@@ -169,7 +223,7 @@ export default function BeaterStatsView({ players, events, teams, games, seasons
           </div>
           <div className="relative">
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-400" />
-            <input type="text" placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)}
+            <input type="text" placeholder="Search..." value={search} onChange={e => setSearch?.(e.target.value)}
               className="pl-6 pr-2 py-1 bg-white border border-gray-200 rounded-md text-xs outline-none focus:border-purple-400 w-32" />
           </div>
         </div>
@@ -182,18 +236,27 @@ export default function BeaterStatsView({ players, events, teams, games, seasons
             <thead>
               <tr className="border-b border-gray-100 bg-gray-50/80">
                 <th className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-left text-gray-400 sticky left-0 bg-gray-50 z-10 min-w-[180px]">
-                  {tab === 'pairs' ? 'Beater Pair' : 'Beater'}
+                  {tab === 'pairs' ? 'Beater Pair' : tab === 'team' ? 'Team' : 'Beater'}
                 </th>
-                <SortHeader label="GP" sortKey="gamesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Games Played" />
-                <SortHeader label="+" sortKey="plus" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Plus" />
-                <SortHeader label="−" sortKey="minus" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Minus" />
-                <SortHeader label="+/−" sortKey="plusMinus" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Plus / Minus" />
-                <SortHeader label="CTRL" sortKey="controlMinutes" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Control Minutes" />
-                <SortHeader label="TOT" sortKey="totalMinutes" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Total Minutes" />
-                <SortHeader label="CTRL%" sortKey="controlPct" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Control % (Percentage of possession time team has active Dodgeball Control)" />
-                <SortHeader label="+:−" sortKey="plusMinusRatio" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Ratio of Plus to Minus" />
-                <SortHeader label="Off+:−" sortKey="offPlusMinusRatio" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Ratio of Plus to Minus while off the field" />
-                <SortHeader label="On-Off" sortKey="onOffDt" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="On/Off Differential (PlusMinus - OffPlusMinus)" />
+                {tab === 'team' ? (<>
+                  <SortHeader label="GP" sortKey="gamesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Games Played" />
+                  <SortHeader label="CTRL" sortKey="controlMinutes" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Control Minutes" />
+                  <SortHeader label="TOT" sortKey="totalMinutes" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Total Minutes" />
+                  <SortHeader label="CTRL%" sortKey="controlPct" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Control % (Percentage of possession time team has active Dodgeball Control)" />
+                  <SortHeader label="CTRL/G" sortKey="controlPerGame" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Control Minutes per Game" />
+                  <SortHeader label="Opp CTRL%" sortKey="oppControlPct" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Opponent Control %" />
+                </>) : (<>
+                  <SortHeader label="GP" sortKey="gamesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Games Played" />
+                  <SortHeader label="+" sortKey="plus" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Plus" />
+                  <SortHeader label="−" sortKey="minus" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Minus" />
+                  <SortHeader label="+/−" sortKey="plusMinus" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Plus / Minus" />
+                  <SortHeader label="CTRL" sortKey="controlMinutes" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Control Minutes" />
+                  <SortHeader label="TOT" sortKey="totalMinutes" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Total Minutes" />
+                  <SortHeader label="CTRL%" sortKey="controlPct" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Control % (Percentage of possession time team has active Dodgeball Control)" />
+                  <SortHeader label="+:−" sortKey="plusMinusRatio" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Ratio of Plus to Minus" />
+                  <SortHeader label="Off+:−" sortKey="offPlusMinusRatio" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Ratio of Plus to Minus while off the field" />
+                  <SortHeader label="REL +:−" sortKey="relPlusMinusRatio" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Relative Value (Your +:− Ratio vs. your team's when you are off)" />
+                </>)}
               </tr>
             </thead>
             <tbody>
@@ -202,7 +265,7 @@ export default function BeaterStatsView({ players, events, teams, games, seasons
               ) : paged.map((row: any, idx: number) => {
                 const rank = (page - 1) * perPage + idx + 1;
                 return (
-                  <tr key={tab === 'pairs' ? row.pairKey : row.playerId} className="border-b border-gray-50 hover:bg-purple-50/30 transition-colors">
+                  <tr key={tab === 'team' ? row.teamId : tab === 'pairs' ? row.pairKey : row.playerId} className="border-b border-gray-50 hover:bg-purple-50/30 transition-colors">
                     <td className="px-2 py-1.5 sticky left-0 bg-white z-10">
                       <div className="flex items-center gap-2">
                         <span className="text-[10px] text-gray-300 w-4 text-right font-mono">{rank}</span>
@@ -210,21 +273,32 @@ export default function BeaterStatsView({ players, events, teams, games, seasons
                           <span className="text-xs font-medium text-gray-800 truncate">
                             {row.player1Name} <span className="text-gray-300">&</span> {row.player2Name}
                           </span>
+                        ) : tab === 'team' ? (
+                          <span className="text-xs font-medium text-gray-800 truncate">{row.teamName}</span>
                         ) : (
                           <span className="text-xs font-medium text-gray-800 truncate">{row.firstName} {row.lastName}</span>
                         )}
                       </div>
                     </td>
-                    <Cell value={row.gamesPlayed} />
-                    <Cell value={row.plus} highlight={row.plus > 0 ? 'pos' : undefined} />
-                    <Cell value={row.minus} highlight={row.minus > 0 ? 'neg' : undefined} />
-                    <Cell value={row.plusMinus > 0 ? `+${row.plusMinus}` : row.plusMinus} highlight={row.plusMinus > 0 ? 'pos' : row.plusMinus < 0 ? 'neg' : undefined} bold />
-                    <Cell value={row.controlMinutes} />
-                    <Cell value={row.totalMinutes} />
-                    <Cell value={`${row.controlPct}%`} highlight={row.controlPct >= 55 ? 'pos' : row.controlPct <= 45 ? 'neg' : undefined} bold />
-                    <Cell value={row.plusMinusRatio === Infinity ? '∞' : row.plusMinusRatio} />
-                    <Cell value={row.offPlusMinusRatio === Infinity ? '∞' : row.offPlusMinusRatio} />
-                    <Cell value={row.onOffDt > 0 ? `+${row.onOffDt}` : row.onOffDt || 'E'} highlight={row.onOffDt > 0 ? 'pos' : row.onOffDt < 0 ? 'neg' : undefined} />
+                    {tab === 'team' ? (<>
+                      <Cell value={row.gamesPlayed} />
+                      <Cell value={row.controlMinutes} />
+                      <Cell value={row.totalMinutes} />
+                      <Cell value={`${row.controlPct}%`} highlight={row.controlPct >= 55 ? 'pos' : row.controlPct <= 45 ? 'neg' : undefined} bold />
+                      <Cell value={row.controlPerGame} />
+                      <Cell value={`${row.oppControlPct}%`} highlight={row.oppControlPct <= 45 ? 'pos' : row.oppControlPct >= 55 ? 'neg' : undefined} />
+                    </>) : (<>
+                      <Cell value={row.gamesPlayed} />
+                      <Cell value={row.plus} highlight={row.plus > 0 ? 'pos' : undefined} />
+                      <Cell value={row.minus} highlight={row.minus > 0 ? 'neg' : undefined} />
+                      <Cell value={row.plusMinus > 0 ? `+${row.plusMinus}` : row.plusMinus || 'E'} highlight={row.plusMinus > 0 ? 'pos' : row.plusMinus < 0 ? 'neg' : undefined} bold />
+                      <Cell value={row.controlMinutes} />
+                      <Cell value={row.totalMinutes} />
+                      <Cell value={`${row.controlPct}%`} highlight={row.controlPct >= 55 ? 'pos' : row.controlPct <= 45 ? 'neg' : undefined} bold />
+                      <Cell value={row.plusMinusRatio === Infinity ? '∞' : row.plusMinusRatio} />
+                      <Cell value={row.offPlusMinusRatio === Infinity ? '∞' : row.offPlusMinusRatio} />
+                      <Cell value={row.relPlusMinusRatio > 0 ? `+${row.relPlusMinusRatio}` : row.relPlusMinusRatio || 'E'} highlight={row.relPlusMinusRatio > 0 ? 'pos' : row.relPlusMinusRatio < 0 ? 'neg' : undefined} />
+                    </>)}
                   </tr>
                 );
               })}

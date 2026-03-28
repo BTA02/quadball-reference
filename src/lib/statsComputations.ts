@@ -243,6 +243,7 @@ export interface AdvancedPlayerStats {
   offPlusMinusRatio: number;
   offPlusMinus: number;
   onOffDt: number;
+  relPlusMinusRatio: number;
   minutesPlayed: number;
   teamPossessions: number;
   oppPossessions: number;
@@ -251,8 +252,12 @@ export interface AdvancedPlayerStats {
   goalsPerTwenty: number;
   assistsPerTwenty: number;
   pointsPerTwenty: number;
+  goalsPerGame: number;
+  assistsPerGame: number;
+  pointsPerGame: number;
   shotPct: number;
   assistToTurnover: number;
+  controlPctOnField: number;
   // Raw counts for ratio computation
   goals: number;
   assists: number;
@@ -761,19 +766,26 @@ export function computeAdvancedStats(
         : offPlus > 0 ? Infinity : 0,
       offPlusMinus,
       onOffDt,
+      relPlusMinusRatio: Math.round(((accum.minus > 0 ? accum.plus / accum.minus : accum.plus > 0 ? 5 : 0) - (offMinus > 0 ? offPlus / offMinus : offPlus > 0 ? 5 : 0)) * 100) / 100,
       minutesPlayed: Math.round(minutes * 10) / 10,
       teamPossessions: accum.teamPossessions,
       oppPossessions: accum.oppPossessions,
       goalsPerTwenty: minutes > 0 ? Math.round((accum.goals / minutes) * 20 * 100) / 100 : 0,
       assistsPerTwenty: minutes > 0 ? Math.round((accum.assists / minutes) * 20 * 100) / 100 : 0,
       pointsPerTwenty: minutes > 0 ? Math.round((points / minutes) * 20 * 100) / 100 : 0,
+      goalsPerGame: accum.gameIds.size > 0 ? Math.round((accum.goals / accum.gameIds.size) * 100) / 100 : 0,
+      assistsPerGame: accum.gameIds.size > 0 ? Math.round((accum.assists / accum.gameIds.size) * 100) / 100 : 0,
+      pointsPerGame: accum.gameIds.size > 0 ? Math.round((points / accum.gameIds.size) * 100) / 100 : 0,
       shotPct: (accum.goals + accum.shots) > 0 ? Math.round((accum.goals / (accum.goals + accum.shots)) * 1000) / 10 : 0,
       assistToTurnover: accum.turnovers > 0
         ? Math.round((accum.assists / accum.turnovers) * 100) / 100
         : accum.assists > 0 ? Infinity : 0,
+      controlPctOnField: (accum.teamPossessions + accum.oppPossessions) > 0
+        ? Math.round((accum.teamPossessions / (accum.teamPossessions + accum.oppPossessions)) * 1000) / 10
+        : 0,
       goals: accum.goals,
       assists: accum.assists,
-      shots: accum.shots,
+      shots: accum.shots + accum.goals, // Total Attempts
       turnovers: accum.turnovers,
       teamTurnoversOn: accum.teamTurnoversOn,
       oppTurnoversOn: accum.oppTurnoversOn,
@@ -801,6 +813,7 @@ export interface ExtendedPlayerStats {
   plusMinus: number;
   plusMinusRatio: number;
   offPlusMinusRatio: number;
+  relPlusMinusRatio: number;
   // Basketball-inspired
   usgPct: number;        // Usage Rate — % of team events player is involved in while on-field
   eFGPct: number;        // Effective Goal % — weighted shooting efficiency
@@ -896,7 +909,7 @@ export function computeExtendedStats(
       a.plusMinus +             // Core scoreboard impact
       (a.goals * 0.5) +         // Individual goal weight
       (a.assists * 0.4) +       // Individual assist weight
-      (- a.shots * 0.2) +       // Missed shot penalty
+      ((a.goals - a.shots) * 0.2) + // Penalty for missed shots (a.shots is total, goals are made)
       (- a.turnovers * 0.7) +   // Turnover penalty
       (- ec.fouls * 0.5)        // Foul penalty
     );
@@ -930,6 +943,7 @@ export function computeExtendedStats(
       offPlusMinusRatio: a.offPlusMinusRatio,
       offPlusMinus: a.offPlusMinus,
       onOffDt: a.onOffDt,
+      relPlusMinusRatio: a.relPlusMinusRatio,
       usgPct,
       eFGPct,
       gameScore,
@@ -939,7 +953,7 @@ export function computeExtendedStats(
       tovPct,
       fTovPct,
       turnoversPer20: Math.round(a.turnovers * per20 * 100) / 100,
-      shotsPer20: Math.round(a.shots * per20 * 100) / 100,
+      shotsPer20: Math.round(a.shots * per20 * 100) / 100, // already total
       foulsPer20: Math.round(ec.fouls * per20 * 100) / 100,
       goals: a.goals,
       assists: a.assists,
@@ -950,6 +964,236 @@ export function computeExtendedStats(
     };
   });
 }
+
+// ─── Team-Aggregated Quadball Stats ──────────────────────────────────
+
+export interface TeamQuadballStats {
+  teamId: string;
+  teamName: string;
+  gamesPlayed: number;
+  goals: number;
+  assists: number;
+  shots: number;
+  turnovers: number;
+  shotPct: number;
+  goalsPerGame: number;
+  assistsPerGame: number;
+  pointsPerGame: number;
+  oRtg: number;
+  dRtg: number;
+  netRtg: number;
+  tovPct: number;
+  fTovPct: number;
+}
+
+export function computeTeamQuadballStats(
+  events: GameEvent[],
+  players: Player[],
+  teams: { id: string; name: string; [k: string]: any }[],
+  games: Game[],
+  filters: { seasonId?: string; teamId?: string }
+): TeamQuadballStats[] {
+  const extended = computeExtendedStats(events, players, games, filters);
+  const teamMap = new Map<string, typeof teams[0]>();
+  teams.forEach(t => teamMap.set(t.id, t));
+
+  // Group player stats by their primary team
+  const teamAccum = new Map<string, {
+    goals: number; assists: number; shots: number; turnovers: number;
+    teamPoss: number; oppPoss: number;
+    teamTurnoversOn: number; oppTurnoversOn: number;
+    gameIds: Set<string>;
+  }>();
+
+  // Identify which team each player belongs to from events
+  const playerTeams = new Map<string, string>();
+  for (const e of events) {
+    if (e.playerId && e.teamId) {
+      playerTeams.set(e.playerId, e.teamId);
+    }
+  }
+
+  // Also figure out game IDs per team
+  const teamGameIds = new Map<string, Set<string>>();
+  const filteredGames = filters.seasonId
+    ? games.filter(g => g.seasonId === filters.seasonId)
+    : games;
+  for (const g of filteredGames) {
+    if (filters.teamId && g.homeTeamId !== filters.teamId && g.awayTeamId !== filters.teamId) continue;
+    if (!teamGameIds.has(g.homeTeamId)) teamGameIds.set(g.homeTeamId, new Set());
+    if (!teamGameIds.has(g.awayTeamId)) teamGameIds.set(g.awayTeamId, new Set());
+    teamGameIds.get(g.homeTeamId)!.add(g.id);
+    teamGameIds.get(g.awayTeamId)!.add(g.id);
+  }
+
+  // Aggregate: for team-level stats, we count raw events per team (not per player)
+  const teamEventAccum = new Map<string, {
+    goals: number; assists: number; shots: number; turnovers: number;
+    goalsAgainst: number; turnoversForced: number;
+    gameIds: Set<string>;
+  }>();
+
+  const getTA = (tid: string) => {
+    if (!teamEventAccum.has(tid)) {
+      teamEventAccum.set(tid, { goals: 0, assists: 0, shots: 0, turnovers: 0, goalsAgainst: 0, turnoversForced: 0, gameIds: new Set() });
+    }
+    return teamEventAccum.get(tid)!;
+  };
+
+  for (const g of filteredGames) {
+    if (filters.teamId && g.homeTeamId !== filters.teamId && g.awayTeamId !== filters.teamId) continue;
+    const gameEvents = events.filter(e => e.gameId === g.id);
+    
+    for (const e of gameEvents) {
+      if (!e.teamId) continue;
+      const t = e.type?.toLowerCase() || '';
+      const acc = getTA(e.teamId);
+      acc.gameIds.add(g.id);
+      
+      if (t === 'goal') {
+        acc.goals++;
+        // Count against for opponent
+        const oppId = e.teamId === g.homeTeamId ? g.awayTeamId : g.homeTeamId;
+        getTA(oppId).goalsAgainst++;
+        getTA(oppId).gameIds.add(g.id);
+      }
+      if (t === 'assist') acc.assists++;
+      if (t === 'shot') acc.shots++;
+      if (t === 'turnover') {
+        acc.turnovers++;
+        const oppId = e.teamId === g.homeTeamId ? g.awayTeamId : g.homeTeamId;
+        getTA(oppId).turnoversForced++;
+      }
+    }
+  }
+
+  const results: TeamQuadballStats[] = [];
+  for (const [tid, acc] of teamEventAccum) {
+    const team = teamMap.get(tid);
+    if (!team) continue;
+    if (filters.teamId && tid !== filters.teamId) continue;
+    
+    const gp = acc.gameIds.size;
+    const totalShots = acc.shots + acc.goals; // total attempts
+    // Possessions approximation: goals + shots (misses) + turnovers
+    const teamPoss = acc.goals + acc.shots + acc.turnovers;
+    const oppPoss = acc.goalsAgainst + acc.turnoversForced; // simplified
+    
+    results.push({
+      teamId: tid,
+      teamName: team.name || tid,
+      gamesPlayed: gp,
+      goals: acc.goals,
+      assists: acc.assists,
+      shots: totalShots,
+      turnovers: acc.turnovers,
+      shotPct: totalShots > 0 ? Math.round((acc.goals / totalShots) * 1000) / 10 : 0,
+      goalsPerGame: gp > 0 ? Math.round((acc.goals / gp) * 100) / 100 : 0,
+      assistsPerGame: gp > 0 ? Math.round((acc.assists / gp) * 100) / 100 : 0,
+      pointsPerGame: gp > 0 ? Math.round(((acc.goals + acc.assists) / gp) * 100) / 100 : 0,
+      oRtg: teamPoss > 0 ? Math.round((acc.goals / teamPoss) * 100 * 10) / 10 : 0,
+      dRtg: oppPoss > 0 ? Math.round((acc.goalsAgainst / oppPoss) * 100 * 10) / 10 : 0,
+      netRtg: (() => {
+        const o = teamPoss > 0 ? (acc.goals / teamPoss) * 100 : 0;
+        const d = oppPoss > 0 ? (acc.goalsAgainst / oppPoss) * 100 : 0;
+        return Math.round((o - d) * 10) / 10;
+      })(),
+      tovPct: teamPoss > 0 ? Math.round((acc.turnovers / teamPoss) * 1000) / 10 : 0,
+      fTovPct: oppPoss > 0 ? Math.round((acc.turnoversForced / oppPoss) * 1000) / 10 : 0,
+    });
+  }
+
+  return results.sort((a, b) => b.gamesPlayed - a.gamesPlayed);
+}
+
+// ─── Team-Aggregated Beater Stats ────────────────────────────────────
+
+export interface TeamBeaterStats {
+  teamId: string;
+  teamName: string;
+  gamesPlayed: number;
+  controlMinutes: number;
+  totalMinutes: number;
+  controlPct: number;
+  controlPerGame: number;  // CTRL minutes per game
+  oppControlPct: number;   // opponent control %
+}
+
+export function computeTeamBeaterStats(
+  events: GameEvent[],
+  players: Player[],
+  teams: { id: string; name: string; [k: string]: any }[],
+  games: Game[],
+  filters: { seasonId?: string; teamId?: string }
+): TeamBeaterStats[] {
+  const soloStats = computeBeaterSoloStats(events, players, games, filters);
+  const teamMap = new Map<string, typeof teams[0]>();
+  teams.forEach(t => teamMap.set(t.id, t));
+
+  // Map player → team from events
+  const playerTeams = new Map<string, string>();
+  for (const e of events) {
+    if (e.playerId && e.teamId) playerTeams.set(e.playerId, e.teamId);
+  }
+
+  // Aggregate by team: sum control/total from solo stats
+  // But we need to avoid double-counting overlapping pair time
+  // Best approach: use the pair stats for team-level since pairs represent unique time windows
+  const teamAccum = new Map<string, {
+    controlSeconds: number; totalSeconds: number; gameIds: Set<string>;
+  }>();
+
+  // Use game-level control periods instead of individual player stints
+  const { eventsByGame, relevantGames } = groupEventsByGame(events, games, filters);
+  
+  for (const [gameId, gameEvents] of eventsByGame) {
+    const game = relevantGames.find(g => g.id === gameId);
+    if (!game) continue;
+    const sorted = [...gameEvents].sort((a, b) => a.videoTime - b.videoTime);
+    const clockIntervals = computeGameClockIntervals(sorted);
+    const controlPeriods = computeControlPeriodsFromEvents(sorted);
+    const gameEndEvent = sorted.find(e => (e.type || '').toLowerCase() === 'gameend');
+    const gameEndTime = gameEndEvent?.videoTime ?? sorted[sorted.length - 1]?.videoTime ?? 0;
+    const gameStartEvent = sorted.find(e => (e.type || '').toLowerCase() === 'gamestart');
+    const gameStartTime = gameStartEvent?.videoTime ?? sorted[0]?.videoTime ?? 0;
+
+    const totalGameSec = getGameSecondsInWindow(clockIntervals, gameStartTime, gameEndTime);
+
+    for (const teamId of [game.homeTeamId, game.awayTeamId]) {
+      if (filters.teamId && teamId !== filters.teamId) continue;
+      if (!teamAccum.has(teamId)) {
+        teamAccum.set(teamId, { controlSeconds: 0, totalSeconds: 0, gameIds: new Set() });
+      }
+      const acc = teamAccum.get(teamId)!;
+      acc.gameIds.add(gameId);
+      acc.totalSeconds += totalGameSec;
+      acc.controlSeconds += getControlSecondsInWindow(controlPeriods, teamId, gameStartTime, gameEndTime, clockIntervals);
+    }
+  }
+
+  const results: TeamBeaterStats[] = [];
+  for (const [tid, acc] of teamAccum) {
+    const team = teamMap.get(tid);
+    if (!team) continue;
+    const gp = acc.gameIds.size;
+    const ctrlMin = acc.controlSeconds / 60;
+    const totalMin = acc.totalSeconds / 60;
+
+    results.push({
+      teamId: tid,
+      teamName: team.name || tid,
+      gamesPlayed: gp,
+      controlMinutes: Math.round(ctrlMin * 10) / 10,
+      totalMinutes: Math.round(totalMin * 10) / 10,
+      controlPct: totalMin > 0 ? Math.round((ctrlMin / totalMin) * 1000) / 10 : 0,
+      controlPerGame: gp > 0 ? Math.round((ctrlMin / gp) * 10) / 10 : 0,
+      oppControlPct: totalMin > 0 ? Math.round(((totalMin - ctrlMin) / totalMin) * 1000) / 10 : 0,
+    });
+  }
+
+  return results.sort((a, b) => b.controlPct - a.controlPct);
+}
+
 // ─── Beater Stats ────────────────────────────────────────────────────
 
 type PositionType = 'chaser' | 'keeper' | 'beater' | 'seeker';
@@ -1166,6 +1410,7 @@ export interface BeaterSoloStats {
   offPlusMinusRatio: number;
   offPlusMinus: number;
   onOffDt: number;
+  relPlusMinusRatio: number;
   controlMinutes: number;      // minutes their team had control while on field
   totalMinutes: number;        // total game-clock minutes on field
   controlPct: number;          // controlMinutes / totalMinutes × 100
@@ -1279,6 +1524,7 @@ export function computeBeaterSoloStats(
 
     const plusMinusRatio = a.minus > 0 ? Math.round((a.plus / a.minus) * 100) / 100 : (a.plus > 0 ? Infinity : 0);
     const offPlusMinusRatio = offMinus > 0 ? Math.round((offPlus / offMinus) * 100) / 100 : (offPlus > 0 ? Infinity : 0);
+    const relPlusMinusRatio = Math.round(((a.minus > 0 ? a.plus / a.minus : a.plus > 0 ? 5 : 0) - (offMinus > 0 ? offPlus / offMinus : offPlus > 0 ? 5 : 0)) * 100) / 100;
 
     results.push({
       playerId: pid,
@@ -1291,6 +1537,7 @@ export function computeBeaterSoloStats(
       plusMinus: a.plus - a.minus,
       plusMinusRatio,
       offPlusMinusRatio,
+      relPlusMinusRatio,
       offPlusMinus,
       onOffDt,
       controlMinutes: Math.round(controlMin * 10) / 10,
@@ -1318,6 +1565,7 @@ export interface BeaterPairStats {
   offPlusMinusRatio: number;
   offPlusMinus: number;
   onOffDt: number;
+  relPlusMinusRatio: number;
   controlMinutes: number;
   totalMinutes: number;
   controlPct: number;
@@ -1483,6 +1731,7 @@ export function computeBeaterPairStats(
 
     const plusMinusRatio = a.minus > 0 ? Math.round((a.plus / a.minus) * 100) / 100 : (a.plus > 0 ? Infinity : 0);
     const offPlusMinusRatio = offMinus > 0 ? Math.round((offPlus / offMinus) * 100) / 100 : (offPlus > 0 ? Infinity : 0);
+    const relPlusMinusRatio = Math.round(((a.minus > 0 ? a.plus / a.minus : a.plus > 0 ? 5 : 0) - (offMinus > 0 ? offPlus / offMinus : offPlus > 0 ? 5 : 0)) * 100) / 100;
 
     results.push({
       pairKey: key,
@@ -1496,6 +1745,7 @@ export function computeBeaterPairStats(
       plusMinus: a.plus - a.minus,
       plusMinusRatio,
       offPlusMinusRatio,
+      relPlusMinusRatio,
       offPlusMinus,
       onOffDt,
       controlMinutes: Math.round(controlMin * 10) / 10,

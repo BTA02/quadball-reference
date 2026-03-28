@@ -143,6 +143,7 @@ export interface DraftEvent {
   relatedEventId?: string | null;
   assistedByPlayerId?: string | null;
   position?: PositionType | null;
+  subPlayerId?: string | null;
 }
 
 interface Game {
@@ -3068,6 +3069,9 @@ export default function App() {
   const [trackerTeamId, setTrackerTeamId] = useState<string>('all');
   const [trackerOpponentId, setTrackerOpponentId] = useState<string>('all');
   const [trackerGameId, setTrackerGameId] = useState<string>('');
+  const [statsSeasonId, setStatsSeasonId] = useState<string>('');
+  const [statsTeamId, setStatsTeamId] = useState<string>('');
+  const [statsSearch, setStatsSearch] = useState<string>('');
 
   // Resolve which data to use for stats: demo data takes priority
   const statsPlayers = demoData ? demoData.players : allPlayers;
@@ -3395,11 +3399,11 @@ export default function App() {
            const cTeam = getControlTeamAtTime(computeControlPeriods(past), vTime);
            inferredTeamId = cTeam === currentGame.homeTeamId ? currentGame.awayTeamId : currentGame.homeTeamId;
        } else if (['goal', 'shot', 'turnover', 'assist'].includes(type)) {
-           const lastQ = past.slice().reverse().find(e => ['goal', 'shot', 'turnover', 'quadball_start', 'takeaway'].includes(e.type) && e.teamId);
+           const lastQ = past.slice().reverse().find(e => ['goal', 'shot', 'turnover', 'quadball_start', 'takeaway'].includes(e.type as string) && e.teamId);
            if (lastQ) {
                if (['goal', 'turnover'].includes(lastQ.type)) {
                    inferredTeamId = lastQ.teamId === currentGame.homeTeamId ? currentGame.awayTeamId : currentGame.homeTeamId;
-               } else if (lastQ.type === 'takeaway') {
+               } else if ((lastQ.type as string) === 'takeaway') {
                    // if someone stole the ball, they possess it!
                    inferredTeamId = lastQ.teamId;
                } else {
@@ -3418,7 +3422,8 @@ export default function App() {
       playerId: playerId || null,
       relatedEventId: relatedEventId || null,
       assistedByPlayerId: null,
-      position: position || null
+      position: position || null,
+      subPlayerId: null
     };
 
     if (type === 'gameStart' || type === 'gamePause' || type === 'gameEnd') {
@@ -3528,6 +3533,20 @@ export default function App() {
           primaryEventId,
           draft.teamId || null,
           null,
+          draft.videoTime,
+          draft.gameTime
+        );
+      }
+
+      if (draft.type === 'sub_out' && draft.subPlayerId && primaryEventId) {
+        const subPosition = (draft.playerId && activePlayerPositions.get(draft.playerId)) || 'chaser';
+        handleAddEvent(
+          'sub_in',
+          draft.subPlayerId,
+          undefined,
+          primaryEventId,
+          draft.teamId || null,
+          subPosition,
           draft.videoTime,
           draft.gameTime
         );
@@ -4297,11 +4316,50 @@ export default function App() {
             </div>
 
             {statsSubView === 'quadball' ? (
-              <QuadballStatsView players={statsPlayers} events={statsEvents} teams={statsTeams} games={statsGames} seasons={statsSeasons} />
+              <QuadballStatsView 
+                players={statsPlayers} 
+                events={statsEvents} 
+                teams={statsTeams} 
+                games={statsGames} 
+                seasons={statsSeasons} 
+                statsFilter={statsFilter}
+                seasonId={statsSeasonId}
+                onSeasonChange={setStatsSeasonId}
+                teamId={statsTeamId}
+                onTeamChange={setStatsTeamId}
+                search={statsSearch}
+                onSearchChange={setStatsSearch}
+              />
             ) : statsSubView === 'beaters' ? (
-              <BeaterStatsView players={statsPlayers} events={statsEvents} teams={statsTeams} games={statsGames} seasons={statsSeasons} />
+              <BeaterStatsView 
+                players={statsPlayers} 
+                events={statsEvents} 
+                teams={statsTeams} 
+                games={statsGames} 
+                seasons={statsSeasons} 
+                statsFilter={statsFilter}
+                seasonId={statsSeasonId}
+                onSeasonChange={setStatsSeasonId}
+                teamId={statsTeamId}
+                onTeamChange={setStatsTeamId}
+                search={statsSearch}
+                onSearchChange={setStatsSearch}
+              />
             ) : statsSubView === 'seekers' ? (
-              <SeekerStatsView players={statsPlayers} events={statsEvents} teams={statsTeams} games={statsGames} seasons={statsSeasons} />
+              <SeekerStatsView 
+                players={statsPlayers} 
+                events={statsEvents} 
+                teams={statsTeams} 
+                games={statsGames} 
+                seasons={statsSeasons} 
+                statsFilter={statsFilter}
+                seasonId={statsSeasonId}
+                onSeasonChange={setStatsSeasonId}
+                teamId={statsTeamId}
+                onTeamChange={setStatsTeamId}
+                search={statsSearch}
+                onSearchChange={setStatsSearch}
+              />
             ) : null}
           </div>
         ) : !currentVideo ? (
@@ -4664,7 +4722,7 @@ export default function App() {
                 <div className="flex-1 overflow-hidden relative">
                   
                   {/* RECORD TAB */}
-                  <div className={cn("absolute inset-0 overflow-y-auto custom-scrollbar p-5 flex flex-col gap-6 bg-white", rightPanelTab === 'record' ? "block" : "hidden")}>
+                  <div className={cn("absolute inset-0 overflow-y-auto custom-scrollbar p-4 flex flex-col gap-4 bg-white", rightPanelTab === 'record' ? "block" : "hidden")}>
                     
                     {/* Event Type Grid */}
                     <div className="flex flex-col gap-3 mb-2">
@@ -4725,14 +4783,13 @@ export default function App() {
                         ));
                       })()}
                     </div>
-
-                    {/* Draft Cards Pipeline */}
+{/* Draft Cards Pipeline */}
                     <div className="flex flex-col gap-4">
                       {draftEvents.length > 0 ? (
                         <div className="flex flex-col gap-3">
                           <h4 className="text-[11px] font-bold uppercase tracking-widest text-emerald-600 border-b border-emerald-100 pb-2">Pending Events Queue ({draftEvents.length})</h4>
                           {draftEvents.map(draft => (
-                            <div key={draft.id} className="p-3 bg-emerald-50/50 border border-emerald-200 rounded-xl shadow-sm flex flex-col gap-3 animate-in fade-in slide-in-from-top-2">
+                            <div key={draft.id} className="p-2.5 bg-emerald-50/20 border border-emerald-200 rounded-lg shadow-sm flex flex-col gap-2 animate-in fade-in slide-in-from-top-2">
                               {/* Header */}
                               <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-2">
@@ -4746,8 +4803,8 @@ export default function App() {
                               {/* Form Array */}
                               <div className="grid grid-cols-2 gap-2">
                                 {/* Event Type Select (Static) */}
-                                <div className="col-span-2 text-xs border border-gray-300 rounded p-1.5 bg-gray-50 text-gray-500 font-bold flex items-center gap-2">
-                                  {EVENT_CONFIG[draft.type as EventType] ? React.cloneElement(EVENT_CONFIG[draft.type as EventType].icon as React.ReactElement<any>, { className: 'w-3 h-3' }) : null}
+                                <div className="col-span-2 text-[10px] border border-gray-200 rounded p-1.5 bg-gray-50 text-gray-600 font-bold flex items-center gap-1.5 uppercase tracking-tight">
+                                  {EVENT_CONFIG[draft.type as EventType] ? React.cloneElement(EVENT_CONFIG[draft.type as EventType].icon as React.ReactElement<any>, { className: 'w-2.5 h-2.5' }) : null}
                                   {EVENT_CONFIG[draft.type as EventType]?.label || 'Event'}
                                 </div>
                                 
@@ -4818,6 +4875,25 @@ export default function App() {
                                       </select>
                                     )}
 
+                                    {draft.type === 'sub_out' && (
+                                      <select
+                                        value={draft.subPlayerId || ''}
+                                        onChange={(e) => setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, subPlayerId: e.target.value } : d))}
+                                        className="col-span-2 text-xs border border-green-200 rounded p-1.5 bg-green-50 text-green-800 disabled:opacity-50 mt-1"
+                                        disabled={!draft.teamId}
+                                      >
+                                        <option value="">Sub In... (Optional)</option>
+                                        {draft.teamId && (draft.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)
+                                          .filter(rp => !activePlayerPositions.has(rp.playerId) && rp.playerId !== draft.playerId)
+                                          .sort((a,b) => (a.player?.lastName || '').localeCompare(b.player?.lastName || ''))
+                                          .map(rp => (
+                                            <option key={rp.playerId} value={rp.playerId}>
+                                              Sub in {getPlayerShortName(rp.player, draft.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)}
+                                            </option>
+                                        ))}
+                                      </select>
+                                    )}
+
                                     {draft.type === 'goal' && (
                                       <select
                                         value={draft.assistedByPlayerId || ''}
@@ -4848,15 +4924,15 @@ export default function App() {
                               <div className="flex gap-2 w-full mt-1">
                                 <button 
                                   onClick={() => handleSaveDraftEvent(draft)}
-                                  className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs py-2 rounded-lg transition-colors shadow flex items-center justify-center gap-2"
+                                  className="flex-1 shrink-0 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs py-2.5 rounded-lg transition-colors shadow flex items-center justify-center gap-2 min-h-[40px]"
                                 >
-                                  <CheckCircle2 className="w-3.5 h-3.5" /> Save Log to Timeline
+                                  <CheckCircle2 className="w-4 h-4" /> Save to Timeline
                                 </button>
                                 <button 
                                   onClick={() => handleDeleteDraftEvent(draft.id)}
-                                  className="w-10 flex-shrink-0 bg-red-50 border border-red-200 hover:bg-red-100 text-red-500 font-bold p-2 text-xs rounded-lg transition-colors shadow-sm flex items-center justify-center"
+                                  className="w-10 shrink-0 bg-red-50 border border-red-100 hover:bg-red-100 text-red-500 font-bold p-2 text-xs rounded-lg transition-colors flex items-center justify-center min-h-[40px]"
                                 >
-                                  <Trash2 className="w-3.5 h-3.5" />
+                                  <Trash2 className="w-4 h-4" />
                                 </button>
                               </div>
                             </div>
