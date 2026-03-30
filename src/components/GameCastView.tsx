@@ -156,51 +156,18 @@ export default function GameCastView({ players, events, teams, games, overrideGa
     }
   }, [filteredGames, selectedGameId]);
 
-  // Build possession list with running score
+  // Build grouped events list with running score
   const possessions = useMemo(() => {
     let homeScore = 0;
     let awayScore = 0;
-    const possList: any[] = [];
-    
-    let currentPoss: any = null;
+    const groups: any[] = [];
+    let currentGroup: any = null;
 
-    const startPossession = (teamId: string, time: number, isHome: boolean, firstEvent?: any) => {
-      currentPoss = {
-        id: `poss_${time}_${teamId}_${Math.random()}`,
-        teamId,
-        isHome,
-        startTime: time,
-        endTime: time,
-        homeScoreCurrent: homeScore,
-        awayScoreCurrent: awayScore,
-        events: firstEvent ? [firstEvent] : [],
-        endReason: 'ongoing'
-      };
-    };
-
-    const flushPossession = (reason: string, time: number) => {
-      if (!currentPoss) return;
-      currentPoss.endTime = time;
-      currentPoss.endReason = reason;
-      currentPoss.homeScoreCurrent = homeScore;
-      currentPoss.awayScoreCurrent = awayScore;
-      possList.push(currentPoss);
-      currentPoss = null;
-    };
-
-    gameEvents.forEach((e, idx) => {
+    gameEvents.forEach((e) => {
       const type = (e.type || '').toLowerCase();
+      if (['gamestart', 'gamepause', 'gameend'].includes(type) || type === 'assist') return; // Assists are bundled into goals
       
-      if (['gamestart', 'gamepause'].includes(type)) return;
-      
-      let eventTeamId = e.teamId;
-      if (!eventTeamId && e.playerId) {
-        eventTeamId = playerTeamMap.get(e.playerId);
-      }
-      if (!eventTeamId) {
-        eventTeamId = resolvedHomeId;
-      }
-
+      let eventTeamId = e.teamId || (e.playerId ? playerTeamMap.get(e.playerId) : undefined) || resolvedHomeId;
       const isHome = eventTeamId === resolvedHomeId;
       const isAway = eventTeamId === resolvedAwayId;
 
@@ -215,59 +182,32 @@ export default function GameCastView({ players, events, teams, games, overrideGa
       }
 
       const displayEvent = { ...e, displayTeamId: eventTeamId, isHome, homeScoreCurrent: homeScore, awayScoreCurrent: awayScore };
+      const timeGap = currentGroup ? Math.abs(e.videoTime - currentGroup.endTime) : 0;
 
-      const isOffensiveEvent = ['goal', 'shot', 'turnover', 'quadball_start', 'control_start'].includes(type);
-
-      if (type === 'gameend') {
-        if (currentPoss) {
-          currentPoss.events.push(displayEvent);
-          flushPossession('gameend', e.videoTime);
-        } else {
-          startPossession(resolvedHomeId, e.videoTime, true, displayEvent);
-          flushPossession('gameend', e.videoTime);
-        }
-        return;
-      }
-
-      if (!currentPoss) {
-        if (eventTeamId && isOffensiveEvent) {
-          startPossession(eventTeamId, e.videoTime, isHome, displayEvent);
-        } else if (type === 'gamestart') {
-          startPossession(eventTeamId || resolvedHomeId, e.videoTime, isHome, displayEvent);
-        } else if (eventTeamId) {
-          startPossession(eventTeamId, e.videoTime, isHome, displayEvent);
-        }
+      // Group if same team, same type, and relatively close in time (e.g. within 60 seconds)
+      if (currentGroup && currentGroup.teamId === eventTeamId && currentGroup.endReason === type && timeGap <= 60) {
+        currentGroup.events.push(displayEvent);
+        currentGroup.endTime = e.videoTime;
+        currentGroup.homeScoreCurrent = homeScore;
+        currentGroup.awayScoreCurrent = awayScore;
       } else {
-        if (currentPoss.teamId === eventTeamId) {
-          currentPoss.events.push(displayEvent);
-          if (['goal', 'turnover'].includes(type)) {
-            flushPossession(type, e.videoTime);
-          }
-        } else {
-          if (isOffensiveEvent && eventTeamId) {
-            // End previous possession due to offensive action from opposing team
-            const endReason = currentPoss.events.length > 0 ? (currentPoss.events[currentPoss.events.length - 1].type || '').toLowerCase() : 'unknown';
-            flushPossession(endReason || 'unknown', e.videoTime);
-            
-            startPossession(eventTeamId, e.videoTime, isHome, displayEvent);
-            if (['goal', 'turnover'].includes(type)) {
-              flushPossession(type, e.videoTime);
-            }
-          } else {
-            // Non-offensive event from other team (foul, sub_in, card), attach to current possession
-            currentPoss.events.push(displayEvent);
-          }
-        }
+        if (currentGroup) groups.push(currentGroup);
+        currentGroup = {
+          id: `grp_${e.videoTime}_${eventTeamId}_${Math.random()}`,
+          teamId: eventTeamId,
+          isHome,
+          startTime: e.videoTime,
+          endTime: e.videoTime,
+          homeScoreCurrent: homeScore,
+          awayScoreCurrent: awayScore,
+          events: [displayEvent],
+          endReason: type
+        };
       }
     });
 
-    if (currentPoss) {
-      const finalTime = currentPoss.events.length > 0 ? currentPoss.events[currentPoss.events.length - 1].videoTime : currentPoss.startTime;
-      const endReason = currentPoss.events.length > 0 ? (currentPoss.events[currentPoss.events.length - 1].type || '').toLowerCase() : 'unknown';
-      flushPossession(endReason || 'unknown', finalTime);
-    }
-
-    return possList.reverse();
+    if (currentGroup) groups.push(currentGroup);
+    return groups.reverse();
   }, [gameEvents, playerTeamMap, resolvedHomeId, resolvedAwayId]);
 
   if (!selectedGameId) {
@@ -341,7 +281,7 @@ export default function GameCastView({ players, events, teams, games, overrideGa
               
               const config = EVENT_CONFIG[poss.endReason] || { label: poss.endReason, icon: <AlertCircle className="w-4 h-4" />, color: 'bg-gray-400 text-gray-600' };
 
-              const hasExpandableEvents = poss.events.some(e => ['goal', 'assist', 'sub_in', 'sub_out'].includes(e.type));
+              const hasExpandableEvents = poss.events.length > 0;
               const isExpanded = expandedPossessions.has(poss.id || i.toString());
 
               return (
@@ -386,23 +326,30 @@ export default function GameCastView({ players, events, teams, games, overrideGa
                   {/* Expanded Summarized Events Block */}
                   {isExpanded && hasExpandableEvents && (
                      <div className="mt-3 pt-2 border-t border-gray-200/50 space-y-1.5 max-h-32 overflow-y-auto custom-scrollbar">
-                        {poss.events.filter(e => ['goal', 'assist', 'sub_in', 'sub_out'].includes(e.type)).map((ev, eventIndex) => {
+                        {poss.events.map((ev: any, eventIndex: number) => {
                           const evConfig = EVENT_CONFIG[ev.type as keyof typeof EVENT_CONFIG];
                           const dynamicLabel = (ev.type === 'sub_in' && ev.position) ? `${ev.position} In` : (ev.type === 'sub_out' && ev.position) ? `${ev.position} Out` : evConfig?.label || ev.type;
+                          
+                          let assistStr = '';
+                          if (ev.type === 'goal') {
+                               if (ev.assistedById) {
+                                   assistStr = ` (Assisted by: ${getPlayerName(ev.assistedById)})`;
+                               } else {
+                                   assistStr = ` (Unassisted)`;
+                               }
+                          }
+
                           return (
                             <div key={ev.id || eventIndex} className="flex items-center gap-2 text-[10px] bg-white/60 p-1.5 rounded border border-white">
                                <span className={cn("w-2 h-2 rounded-full", evConfig?.color)} />
                                <span className="font-mono text-gray-400">{formatTime(ev.gameTime || ev.videoTime)}</span>
                                <span className="font-bold text-gray-600 uppercase tracking-widest px-1">{dynamicLabel}</span>
                                <span className="text-gray-700 font-medium truncate ml-auto">
-                                  {ev.playerId ? (playerMap.get(ev.playerId)?.firstName + ' ' + playerMap.get(ev.playerId)?.lastName) : 'Unknown Player'}
+                                  {getPlayerName(ev.playerId)}{assistStr}
                                </span>
                             </div>
                           );
                         })}
-                        {poss.events.filter(e => ['goal', 'assist', 'sub_in', 'sub_out'].includes(e.type)).length === 0 && (
-                          <div className="text-center text-[10px] text-gray-400 italic">No summary events.</div>
-                        )}
                      </div>
                   )}
                 </div>

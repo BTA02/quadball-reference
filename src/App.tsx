@@ -14,6 +14,7 @@ import {
   User,
   Target,
   Clock,
+  HelpCircle,
   CheckCircle2,
   XCircle,
   Search,
@@ -32,7 +33,8 @@ import {
   History,
   Trash2,
   UploadCloud,
-  SkipForward
+  SkipForward,
+  Edit2
 } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
 import {
@@ -64,7 +66,10 @@ import QuadballStatsView from './components/QuadballStatsView';
 import BeaterStatsView from './components/BeaterStatsView';
 import SeekerStatsView from './components/SeekerStatsView';
 import GameCastView from './components/GameCastView';
-import { enrichEventsWithGameTime } from './lib/statsComputations';
+import PlayerProfileView from './components/PlayerProfileView';
+import TeamProfileView from './components/TeamProfileView';
+import GameBoxScoreView from './components/GameBoxScoreView';
+import { enrichEventsWithGameTime, getScoreboardName } from './lib/statsComputations';
 // --- Types ---
 
 type EventType = 'goal' | 'assist' | 'shot' | 'gameStart' | 'gamePause' | 'gameEnd' | 'foul' | 'card' | 'sub_in' | 'sub_out' | 'control_change' | 'turnover' | 'flag_released' | 'flag_catch' | 'control_start' | 'quadball_start';
@@ -80,11 +85,7 @@ interface Player {
   createdAt: any;
 }
 
-interface Team {
-  id: string;
-  name: string;
-  createdAt: any;
-}
+interface Team { id: string; name: string; scoreboard_name?: string; [k: string]: any; }
 
 interface Season {
   id: string;
@@ -131,6 +132,7 @@ interface GameEvent {
   relatedEventId?: string; // The ID of a related event (e.g., a goal for an assist)
   teamId?: string; // The ID of the team if the event is team-based
   position?: PositionType; // For substitutions: the position being filled
+  color?: string | null; // For cards: blue, yellow, red
 }
 
 export interface DraftEvent {
@@ -144,6 +146,7 @@ export interface DraftEvent {
   assistedByPlayerId?: string | null;
   position?: PositionType | null;
   subPlayerId?: string | null;
+  color?: string | null;
 }
 
 interface Game {
@@ -151,6 +154,7 @@ interface Game {
   seasonId: string;
   homeTeamId: string;
   awayTeamId: string;
+  tag?: string;
   createdAt: any;
 }
 
@@ -319,8 +323,6 @@ function InlineRosterBuilder({
 }
 
 // --- Control Computation Utilities ---
-
-
 interface ControlPeriod {
   teamId: string;
   startTime: number;
@@ -356,7 +358,7 @@ function computeControlPeriods(events: GameEvent[]): ControlPeriod[] {
   let currentControl: { teamId: string | null; startTime: number } | null = null;
 
   for (const event of sorted) {
-    if (event.type === 'control_change') {
+    if (event.type === 'control_change' || event.type === 'control_start') {
       // Close previous period
       if (currentControl) {
         periods.push({
@@ -669,7 +671,9 @@ interface ManagementViewProps {
   onDeleteGame: (id: string) => void;
   onDeleteVideo: (id: string) => void;
   onDeleteSeason: (id: string) => void;
+  onEditSeason: (id: string, newName: string, newLeague: string, newYear: string, newDescription: string) => Promise<void>;
   onDeletePlayer: (id: string) => void;
+  onEditPlayer: (id: string, newFirst: string, newLast: string) => Promise<void>;
   onDeleteRoster: (id: string) => void;
   onSetLocalSimulation?: (data: any) => void;
   onRunMigration: () => Promise<void>;
@@ -868,7 +872,9 @@ function ManagementView({
   onDeleteGame,
   onDeleteVideo,
   onDeleteSeason,
+  onEditSeason,
   onDeletePlayer,
+  onEditPlayer,
   onDeleteRoster,
   onRefreshData,
   onSetLocalSimulation,
@@ -937,7 +943,51 @@ function ManagementView({
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between">
-        <h2 className="text-3xl font-bold">Database Management</h2>
+        <div className="flex items-center gap-4">
+          <h2 className="text-3xl font-bold">Database Management</h2>
+          <button
+            onClick={async () => {
+              if (!confirm('WARNING: This will completely rebuild all database caches directly from raw documents, forcefully wiping any phantom duplicates or corrupted list data. Proceed?')) return;
+              try {
+                toast.info('Rebuilding caches... Please wait...', { duration: 5000 });
+                
+                const vSnap = await getDocs(collection(db, 'videos'));
+                const gSnap = await getDocs(collection(db, 'games'));
+                const pSnap = await getDocs(collection(db, 'players'));
+                const tSnap = await getDocs(collection(db, 'teams'));
+                const sSnap = await getDocs(collection(db, 'seasons'));
+                const rSnap = await getDocs(collection(db, 'rosters'));
+                
+                const serialize = (d: any) => d?.createdAt ? serializeTimestamp(d.createdAt) : undefined;
+                
+                const safeVData = vSnap.docs.map(doc => ({ ...doc.data(), id: doc.id, createdAt: serialize(doc.data()) }));
+                const safeGData = gSnap.docs.map(doc => ({ ...doc.data(), id: doc.id, createdAt: serialize(doc.data()) }));
+                const safePData = pSnap.docs.map(doc => ({ ...doc.data(), id: doc.id, createdAt: serialize(doc.data()) }));
+                const safeTData = tSnap.docs.map(doc => ({ ...doc.data(), id: doc.id, createdAt: serialize(doc.data()) }));
+                const safeSData = sSnap.docs.map(doc => ({ ...doc.data(), id: doc.id, createdAt: serialize(doc.data()) }));
+                const safeRData = rSnap.docs.map(doc => ({ ...doc.data(), id: doc.id, createdAt: serialize(doc.data()) }));
+                
+                const batch = writeBatch(db);
+                batch.set(doc(db, 'aggregated', 'videos'), { data: safeVData });
+                batch.set(doc(db, 'aggregated', 'games'), { data: safeGData });
+                batch.set(doc(db, 'aggregated', 'players'), { data: safePData });
+                batch.set(doc(db, 'aggregated', 'teams'), { data: safeTData });
+                batch.set(doc(db, 'aggregated', 'seasons'), { data: safeSData });
+                batch.set(doc(db, 'aggregated', 'rosters'), { data: safeRData });
+                
+                await batch.commit();
+                toast.success('System Caches rebuilt successfully! Phantom duplicates destroyed.');
+                onRefreshData();
+              } catch (e: any) {
+                console.error('Cache rebuild failed:', e);
+                toast.error('Failed to repair caches: ' + e.message);
+              }
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-100 hover:bg-purple-200 text-purple-700 font-bold rounded-lg text-xs transition-colors"
+          >
+            <Database className="w-4 h-4" /> REPAIR CACHES 
+          </button>
+        </div>
         <div className="flex bg-gray-50 p-1 rounded-xl border border-gray-200">
           {(['teams', 'seasons', 'players', 'rosters', 'games', 'roles', 'import'] as const).map(tab => (
             <button
@@ -2573,10 +2623,9 @@ function ManagementView({
                           value={newSeasonYear}
                           onChange={e => setNewSeasonYear(e.target.value)}
                         />
-                        <input
-                          type="text"
-                          placeholder="Description (Optional)"
-                          className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500"
+                        <input type="text"
+                          placeholder="Championship Name (Optional)"
+                          className="w-full p-2 lg:p-3 border border-gray-200 rounded-lg lg:rounded-xl text-sm outline-none focus:border-red-400 focus:ring-1 focus:ring-red-400"
                           value={newSeasonDescription}
                           onChange={e => setNewSeasonDescription(e.target.value)}
                         />
@@ -2651,15 +2700,32 @@ function ManagementView({
                   {activeTab === 'seasons' && seasons.map(s => (
                     <div key={s.id} className="p-4 flex items-center justify-between hover:bg-gray-200/50 transition-colors group">
                       <div>
-                        <p className="font-bold">{s.name}</p>
-                        <p className="text-[10px] text-gray-400 uppercase">ID: {s.id}</p>
+                        <p className="font-bold">{s.description || s.name}</p>
+                        <p className="text-[10px] text-gray-400 uppercase">League: {s.league || 'Unknown'} | Year: {s.year || 'Unknown'} | ID: {s.id}</p>
                       </div>
-                      <button
-                        onClick={() => { if (confirm(`Delete season ${s.name}?`)) onDeleteSeason(s.id); }}
-                        className="p-2 text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"
-                      >
-                        <XCircle className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-all">
+                        <button
+                          onClick={() => {
+                            const newDesc = prompt(`Edit Championship Name for ${s.name}:`, `${s.description || ''}`);
+                            if (newDesc === null) return;
+                            const newYear = prompt(`Edit Start Year mapping for this season (Used for fallback):`, `${s.year || ''}`);
+                            if (newYear === null) return;
+                            const newName = `${s.league || 'League'} ${newYear}${newDesc.trim() ? ` - ${newDesc.trim()}` : ''}`;
+                            onEditSeason(s.id, newName, s.league || '', newYear, newDesc);
+                          }}
+                          className="p-2 text-gray-400 hover:text-amber-500 rounded-full hover:bg-white"
+                          title="Edit Season"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => { if (confirm(`Delete season ${s.name}?`)) onDeleteSeason(s.id); }}
+                          className="p-2 text-gray-400 hover:text-red-500 rounded-full hover:bg-white"
+                          title="Delete Season"
+                        >
+                          <XCircle className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
                   ))}
                   {activeTab === 'players' && (
@@ -2748,12 +2814,29 @@ function ManagementView({
                         <p className="font-bold">{p.firstName} {p.lastName}</p>
                         <p className="text-[10px] text-gray-400 uppercase">ID: {p.id}</p>
                       </div>
-                      <button
-                        onClick={() => { if (confirm(`Delete player ${p.firstName} ${p.lastName}?`)) onDeletePlayer(p.id); }}
-                        className="p-2 text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"
-                      >
-                        <XCircle className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-all">
+                        <button
+                          onClick={() => {
+                            const newRawName = prompt(`Edit name for ${p.firstName} ${p.lastName} (First Last):`, `${p.firstName} ${p.lastName}`);
+                            if (!newRawName) return;
+                            const parts = newRawName.trim().split(' ');
+                            const newFirst = parts[0] || '';
+                            const newLast = parts.slice(1).join(' ') || '';
+                            onEditPlayer(p.id, newFirst, newLast);
+                          }}
+                          className="p-2 text-gray-400 hover:text-blue-500 rounded-full hover:bg-white"
+                          title="Edit Player"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => { if (confirm(`Delete player ${p.firstName} ${p.lastName}?`)) onDeletePlayer(p.id); }}
+                          className="p-2 text-gray-400 hover:text-red-500 rounded-full hover:bg-white"
+                          title="Delete Player"
+                        >
+                          <XCircle className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
                   ))}
                   {activeTab === 'games' && [...games].sort((a,b) => new Date(serializeTimestamp(b.createdAt)).getTime() - new Date(serializeTimestamp(a.createdAt)).getTime()).map(g => (
@@ -3042,7 +3125,37 @@ export default function App() {
   const [selectedTeamContext, setSelectedTeamContext] = useState<'home' | 'away' | null>('home');
 
   // Management State
-  const [view, setView] = useState<'tracker' | 'video' | 'manage' | 'stats' | 'review'>('tracker');
+  const [view, setView] = useState<'tracker' | 'video' | 'manage' | 'stats' | 'review' | 'help' | 'playerProfile' | 'teamProfile' | 'gameProfile'>(window.innerWidth < 640 ? 'stats' : 'tracker');
+  const [activePlayerId, setActivePlayerId] = useState<string | null>(null);
+  const [activeTeamId, setActiveTeamId] = useState<string | null>(null);
+  const [activeGameId, setActiveGameId] = useState<string | null>(null);
+
+  type ViewState = typeof view;
+  const [navHistory, setNavHistory] = useState<{view: ViewState, states: {p: string|null, t: string|null, g: string|null}}[]>([]);
+
+  const pushProfile = (nextView: ViewState, idObj: {p?: string, t?: string, g?: string}) => {
+    setNavHistory(prev => [...prev, { view, states: { p: activePlayerId, t: activeTeamId, g: activeGameId } }]);
+    if (idObj.p) setActivePlayerId(idObj.p);
+    if (idObj.t) setActiveTeamId(idObj.t);
+    if (idObj.g) setActiveGameId(idObj.g);
+    setView(nextView);
+  };
+
+  const popProfile = () => {
+    setNavHistory(prev => {
+      if (prev.length === 0) { setView('stats'); return prev; }
+      const last = prev[prev.length - 1];
+      setView(last.view);
+      setActivePlayerId(last.states.p);
+      setActiveTeamId(last.states.t);
+      setActiveGameId(last.states.g);
+      return prev.slice(0, prev.length - 1);
+    });
+  };
+
+  const handlePlayerProfileClick = (id: string) => { pushProfile('playerProfile', { p: id }); };
+  const handleTeamProfileClick = (id: string) => { pushProfile('teamProfile', { t: id }); };
+  const handleGameProfileClick = (id: string) => { pushProfile('gameProfile', { g: id }); };
   const [statsSubView, setStatsSubView] = useState<'quadball' | 'beaters' | 'seekers' | 'gamecast'>('quadball');
   const [allEvents, setAllEvents] = useState<GameEvent[]>([]);
   const ADMIN_EMAIL = 'andrew.axtell@gmail.com';
@@ -3108,7 +3221,8 @@ export default function App() {
     homeTeamId: '',
     awayTeamId: '',
     gameId: '',
-    videoId: ''
+    videoId: '',
+    tag: ''
   });
 
   // Auth Listener
@@ -3119,34 +3233,6 @@ export default function App() {
     });
     return () => unsubscribe();
   }, []);
-
-  // Global Keydown Listener for Spacebar
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't trigger if user is typing in an input or textarea
-      if (
-        document.activeElement &&
-        (document.activeElement.tagName === 'INPUT' ||
-         document.activeElement.tagName === 'TEXTAREA' ||
-         document.activeElement.tagName === 'SELECT')
-      ) {
-        return;
-      }
-
-      if (e.code === 'Space') {
-        e.preventDefault(); // prevent page scroll
-        if (rightPanelTab === 'record') {
-          handleCreateDraftEvent(null, null, null, null, null);
-        }
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [rightPanelTab]); // depends on tab to know if it should trigger? Oh wait, handleCreateDraftEvent is tightly coupled to state. 
-  // Let's actually not bind this to spacebar here if it causes stale closure issues, 
-  // or we can use a ref. Wait, the simplest way is to ensure we don't have stale closures.
-  // Actually, I'll remove the spacebar feature if it causes stale closure issues, I'll write it defensively.
 
   // Videos and Games are now loaded efficiently via loadGlobalData (Phase 2 Aggregation).
 
@@ -3510,7 +3596,7 @@ export default function App() {
     }
   };
 
-  const handleSaveDraftEvent = (draft: DraftEvent) => {
+  const handleSaveDraftEvent = (draft: DraftEvent, chainNext: boolean = false) => {
     if (!draft.type) {
       toast.error("Please select an event type");
       return;
@@ -3553,7 +3639,17 @@ export default function App() {
       }
     });
 
-    setDraftEvents(prev => prev.filter(d => d.id !== draft.id));
+    if (chainNext && (draft.type === 'sub_out' || draft.type === 'sub_in')) {
+      const nextDraft: DraftEvent = {
+        ...draft,
+        id: crypto.randomUUID(),
+        playerId: null,
+        subPlayerId: null,
+      };
+      setDraftEvents(prev => prev.map(d => d.id === draft.id ? nextDraft : d));
+    } else {
+      setDraftEvents(prev => prev.filter(d => d.id !== draft.id));
+    }
 
     // Auto-resume video and focus iframe after quaffle / control events
     const autoResumeTypes = ['goal', 'shot', 'turnover', 'quadball_start', 'control_change', 'control_start'];
@@ -3717,7 +3813,8 @@ export default function App() {
 
   const handleDeleteGame = async (id: string) => {
     const relatedVideos = statsVideos.filter(v => v.gameId === id);
-    if (!confirm(`Delete this Game? WARNING: This will permanently destroy ${relatedVideos.length} connected Videos and EVERY recorded statistical event attached to them. Proceed?`)) return;
+    const relatedEventsCount = statsEvents.filter(e => e.gameId === id).length;
+    if (!confirm(`Delete this Game? WARNING: This will permanently destroy ${relatedVideos.length} connected Videos AND ${relatedEventsCount} recorded statistical events attached to them. Proceed?`)) return;
 
     try {
       const g = games.find(g => g.id === id);
@@ -3777,6 +3874,23 @@ export default function App() {
     } catch (error) { handleFirestoreError(error, OperationType.DELETE, 'seasons'); }
   };
 
+  const handleEditSeason = async (id: string, newName: string, newLeague: string, newYear: string, newDescription: string) => {
+    try {
+      const oldSeason = seasons.find(s => s.id === id);
+      if (!oldSeason) return;
+      await updateDoc(doc(db, 'seasons', id), { name: newName, league: newLeague, year: newYear, description: newDescription });
+      
+      const oldAgg = { id: oldSeason.id, name: oldSeason.name || '', league: oldSeason.league || '', year: oldSeason.year || '', description: oldSeason.description || '' };
+      const newAgg = { ...oldAgg, name: newName, league: newLeague, year: newYear, description: newDescription };
+      
+      await updateDoc(doc(db, 'aggregated', 'seasons'), { data: arrayRemove(oldAgg) }).catch(() => {});
+      await updateDoc(doc(db, 'aggregated', 'seasons'), { data: arrayUnion(newAgg) }).catch(() => {});
+      
+      loadGlobalData();
+      toast.success("Season Championship details updated successfully");
+    } catch (error) { handleFirestoreError(error, OperationType.WRITE, 'seasons'); }
+  };
+
   const handleDeletePlayer = async (id: string) => {
     try {
       const deletedPlayer = allPlayers.find(p => p.id === id);
@@ -3786,6 +3900,23 @@ export default function App() {
         await updateDoc(doc(db, 'aggregated', 'players'), { data: arrayRemove(aggregatedData) });
       }
     } catch (error) { handleFirestoreError(error, OperationType.DELETE, 'players'); }
+  };
+
+  const handleEditPlayer = async (id: string, newFirst: string, newLast: string) => {
+    try {
+      const oldPlayer = allPlayers.find(p => p.id === id);
+      if (!oldPlayer) return;
+      await updateDoc(doc(db, 'players', id), { firstName: newFirst, lastName: newLast });
+      
+      const oldAgg = { id: oldPlayer.id, firstName: oldPlayer.firstName || '', lastName: oldPlayer.lastName || '', preferredName: oldPlayer.preferredName || '', nickname: oldPlayer.nickname || '' };
+      const newAgg = { ...oldAgg, firstName: newFirst, lastName: newLast };
+      
+      await updateDoc(doc(db, 'aggregated', 'players'), { data: arrayRemove(oldAgg) }).catch(() => {});
+      await updateDoc(doc(db, 'aggregated', 'players'), { data: arrayUnion(newAgg) }).catch(() => {});
+      
+      setAllPlayers(prev => prev.map(p => p.id === id ? { ...p, firstName: newFirst, lastName: newLast } : p).sort((a, b) => String(a.firstName + ' ' + a.lastName).localeCompare(String(b.firstName + ' ' + b.lastName))));
+      toast.success("Player updated successfully");
+    } catch (error) { handleFirestoreError(error, OperationType.WRITE, 'players'); }
   };
 
   const handleAddRole = async (email: string, tier: 'authors' | 'trusted') => {
@@ -3923,8 +4054,8 @@ export default function App() {
     const homeName = teams.find(t => t.id === homeId)?.name || 'Home';
     const awayName = teams.find(t => t.id === awayId)?.name || 'Away';
 
-    const gId = `game_${youtubeId}`;
-    const vId = youtubeId;
+    const gId = `game_${crypto.randomUUID()}`;
+    const vId = crypto.randomUUID();
 
     // SET VIDEO LOCALLY FIRST — so the embed renders immediately regardless of Firestore
     const localVideo: Video = {
@@ -3937,7 +4068,7 @@ export default function App() {
 
     // Also inject local game + teams into state so scoreboard shows names immediately
     if (!games.find(g => g.id === gId)) {
-      setGames(prev => [...prev, { id: gId, seasonId, homeTeamId: homeId, awayTeamId: awayId, createdAt: new Date() } as any]);
+      setGames(prev => [...prev, { id: gId, seasonId, homeTeamId: homeId, awayTeamId: awayId, tag: newVideoData.tag, createdAt: new Date() } as any]);
     }
 
     // Background Firestore sync (best-effort)
@@ -3949,7 +4080,7 @@ export default function App() {
       
       if (!gameSnap.exists()) {
         await setDoc(gameRef, {
-          id: gId, seasonId, homeTeamId: homeId, awayTeamId: awayId, createdAt: serverTimestamp()
+          id: gId, seasonId, homeTeamId: homeId, awayTeamId: awayId, createdAt: serverTimestamp(), tag: newVideoData.tag || null
         });
       } else {
         const d = gameSnap.data();
@@ -3958,38 +4089,24 @@ export default function App() {
 
       // Auto-heal the Games cache safely without string duplication
       await updateDoc(doc(db, 'aggregated', 'games'), {
-        data: arrayUnion({ id: gId, seasonId, homeTeamId: homeId, awayTeamId: awayId, createdAt: gCreatedAt })
+        data: arrayUnion({ id: gId, seasonId, homeTeamId: homeId, awayTeamId: awayId, createdAt: gCreatedAt, tag: newVideoData.tag || null })
       }).catch(() => {});
 
-      // Safely provision Video
-      let vCreatedAt = new Date().toISOString();
-      const q = query(collection(db, 'videos'), where('youtubeId', '==', youtubeId));
-      const snapshot = await getDocs(q);
+      // Always Provision Unique Video Document 1:1 Mapping to Game
+      const vCreatedAt = new Date().toISOString();
+      await setDoc(doc(db, 'videos', vId), {
+        youtubeId, videoId: vId, gameId: gId,
+        title: `${homeName} vs ${awayName}`, createdAt: serverTimestamp()
+      });
 
-      if (!snapshot.empty) {
-        const existingDoc = snapshot.docs[0];
-        const vData = existingDoc.data();
-        if (vData && vData.createdAt) vCreatedAt = serializeTimestamp(vData.createdAt) || vCreatedAt;
-        setCurrentVideo({ id: existingDoc.id, ...vData } as Video);
-      } else {
-        await setDoc(doc(db, 'videos', vId), {
-          youtubeId, videoId: vId, gameId: gId,
-          title: `${homeName} vs ${awayName}`, createdAt: serverTimestamp()
-        });
-      }
-
-      // Auto-heal the Video cache safely
+      // Safely Update Video cache tracking
       await updateDoc(doc(db, 'aggregated', 'videos'), {
         data: arrayUnion({ id: vId, videoId: vId, youtubeId, gameId: gId, title: `${homeName} vs ${awayName}`, createdAt: vCreatedAt })
       }).catch(() => {});
       
       // Fetch latest arrays so the UI reacts instantly
       loadGlobalData();
-      if (snapshot.empty) {
-        toast.success('Video synced to Database');
-      } else {
-        toast.success('Video loaded from Database');
-      }
+      toast.success('Game and Stream initialized successfully!');
     } catch (error) {
       console.warn('Firestore sync failed (video still loaded locally):', error);
       toast.error('Warning: Backend sync failed. Game only saved locally for this session.');
@@ -4010,7 +4127,7 @@ export default function App() {
     for (const event of events) {
       if (event.type === 'gameStart') {
         lastStartTime = event.videoTime;
-      } else if (event.type === 'gamePause') {
+      } else if (event.type === 'gamePause' || event.type === 'gameEnd') {
         if (lastStartTime !== -1) {
           totalGameTime += event.videoTime - lastStartTime;
           lastStartTime = -1;
@@ -4098,7 +4215,7 @@ export default function App() {
     }).map(g => {
       const hName = statsTeams.find(t => t.id === g.homeTeamId)?.name || g.homeTeamId;
       const aName = statsTeams.find(t => t.id === g.awayTeamId)?.name || g.awayTeamId;
-      return { ...g, displayName: `${hName} vs ${aName}` };
+      return { ...g, displayName: g.tag ? `${hName} vs ${aName} (${g.tag})` : `${hName} vs ${aName}` };
     });
   }, [statsGames, statsSeasons, statsTeams, trackerYearId, trackerTeamId, trackerOpponentId]);
 
@@ -4167,12 +4284,22 @@ export default function App() {
             <button
               onClick={() => setView('tracker')}
               className={cn(
-                "px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-2",
+                "px-4 py-2 rounded-lg font-medium transition-all hidden sm:flex items-center gap-2",
                 view === 'tracker' ? "bg-red-600 text-white" : "bg-gray-50 text-gray-500 hover:text-gray-900 border border-gray-200"
               )}
             >
               <Play className="w-4 h-4" />
               Record Game
+            </button>
+            <button
+              onClick={() => setView('help')}
+              className={cn(
+                "px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-2",
+                view === 'help' ? "bg-red-600 text-white" : "bg-gray-50 text-gray-500 hover:text-gray-900 border border-gray-200"
+              )}
+            >
+              <HelpCircle className="w-4 h-4" />
+              Help
             </button>
 
             {view === 'tracker' && isAdmin && (
@@ -4220,7 +4347,83 @@ export default function App() {
       </header>
 
       <main className={cn("mx-auto transition-all w-full", (view === 'tracker' && currentVideo) ? "max-w-[100vw] px-2 py-2 flex-1 min-h-0 flex flex-col" : "max-w-7xl px-4 py-8")}>
-        {view === 'manage' ? (
+        {view === 'help' ? (
+          <div className="bg-white rounded-xl shadow-sm border p-8 max-w-4xl mx-auto space-y-10">
+            <div className="mb-12">
+              <h2 className="text-3xl font-extrabold border-b pb-4 text-gray-900 mb-6">Author & Tracker Guide</h2>
+              <div className="space-y-4 text-gray-700 leading-relaxed text-sm">
+                <p><strong>Tracking Strategy:</strong> The most important rule is to track the event exactly when it occurs. Do not let the clip run for 5 seconds before marking the event. Precision ensures accurate timestamp matching.</p>
+                <p><strong>Defining a Turnover:</strong> A turnover is defined as a play where a player makes an obvious mistake leading to a turnover. The bar for a turnover should be high, because often they are more the result of catching a hot potato or good defense, not turnover worthy play.</p>
+                <p><strong>Deleting Mistaken Events:</strong> If you mislog an event, immediately look beneath the tracker interface to your live Timeline Feed and click the trash icon. It will instantly wipe the event.</p>
+              </div>
+            </div>
+
+            <div>
+              <h2 className="text-3xl font-extrabold border-b pb-4 text-gray-900 mb-6">Statistics Glossary</h2>
+              <p className="text-gray-500">Definitions for all statistics recorded and calculated in Quadball Reference.</p>
+            </div>
+            
+            <section>
+              <h3 className="text-2xl font-bold mb-4 text-red-800 flex items-center gap-2"><Trophy className="w-6 h-6" /> Quadball (Chasers & Keepers)</h3>
+              
+              <div className="space-y-6">
+                <div>
+                  <h4 className="font-bold text-gray-900 uppercase tracking-widest text-sm mb-2 opacity-70 border-b pb-1">Basic Stats</h4>
+                  <ul className="space-y-3 text-sm text-gray-700">
+                    <li><strong className="text-gray-900 w-16 inline-block">GP</strong> Games Played.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">MIN</strong> Total Minutes Played.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">S</strong> Total Shots attempted (Goals + Misses).</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">G</strong> Total Goals scored (10 points each).</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">A</strong> Assists (Passes leading directly to a goal).</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">TO</strong> Turnovers (Loss of offensive possession without a shot).</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">TA</strong> Takeaways (Defensive actions directly causing an opponent's turnover).</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">A:TO</strong> Ratio of Assists to Turnovers.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">S%</strong> Shooting Percentage (Goals divided by Total Shots).</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">CTRL%</strong> Team Bludger Control Percentage while this player is on the field.</li>
+                  </ul>
+                </div>
+
+                <div>
+                  <h4 className="font-bold text-gray-900 uppercase tracking-widest text-sm mb-2 opacity-70 border-b pb-1">Advanced Stats</h4>
+                  <ul className="space-y-3 text-sm text-gray-700">
+                    <li><strong className="text-gray-900 w-16 inline-block">+</strong> Plus (Total quadball points scored by the team while the player is on)</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">−</strong> Minus (Total quadball points conceded by the team while the player is on)</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">+/−</strong> Plus/Minus (Net differential: Plus minus Minus).</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">+:−</strong> Plus:Minus Ratio (Team points scored divided by Team points conceded while on field).</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">Off +:−</strong> Plus:Minus Ratio for the team when this player is NOT on the field.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">REL +:−</strong> Relative Value (The player's +:− divided by the Off +:−). Measures individual impact relative to the rest of the team.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">G/20</strong> Goals scored per 20 minutes played.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">A/20</strong> Assists recorded per 20 minutes played.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">PTS/20</strong> Points (Goals x 10) per 20 minutes played.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">G/G</strong> Average Goals per Game played.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">A/G</strong> Average Assists per Game played.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">PTS/G</strong> Average Points per Game played.</li>
+                  </ul>
+                </div>
+              </div>
+            </section>
+            
+            <section>
+              <h3 className="text-2xl font-bold mb-4 text-purple-800 flex items-center gap-2"><Target className="w-6 h-6" /> Beaters (Pairs & Solo)</h3>
+              <div className="space-y-3 text-sm text-gray-700">
+                <ul className="space-y-3 text-sm text-gray-700 relative pl-1">
+                  <li><strong className="text-gray-900 w-20 inline-block">GP</strong> Games Played.</li>
+                  <li><strong className="text-gray-900 w-20 inline-block">MIN</strong> Total minutes played for this pair or individual.</li>
+                  <li><strong className="text-gray-900 w-20 inline-block">+</strong> Goals scored by the team while this beater pair/individual was active.</li>
+                  <li><strong className="text-gray-900 w-20 inline-block">−</strong> Goals conceded by the team while this beater pair/individual was active.</li>
+                  <li><strong className="text-gray-900 w-20 inline-block">+/−</strong> Point differential while this beater pair/individual was active.</li>
+                  <li><strong className="text-gray-900 w-20 inline-block">P20</strong> Plus/Minus per 20 minutes played.</li>
+                  <li><strong className="text-gray-900 w-20 inline-block">STINTS</strong> Number of times this exact sub-group played continuously without subbing out.</li>
+                  <li><strong className="text-gray-900 w-20 inline-block">ST MIN</strong> Average length of a stint in minutes.</li>
+                  <li><strong className="text-gray-900 w-20 inline-block">C START</strong> Number of stints began where the team already had bludger control.</li>
+                  <li><strong className="text-gray-900 w-20 inline-block">C END</strong> Number of stints ended where the team held bludger control.</li>
+                  <li><strong className="text-gray-900 w-20 inline-block">NET C</strong> Difference between Control Ends and Control Starts. Measures ability to win/protect control over a shift.</li>
+                  <li><strong className="text-gray-900 w-20 inline-block">CTRL%</strong> Percentage of possession time the team maintained dodgeball control during their minutes on pitch.</li>
+                </ul>
+              </div>
+            </section>
+          </div>
+        ) : view === 'manage' ? (
           <ManagementView
             teams={teams}
             seasons={seasons}
@@ -4237,7 +4440,9 @@ export default function App() {
             onDeleteGame={handleDeleteGame}
             onDeleteVideo={handleDeleteVideo}
             onDeleteSeason={handleDeleteSeason}
+            onEditSeason={handleEditSeason}
             onDeletePlayer={handleDeletePlayer}
+            onEditPlayer={handleEditPlayer}
             onDeleteRoster={handleDeleteRoster}
             onRefreshData={loadGlobalData}
             onRunMigration={handleRunMigration}
@@ -4329,6 +4534,8 @@ export default function App() {
                 onTeamChange={setStatsTeamId}
                 search={statsSearch}
                 onSearchChange={setStatsSearch}
+                onPlayerSelect={handlePlayerProfileClick}
+                onTeamSelect={handleTeamProfileClick}
               />
             ) : statsSubView === 'beaters' ? (
               <BeaterStatsView 
@@ -4344,6 +4551,8 @@ export default function App() {
                 onTeamChange={setStatsTeamId}
                 search={statsSearch}
                 onSearchChange={setStatsSearch}
+                onPlayerSelect={handlePlayerProfileClick}
+                onTeamSelect={handleTeamProfileClick}
               />
             ) : statsSubView === 'seekers' ? (
               <SeekerStatsView 
@@ -4359,173 +4568,166 @@ export default function App() {
                 onTeamChange={setStatsTeamId}
                 search={statsSearch}
                 onSearchChange={setStatsSearch}
+                onPlayerSelect={handlePlayerProfileClick}
               />
-            ) : null}
-          </div>
-        ) : !currentVideo ? (
-          <div className="max-w-4xl mx-auto mt-10">
-            <div className="text-center mb-12">
-              <h2 className="text-4xl font-bold mb-4">Select a game to track</h2>
-              <p className="text-gray-500 text-lg">Choose an existing game from the list or add a new one.</p>
+              ) : null}
+            </div>
+          ) : view === 'playerProfile' && activePlayerId ? (
+            <PlayerProfileView
+              players={statsPlayers} events={statsEvents} games={statsGames} seasons={statsSeasons} teams={statsTeams}
+              activePlayerId={activePlayerId}
+              onBack={popProfile}
+              onTeamSelect={handleTeamProfileClick}
+              onGameSelect={handleGameProfileClick}
+            />
+          ) : view === 'teamProfile' && activeTeamId ? (
+            <TeamProfileView
+              players={statsPlayers} events={statsEvents} games={statsGames} seasons={statsSeasons} teams={statsTeams}
+              activeTeamId={activeTeamId}
+              onBack={popProfile}
+              onPlayerSelect={handlePlayerProfileClick}
+              onGameSelect={handleGameProfileClick}
+            />
+          ) : view === 'gameProfile' && activeGameId ? (
+            <GameBoxScoreView
+              players={statsPlayers} events={statsEvents} games={statsGames} seasons={statsSeasons} teams={statsTeams}
+              activeGameId={activeGameId}
+              onBack={popProfile}
+              onPlayerSelect={handlePlayerProfileClick}
+              onTeamSelect={handleTeamProfileClick}
+            />
+          ) : !currentVideo ? (
+          <div className="max-w-5xl mx-auto mt-8 px-4 pb-12">
+            <div className="text-center mb-10">
+              <h2 className="text-4xl font-extrabold text-gray-900 tracking-tight">Record a Game</h2>
+              <p className="mt-3 text-lg text-gray-500">Add a new YouTube video link to track, or continue an existing session.</p>
             </div>
 
-            <div className="space-y-6">
-              {/* Tracker Selector Dropdowns */}
-              <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden p-6 text-left">
-                 <h3 className="text-sm font-bold uppercase tracking-wider text-gray-400 mb-4 px-1">Track Existing Game</h3>
-                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 mb-6 relative z-10">
-                   <div className="flex flex-col gap-1 w-full">
-                     <span className="text-sm font-medium text-gray-700 mx-1">Year</span>
-                     <select
-                       value={trackerYearId}
-                       onChange={e => { setTrackerYearId(e.target.value); setTrackerTeamId('all'); setTrackerOpponentId('all'); setTrackerGameId(''); }}
-                       className="block w-full rounded-lg border-gray-300 shadow-sm focus:border-red-500 focus:ring-red-500 sm:text-sm bg-gray-50 p-2 border"
-                     >
-                       <option value="all">All Years</option>
-                       {trackingYears.map(y => (
-                         <option key={y} value={y}>{y}</option>
-                       ))}
-                     </select>
-                   </div>
-                   
-                   <div className="flex flex-col gap-1 w-full">
-                     <span className="text-sm font-medium text-gray-700 mx-1">Team</span>
-                     <select
-                       value={trackerTeamId}
-                       onChange={e => { setTrackerTeamId(e.target.value); setTrackerOpponentId('all'); setTrackerGameId(''); }}
-                       className="block w-full rounded-lg border-gray-300 shadow-sm focus:border-red-500 focus:ring-red-500 sm:text-sm bg-gray-50 p-2 border"
-                     >
-                       <option value="all">All Teams</option>
-                       {trackingTeams.map(t => (
-                         <option key={t.id} value={t.id}>{t.name}</option>
-                       ))}
-                     </select>
-                   </div>
-                   
-                   <div className="flex flex-col gap-1 w-full">
-                     <span className="text-sm font-medium text-gray-700 mx-1">Opponent (Optional)</span>
-                     <select
-                       value={trackerOpponentId}
-                       onChange={e => { setTrackerOpponentId(e.target.value); setTrackerGameId(''); }}
-                       className="block w-full rounded-lg border-gray-300 shadow-sm focus:border-red-500 focus:ring-red-500 sm:text-sm bg-gray-50 p-2 border"
-                     >
-                       <option value="all">All Opponents</option>
-                       {trackingOpponents.map(t => (
-                         <option key={t.id} value={t.id}>{t.name}</option>
-                       ))}
-                     </select>
-                   </div>
-                   
-                   <div className="flex flex-col gap-1 w-full relative">
-                     <span className="text-sm font-bold text-gray-700 mx-1">Game</span>
-                     <select 
-                       value={trackerGameId || (trackingFilteredGames.length > 0 ? trackingFilteredGames[0].id : '')} 
-                       onChange={e => setTrackerGameId(e.target.value)}
-                       className="block w-full rounded-lg border-red-200 shadow-sm focus:border-red-500 focus:ring-red-500 sm:text-sm bg-white p-2 border-2 font-bold"
-                     >
-                       {trackingFilteredGames.map(g => (
-                         <option key={g.id} value={g.id}>
-                           {g.displayName}
-                         </option>
-                       ))}
-                       {trackingFilteredGames.length === 0 && <option value="">No Games Found</option>}
-                     </select>
-                   </div>
-                 </div>
-                 
-                 {/* Videos for Selected Game */}
-                 <div className="space-y-3">
-                   {trackerActiveVideos.length === 0 ? (
-                     <div className="p-8 text-center text-gray-400 bg-gray-50 rounded-xl border border-dashed border-gray-300">
-                       <AlertCircle className="w-8 h-8 mx-auto mb-2 opacity-20" />
-                       <p>No video recordings link to this game.</p>
-                     </div>
-                   ) : (
-                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                       {trackerActiveVideos.map((vid) => (
-                         <button
-                           key={vid.id}
-                           onClick={() => {
-                             setCurrentVideo(vid);
-                           }}
-                           className="w-full bg-gray-50 border border-gray-200 p-3 rounded-xl flex items-center gap-4 hover:border-red-400 hover:ring-2 hover:ring-red-500/20 transition-all text-left group"
-                         >
-                           <div className="w-24 h-16 bg-black rounded-lg overflow-hidden flex-shrink-0 shadow-sm">
-                             <img src={`https://img.youtube.com/vi/${vid.youtubeId}/mqdefault.jpg`} alt="" className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" referrerPolicy="no-referrer" />
-                           </div>
-                           <div className="flex-1 min-w-0">
-                             <p className="font-bold text-gray-900 line-clamp-2 leading-tight group-hover:text-red-700 transition-colors">{vid.title}</p>
-                             <div className="flex items-center gap-2 mt-1">
-                               <Play className="w-3 h-3 text-red-500 opacity-0 -ml-4 group-hover:opacity-100 group-hover:ml-0 transition-all" />
-                               <span className="text-[10px] text-gray-400 font-mono">ID: {vid.youtubeId}</span>
-                             </div>
-                           </div>
-                         </button>
-                       ))}
-                     </div>
-                   )}
-                 </div>
-              </div>
-
-              {/* Add New Game Expanding Panel */}
-              <div className="bg-gray-50 border border-gray-200 rounded-2xl overflow-hidden transition-all text-left">
-                {!isAddingGame ? (
-                  <button
-                    onClick={() => setIsAddingGame(true)}
-                    className="w-full p-4 flex items-center justify-center gap-2 text-sm font-bold text-gray-500 hover:text-red-600 hover:bg-gray-100 transition-colors"
-                  >
-                    <Plus className="w-4 h-4" />
-                    Create New Game Link...
-                  </button>
-                ) : (
-                  <div className="p-6">
-                    <div className="flex items-center justify-between mb-4">
-                      <h4 className="font-bold text-lg">Add a new video link</h4>
-                      <button onClick={() => setIsAddingGame(false)} className="text-xs text-gray-400 hover:text-gray-900">Cancel</button>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
+              {/* Start New Video */}
+              <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
+                <div className="bg-gray-50/50 border-b border-gray-100 p-5">
+                  <h3 className="text-xl font-bold text-gray-900 flex items-center gap-3"><Play className="w-5 h-5 text-red-600" /> Start Tracking New Video</h3>
+                  <p className="text-sm text-gray-500 mt-1">Paste a video link and set the matchup details.</p>
+                </div>
+                <div className="p-6 space-y-4">
+                  <label className="block">
+                    <span className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-1.5 block">YouTube URL</span>
+                    <div className="relative">
+                      <input type="text" placeholder="https://www.youtube.com/watch?v=..." className="w-full bg-gray-50 border border-gray-200 focus:border-red-500 focus:ring-2 focus:ring-red-500/20 rounded-xl px-4 py-3 outline-none transition-all pr-12 text-sm font-medium" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} autoFocus />
+                      <div className="absolute right-3 top-3 text-gray-300"><Search className="w-5 h-5" /></div>
                     </div>
+                  </label>
 
-                    <div className="space-y-4">
-                      <label className="block">
-                        <span className="text-xs font-bold uppercase text-gray-400 mb-1 block">YouTube URL or Video ID</span>
-                        <div className="relative">
-                          <input type="text" placeholder="https://www.youtube.com/watch?v=..." className="w-full bg-white border border-gray-200 focus:border-red-500 rounded-xl px-4 py-3 outline-none transition-all pr-12" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} autoFocus />
-                          <div className="absolute right-3 top-3 text-gray-300"><Search className="w-5 h-5" /></div>
-                        </div>
-                      </label>
+                  <label className="block">
+                    <span className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-1.5 block">Season (Year)</span>
+                    <select className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20 text-sm font-medium" value={newVideoData.seasonId} onChange={e => setNewVideoData({ ...newVideoData, seasonId: e.target.value })} required>
+                      <option value="" disabled>Select Season...</option>
+                      {seasons.map(s => <option key={s.id} value={s.id}>{s.name || s.id}</option>)}
+                    </select>
+                  </label>
 
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                        <label className="block">
-                          <span className="text-xs font-bold uppercase text-gray-400 mb-1 block">Season (Year)</span>
-                          <select className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500" value={newVideoData.seasonId} onChange={e => setNewVideoData({ ...newVideoData, seasonId: e.target.value })} required>
-                            <option value="" disabled>Select Season...</option>
-                            {seasons.map(s => <option key={s.id} value={s.id}>{s.name || s.id}</option>)}
-                          </select>
-                        </label>
-                        <label className="block">
-                          <span className="text-xs font-bold uppercase text-gray-400 mb-1 block">Home Team</span>
-                          <select className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500" value={newVideoData.homeTeamId} onChange={e => setNewVideoData({ ...newVideoData, homeTeamId: e.target.value })} required>
-                            <option value="" disabled>Select Home Team...</option>
-                            {teams.map(t => <option key={t.id} value={t.id}>{t.name || t.id}</option>)}
-                          </select>
-                        </label>
-                        <label className="block">
-                          <span className="text-xs font-bold uppercase text-gray-400 mb-1 block">Away Team</span>
-                          <select className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500" value={newVideoData.awayTeamId} onChange={e => setNewVideoData({ ...newVideoData, awayTeamId: e.target.value })} required>
-                            <option value="" disabled>Select Away Team...</option>
-                            {teams.map(t => <option key={t.id} value={t.id}>{t.name || t.id}</option>)}
-                          </select>
-                        </label>
-                      </div>
-
-                      <button onClick={handleSearchVideo} disabled={!searchQuery || !newVideoData.seasonId || !newVideoData.homeTeamId || !newVideoData.awayTeamId} className="w-full bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-all mt-2" >
-                        Start Tracking Game
-                      </button>
-                    </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <label className="block">
+                      <span className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-1.5 block">Home Team</span>
+                      <select className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20 text-sm font-medium" value={newVideoData.homeTeamId} onChange={e => setNewVideoData({ ...newVideoData, homeTeamId: e.target.value })} required>
+                        <option value="" disabled>Select Home...</option>
+                        {teams.map(t => <option key={t.id} value={t.id}>{t.name || t.id}</option>)}
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-1.5 block">Away Team</span>
+                      <select className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20 text-sm font-medium" value={newVideoData.awayTeamId} onChange={e => setNewVideoData({ ...newVideoData, awayTeamId: e.target.value })} required>
+                        <option value="" disabled>Select Away...</option>
+                        {teams.map(t => <option key={t.id} value={t.id}>{t.name || t.id}</option>)}
+                      </select>
+                    </label>
                   </div>
-                )}
+
+                  <label className="block">
+                    <span className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-1.5 block flex items-center justify-between">
+                      Game Tag
+                      <span className="text-gray-300 font-normal normal-case">Optional, e.g. Finals</span>
+                    </span>
+                    <input type="text" placeholder="e.g. Finals Match 1" className="w-full bg-gray-50 border border-gray-200 focus:border-red-500 focus:ring-2 focus:ring-red-500/20 rounded-xl px-4 py-3 outline-none transition-all text-sm font-medium" value={newVideoData.tag} onChange={(e) => setNewVideoData({ ...newVideoData, tag: e.target.value })} />
+                  </label>
+
+                  <button onClick={handleSearchVideo} disabled={!searchQuery || !newVideoData.seasonId || !newVideoData.homeTeamId || !newVideoData.awayTeamId} className="w-full bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3.5 rounded-xl transition-all mt-4 flex justify-center items-center gap-2 shadow-sm" >
+                    Start Tracking
+                  </button>
+                </div>
+              </div>
+
+              {/* Continue Existing */}
+              <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden p-6 flex flex-col h-full max-h-[800px]">
+                <h3 className="text-xl font-bold text-gray-900 mb-5 flex items-center gap-3"><Database className="w-5 h-5 text-gray-400" /> Continue Tracker Session</h3>
+
+                <div className="grid grid-cols-2 gap-3 mb-5 shrink-0">
+                  <div>
+                    <span className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-1.5 block">Filter Season</span>
+                    <select
+                      value={trackerYearId}
+                      onChange={e => { setTrackerYearId(e.target.value); setTrackerTeamId('all'); setTrackerOpponentId('all'); setTrackerGameId(''); }}
+                      className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-red-500 font-medium"
+                    >
+                      <option value="all">All Seasons</option>
+                      {trackingYears.map(y => (
+                        <option key={y} value={y}>{y}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <span className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-1.5 block">Filter Team</span>
+                    <select
+                      value={trackerTeamId}
+                      onChange={e => { setTrackerTeamId(e.target.value); setTrackerOpponentId('all'); setTrackerGameId(''); }}
+                      className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-red-500 font-medium"
+                    >
+                      <option value="all">All Teams</option>
+                      {trackingTeams.map(t => (
+                        <option key={t.id} value={t.id}>{t.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="space-y-2.5 flex-1 min-h-[300px] overflow-y-auto custom-scrollbar pr-1">
+                  {trackingFilteredGames.map(g => {
+                    const acts = videos.filter(v => v.gameId === g.id);
+                    if (acts.length === 0) return null;
+                    return acts.map((vid, idx) => (
+                      <button
+                        key={`${g.id}_${vid.id}_${idx}`}
+                        onClick={() => {
+                          setCurrentVideo(vid);
+                        }}
+                        className="w-full p-3 bg-gray-50/80 border border-gray-200 rounded-xl flex items-center gap-4 hover:border-red-300 hover:shadow-md transition-all text-left group"
+                      >
+                         <div className="w-20 h-14 bg-black rounded-lg overflow-hidden flex-shrink-0">
+                           <img src={`https://img.youtube.com/vi/${vid.youtubeId}/mqdefault.jpg`} alt="" className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" referrerPolicy="no-referrer" />
+                         </div>
+                         <div className="flex-1 min-w-0">
+                           <p className="font-bold text-gray-900 leading-tight group-hover:text-red-700 transition-colors line-clamp-2">{g.displayName}</p>
+                           <p className="text-xs text-gray-500 mt-1 flex items-center gap-1.5">
+                             <Clock className="w-3 h-3" />
+                             {new Date(vid.createdAt).toLocaleDateString()}
+                           </p>
+                         </div>
+                         <ChevronRight className="w-5 h-5 text-gray-300 group-hover:text-red-500 flex-shrink-0" />
+                      </button>
+                    ));
+                  })}
+                  
+                  {trackingFilteredGames.length === 0 && (
+                    <div className="text-center py-10 border border-dashed border-gray-200 rounded-xl bg-gray-50 h-full flex flex-col justify-center">
+                      <p className="text-gray-400 italic">No existing videos match filters.</p>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </div>
+
         ) : (
           <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 gap-4">
             {/* Left Column: Player & Controls */}
@@ -4726,19 +4928,9 @@ export default function App() {
                     
                     {/* Event Type Grid */}
                     <div className="flex flex-col gap-3 mb-2">
-                      <button
-                        onClick={() => handleCreateDraftEvent(null, null, null, null, null)}
-                        className="flex items-center justify-center gap-2 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold uppercase tracking-wider text-xs rounded-lg border border-emerald-200 transition-colors"
-                      >
-                        Drop Open Timestamp (Spacebar)
-                      </button>
-
                       {(() => {
                         const groups = [
-                          { title: 'Chaser Actions', types: ['goal', 'shot', 'turnover', 'quadball_start'] },
-                          { title: 'Beater Actions', types: ['control_change', 'control_start'] },
-                          { title: 'Seeker Actions', types: ['flag_released', 'flag_catch'] },
-                          { title: 'Substitution & Misc', types: ['sub_in', 'sub_out', 'foul', 'card'] },
+                          { title: 'Chaser Actions', types: ['goal', 'shot', 'turnover'] },
                           { title: 'Game Clock', types: ['gameStart', 'gamePause', 'gameEnd'] },
                         ];
 
@@ -4750,7 +4942,7 @@ export default function App() {
                                 const config = EVENT_CONFIG[type as EventType];
                                 if (!config) return null;
                                 const resolvedTeamId =
-                                  ['control_change', 'gameStart', 'gamePause', 'gameEnd', 'flag_released'].includes(type) ? null :
+                                  ['control_change', 'control_start', 'gameStart', 'gamePause', 'gameEnd', 'flag_released'].includes(type) ? null :
                                     selectedTeamContext === 'home' ? (currentGame?.homeTeamId ?? null) :
                                       selectedTeamContext === 'away' ? (currentGame?.awayTeamId ?? null) :
                                         null;
@@ -4759,17 +4951,17 @@ export default function App() {
                                   <button
                                     key={type}
                                     onClick={() => {
-                                      if (type === 'control_change') {
+                                      if (type === 'control_change' || type === 'control_start') {
                                         const ctrlTeamId = selectedTeamContext === 'home' ? (currentGame?.homeTeamId ?? null) :
                                           selectedTeamContext === 'away' ? (currentGame?.awayTeamId ?? null) : null;
-                                        handleCreateDraftEvent('control_change', ctrlTeamId, null, null, null);
+                                        handleCreateDraftEvent(type as EventType, ctrlTeamId, null, null, null);
                                         return;
                                       }
                                       handleCreateDraftEvent(type as EventType, resolvedTeamId, selectedPlayerId || null, null, null);
                                     }}
                                     className={cn(
                                       "flex flex-col items-center justify-center p-2 rounded-lg border transition-all active:scale-95 group text-center bg-white shadow-sm",
-                                      type === 'control_change'
+                                      (type === 'control_change' || type === 'control_start')
                                         ? "border-emerald-200 hover:border-emerald-500 hover:bg-emerald-50"
                                         : "border-gray-200 hover:border-red-500 hover:bg-red-50"
                                     )}
@@ -4782,6 +4974,83 @@ export default function App() {
                           </div>
                         ));
                       })()}
+
+                      {/* Control Change UI */}
+                      <div className="flex flex-col gap-1.5 mt-1">
+                        <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Control Change</span>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          <button
+                            onClick={() => handleCreateDraftEvent('control_change', currentGame?.homeTeamId || null, null, null, null)}
+                            className="flex flex-col items-center justify-center p-2 rounded-lg border transition-all active:scale-95 group text-center bg-white shadow-sm border-emerald-200 hover:border-emerald-500 hover:bg-emerald-50"
+                          >
+                            <span className="text-[10px] uppercase font-bold tracking-tight text-gray-700 leading-tight">Home Control</span>
+                          </button>
+                          <button
+                            onClick={() => handleCreateDraftEvent('control_change', currentGame?.awayTeamId || null, null, null, null)}
+                            className="flex flex-col items-center justify-center p-2 rounded-lg border transition-all active:scale-95 group text-center bg-white shadow-sm border-emerald-200 hover:border-emerald-500 hover:bg-emerald-50"
+                          >
+                            <span className="text-[10px] uppercase font-bold tracking-tight text-gray-700 leading-tight">Away Control</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Cards UI */}
+                      <div className="flex flex-col gap-1.5 mt-1">
+                        <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Penalties</span>
+                        <div className="grid grid-cols-3 gap-1.5">
+                          <button onClick={() => { handleCreateDraftEvent('card', selectedTeamContext === 'home' ? currentGame?.homeTeamId || null : selectedTeamContext === 'away' ? currentGame?.awayTeamId || null : null, selectedPlayerId || null, null, null); setDraftEvents(d => { const last = d[0]; if (last) last.color = 'blue'; return [...d]; }); }} className="flex flex-col items-center justify-center p-2 rounded-lg border border-blue-200 hover:border-blue-500 hover:bg-blue-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[10px] uppercase font-bold tracking-tight text-blue-700">Blue Card</span></button>
+                          <button onClick={() => { handleCreateDraftEvent('card', selectedTeamContext === 'home' ? currentGame?.homeTeamId || null : selectedTeamContext === 'away' ? currentGame?.awayTeamId || null : null, selectedPlayerId || null, null, null); setDraftEvents(d => { const last = d[0]; if (last) last.color = 'yellow'; return [...d]; }); }} className="flex flex-col items-center justify-center p-2 rounded-lg border border-yellow-200 hover:border-yellow-500 hover:bg-yellow-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[10px] uppercase font-bold tracking-tight text-yellow-700">Yellow Card</span></button>
+                          <button onClick={() => { handleCreateDraftEvent('card', selectedTeamContext === 'home' ? currentGame?.homeTeamId || null : selectedTeamContext === 'away' ? currentGame?.awayTeamId || null : null, selectedPlayerId || null, null, null); setDraftEvents(d => { const last = d[0]; if (last) last.color = 'red'; return [...d]; }); }} className="flex flex-col items-center justify-center p-2 rounded-lg border border-red-200 hover:border-red-500 hover:bg-red-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[10px] uppercase font-bold tracking-tight text-red-700">Red Card</span></button>
+                        </div>
+                      </div>
+
+                      {/* Game Phase Events */}
+                      <div className="flex flex-col gap-1.5 mt-1">
+                        <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Game Phase Events</span>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          <button onClick={() => handleCreateDraftEvent('quadball_start', null, null, null, null)} className="flex flex-col items-center justify-center p-2 rounded-lg border border-gray-200 hover:border-red-500 hover:bg-red-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[10px] uppercase font-bold tracking-tight text-gray-700">Quadball Start</span></button>
+                          <button onClick={() => handleCreateDraftEvent('control_start', null, null, null, null)} className="flex flex-col items-center justify-center p-2 rounded-lg border border-gray-200 hover:border-emerald-500 hover:bg-emerald-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[10px] uppercase font-bold tracking-tight text-emerald-800">Control Start</span></button>
+                          <button onClick={() => handleCreateDraftEvent('flag_released', null, null, null, null)} className="flex flex-col items-center justify-center p-2 rounded-lg border border-gray-200 hover:border-purple-500 hover:bg-purple-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[10px] uppercase font-bold tracking-tight text-purple-800">Flag Released</span></button>
+                          <button onClick={() => handleCreateDraftEvent('flag_catch', selectedTeamContext === 'home' ? currentGame?.homeTeamId || null : currentGame?.awayTeamId || null, selectedPlayerId || null, null, null)} className="flex flex-col items-center justify-center p-2 rounded-lg border border-gray-200 hover:border-purple-500 hover:bg-purple-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[10px] uppercase font-bold tracking-tight text-purple-800">Flag Catch</span></button>
+                        </div>
+                      </div>
+
+                      {/* Sub UI */}
+                      <div className="flex flex-col gap-1.5 mt-1">
+                        <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Substitutions</span>
+                        <div className="flex gap-2">
+                          <select 
+                            onChange={(e) => {
+                              // We implicitly intercept the SUB toggle via local state if we had it, but actually let's just use a select dropdown directly or a local ref/id
+                              // For simplicity in a single file render without creating extra state, we can use a select 
+                            }}
+                            id="sub-type-selector"
+                            className="bg-gray-100 text-xs font-bold text-gray-700 rounded-lg outline-none border border-gray-200 px-3 cursor-pointer"
+                          >
+                            <option value="sub_in">SUB IN</option>
+                            <option value="sub_out">SUB OUT</option>
+                          </select>
+                          <button
+                            onClick={() => {
+                              const selectEl = document.getElementById('sub-type-selector') as HTMLSelectElement;
+                              const t = selectEl ? (selectEl.value as EventType) : 'sub_in';
+                              const allSubEvents = [...activeTrackingEvents, ...draftEvents].filter(e => ['sub_in', 'sub_out'].includes(e.type)).sort((a,b) => a.videoTime - b.videoTime);
+                              const lastTeamId = allSubEvents.length > 0 ? allSubEvents[allSubEvents.length - 1].teamId : currentGame?.homeTeamId;
+                              handleCreateDraftEvent(t, lastTeamId || null, null, null, null);
+                            }}
+                            className="flex-1 flex flex-col items-center justify-center py-2 px-4 rounded-lg border transition-all active:scale-95 group text-center shadow-sm bg-gray-800 hover:bg-gray-900 border-gray-900"
+                          >
+                            <span className="text-[10px] uppercase font-bold tracking-widest text-white leading-tight">
+                              Start Sub: {getScoreboardName(teams.find(t => {
+                                const allSubEvents = [...activeTrackingEvents, ...draftEvents].filter(e => ['sub_in', 'sub_out'].includes(e.type)).sort((a,b) => a.videoTime - b.videoTime);
+                                const lastTeamId = allSubEvents.length > 0 ? allSubEvents[allSubEvents.length - 1].teamId : currentGame?.homeTeamId;
+                                return t.id === lastTeamId;
+                              }))}
+                            </span>
+                          </button>
+                        </div>
+                      </div>
+
                     </div>
 {/* Draft Cards Pipeline */}
                     <div className="flex flex-col gap-4">
@@ -4811,78 +5080,77 @@ export default function App() {
                                 {/* Team & Player Selects (Hidden for Clock Events) */}
                                 {!['gameStart', 'gamePause', 'gameEnd'].includes(draft.type || '') && (
                                   <>
-                                    <select 
-                                      value={draft.teamId || ''}
-                                      onChange={(e) => {
-                                        // IF team changes, clear player ID since rosters are different
-                                        setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, teamId: e.target.value, playerId: null } : d));
-                                      }}
-                                      className="text-xs border border-gray-300 rounded p-1.5 bg-white"
-                                    >
-                                      <option value="">No Team</option>
-                                      {currentGame && <option value={currentGame.homeTeamId}>Home: {teams.find(t => t.id === currentGame.homeTeamId)?.name}</option>}
-                                      {currentGame && <option value={currentGame.awayTeamId}>Away: {teams.find(t => t.id === currentGame.awayTeamId)?.name}</option>}
-                                    </select>
-
-                                    <select
-                                      value={draft.playerId || ''}
-                                      onChange={(e) => {
-                                        const newPlr = e.target.value;
-                                        setDraftEvents(prev => prev.map(d => {
-                                          if (d.id !== draft.id) return d;
-                                          let updatedDraft = { ...d, playerId: newPlr };
-                                          if (d.type === 'sub_in') {
-                                             const past = [...activeTrackingEvents].sort((a,b) => b.videoTime - a.videoTime).find(ev => ev.playerId === newPlr && ev.type === 'sub_in');
-                                             updatedDraft.position = (past?.position as PositionType) || 'chaser';
-                                          }
-                                          return updatedDraft;
-                                        }));
-                                      }}
-                                      className="text-xs border border-gray-300 rounded p-1.5 bg-white disabled:opacity-50"
-                                      disabled={!draft.teamId}
-                                    >
-                                      <option value="">No Player</option>
-                                      {draft.teamId && (draft.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)
-                                        .filter(rp => draft.type === 'sub_in' ? !activePlayerPositions.has(rp.playerId) : activePlayerPositions.has(rp.playerId))
-                                        .sort((a,b) => {
-                                          if (draft.type === 'sub_in') {
-                                            return (a.player?.lastName || '').localeCompare(b.player?.lastName || '');
-                                          } else {
-                                            const posA = activePlayerPositions.get(a.playerId) || 'chaser';
-                                            const posB = activePlayerPositions.get(b.playerId) || 'chaser';
-                                            const order = {chaser: 1, keeper: 2, beater: 3, seeker: 4} as Record<string, number>;
-                                            return order[posA] - order[posB];
-                                          }
-                                        })
-                                        .map(rp => (
-                                          <option key={rp.playerId} value={rp.playerId}>
-                                            {draft.type !== 'sub_in' ? `[${(activePlayerPositions.get(rp.playerId) || 'chaser').substring(0,1).toUpperCase()}] ` : ''}
-                                            {getPlayerShortName(rp.player, draft.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)}
-                                          </option>
-                                      ))}
-                                    </select>
-                                    
-                                    {draft.type === 'sub_in' && (
-                                      <select
-                                        value={draft.position || 'chaser'}
-                                        onChange={(e) => setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, position: e.target.value as PositionType } : d))}
-                                        className="col-span-2 text-xs border border-green-200 rounded p-1.5 bg-green-50 text-green-800 disabled:opacity-50 mt-1"
+                                      <select 
+                                        value={draft.teamId || ''}
+                                        onChange={(e) => {
+                                          setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, teamId: e.target.value, playerId: null } : d));
+                                        }}
+                                        className={cn("text-xs border border-gray-300 rounded p-1.5 bg-white", ['sub_in', 'sub_out'].includes(draft.type || '') ? "col-span-2" : "")}
                                       >
-                                        <option value="chaser">Chaser</option>
-                                        <option value="beater">Beater</option>
-                                        <option value="keeper">Keeper</option>
-                                        <option value="seeker">Seeker</option>
+                                        <option value="">No Team</option>
+                                        {currentGame && <option value={currentGame.homeTeamId}>{teams.find(t => t.id === currentGame.homeTeamId)?.name}</option>}
+                                        {currentGame && <option value={currentGame.awayTeamId}>{teams.find(t => t.id === currentGame.awayTeamId)?.name}</option>}
                                       </select>
-                                    )}
-
-                                    {draft.type === 'sub_out' && (
+  
                                       <select
-                                        value={draft.subPlayerId || ''}
-                                        onChange={(e) => setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, subPlayerId: e.target.value } : d))}
-                                        className="col-span-2 text-xs border border-green-200 rounded p-1.5 bg-green-50 text-green-800 disabled:opacity-50 mt-1"
+                                        value={draft.playerId || ''}
+                                        onChange={(e) => {
+                                          const newPlr = e.target.value;
+                                          setDraftEvents(prev => prev.map(d => {
+                                            if (d.id !== draft.id) return d;
+                                            let updatedDraft = { ...d, playerId: newPlr };
+                                            if (d.type === 'sub_in') {
+                                               const past = [...activeTrackingEvents].sort((a,b) => b.videoTime - a.videoTime).find(ev => ev.playerId === newPlr && ev.type === 'sub_in');
+                                               updatedDraft.position = (past?.position as PositionType) || 'chaser';
+                                            }
+                                            return updatedDraft;
+                                          }));
+                                        }}
+                                        className="text-xs border border-gray-300 rounded p-1.5 bg-white disabled:opacity-50"
                                         disabled={!draft.teamId}
                                       >
-                                        <option value="">Sub In... (Optional)</option>
+                                        <option value="">{draft.type === 'sub_out' ? 'Sub Out Player' : draft.type === 'sub_in' ? 'Sub In Player' : 'No Player'}</option>
+                                        {draft.teamId && (draft.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)
+                                          .filter(rp => draft.type === 'sub_in' ? !activePlayerPositions.has(rp.playerId) : activePlayerPositions.has(rp.playerId))
+                                          .sort((a,b) => {
+                                            if (draft.type === 'sub_in') {
+                                              return (a.player?.lastName || '').localeCompare(b.player?.lastName || '');
+                                            } else {
+                                              const posA = activePlayerPositions.get(a.playerId) || 'chaser';
+                                              const posB = activePlayerPositions.get(b.playerId) || 'chaser';
+                                              const order = {chaser: 1, keeper: 2, beater: 3, seeker: 4} as Record<string, number>;
+                                              return order[posA] - order[posB];
+                                            }
+                                          })
+                                          .map(rp => (
+                                            <option key={rp.playerId} value={rp.playerId}>
+                                              {draft.type !== 'sub_in' ? `[${(activePlayerPositions.get(rp.playerId) || 'chaser').substring(0,1).toUpperCase()}] ` : ''}
+                                              {getPlayerShortName(rp.player, draft.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)}
+                                            </option>
+                                        ))}
+                                      </select>
+                                      
+                                      {draft.type === 'sub_in' && (
+                                        <select
+                                          value={draft.position || 'chaser'}
+                                          onChange={(e) => setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, position: e.target.value as PositionType } : d))}
+                                          className="text-xs border border-green-200 rounded p-1.5 bg-green-50 text-green-800 disabled:opacity-50 mt-1"
+                                        >
+                                          <option value="chaser">Chaser</option>
+                                          <option value="beater">Beater</option>
+                                          <option value="keeper">Keeper</option>
+                                          <option value="seeker">Seeker</option>
+                                        </select>
+                                      )}
+  
+                                      {draft.type === 'sub_out' && (
+                                        <select
+                                          value={draft.subPlayerId || ''}
+                                          onChange={(e) => setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, subPlayerId: e.target.value } : d))}
+                                          className="text-xs border border-green-200 rounded p-1.5 bg-green-50 text-green-800 disabled:opacity-50 mt-1"
+                                          disabled={!draft.teamId}
+                                        >
+                                          <option value="">Sub In... (Optional)</option>
                                         {draft.teamId && (draft.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)
                                           .filter(rp => !activePlayerPositions.has(rp.playerId) && rp.playerId !== draft.playerId)
                                           .sort((a,b) => (a.player?.lastName || '').localeCompare(b.player?.lastName || ''))
@@ -4922,12 +5190,29 @@ export default function App() {
                               </div>
 
                               <div className="flex gap-2 w-full mt-1">
-                                <button 
-                                  onClick={() => handleSaveDraftEvent(draft)}
-                                  className="flex-1 shrink-0 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs py-2.5 rounded-lg transition-colors shadow flex items-center justify-center gap-2 min-h-[40px]"
-                                >
-                                  <CheckCircle2 className="w-4 h-4" /> Save to Timeline
-                                </button>
+                                {draft.type === 'sub_out' || draft.type === 'sub_in' ? (
+                                  <div className="flex gap-1 flex-1">
+                                    <button 
+                                      onClick={() => handleSaveDraftEvent(draft, false)}
+                                      className="flex-1 shrink-0 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] py-2.5 rounded-lg transition-colors shadow flex items-center justify-center gap-1 min-h-[40px] px-1"
+                                    >
+                                      <CheckCircle2 className="w-3.5 h-3.5" /> Save
+                                    </button>
+                                    <button 
+                                      onClick={() => handleSaveDraftEvent(draft, true)}
+                                      className="flex-1 shrink-0 bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-[11px] py-2.5 rounded-lg transition-colors shadow flex items-center justify-center gap-1 min-h-[40px] px-1"
+                                    >
+                                      <CheckCircle2 className="w-3.5 h-3.5" /> + Next
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button 
+                                    onClick={() => handleSaveDraftEvent(draft, false)}
+                                    className="flex-1 shrink-0 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs py-2.5 rounded-lg transition-colors shadow flex items-center justify-center gap-2 min-h-[40px]"
+                                  >
+                                    <CheckCircle2 className="w-4 h-4" /> Save to Timeline
+                                  </button>
+                                )}
                                 <button 
                                   onClick={() => handleDeleteDraftEvent(draft.id)}
                                   className="w-10 shrink-0 bg-red-50 border border-red-100 hover:bg-red-100 text-red-500 font-bold p-2 text-xs rounded-lg transition-colors flex items-center justify-center min-h-[40px]"

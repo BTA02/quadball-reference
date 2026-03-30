@@ -36,6 +36,30 @@ interface Game {
   [key: string]: any;
 }
 
+export function getScoreboardName(team: any): string {
+  if (!team || !team.name) return 'Team';
+  if (team.scoreboard_name) return team.scoreboard_name;
+  
+  const rawName = team.name.trim();
+  if (rawName.length <= 15) return rawName;
+
+  const words = rawName.split(/\s+/).filter((w: string) => w.length > 0);
+  if (words.length === 0) return 'Team';
+  if (words.length === 1) return words[0].substring(0, 15);
+
+  const genericLower = ['university', 'college', 'institute', 'club', 'quadball', 'quidditch', 'athletics', 'state', 'qc'];
+  
+  let filtered = [...words];
+  while (filtered.length > 1 && genericLower.includes(filtered[filtered.length - 1].toLowerCase())) {
+    filtered.pop();
+  }
+  
+  const filteredName = filtered.join(' ');
+  if (filteredName.length <= 15 && filteredName.length > 0) return filteredName;
+
+  return filtered[filtered.length - 1].substring(0, 15);
+}
+
 // Placeholder IDs that should never appear in stats tables (case-insensitive)
 const PLACEHOLDER_ID_LOWER = new Set([
   'chasera', 'chaserb', 'chaserc', 'keeper', 'beatera', 'beaterb', 'seeker',
@@ -214,12 +238,31 @@ export function discoverGameTeams(
 export function buildPlayerTeamMap(gameEvents: GameEvent[]): Map<string, string> {
   const playerTeamMap = new Map<string, string>();
 
+  // First pass: Seed with explicit team tags
   for (const e of gameEvents) {
     const pid = e.playerId;
-
-    // Accept ANY non-empty teamId as a valid seed
     if (e.teamId && e.teamId !== 'unknown' && e.teamId !== 'null' && e.teamId !== '') {
       if (isValidPlayerId(pid)) playerTeamMap.set(pid!, e.teamId);
+    }
+  }
+
+  // Second pass: Trace substitution chains
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const e of gameEvents) {
+      if (e.type === 'sub_in' || e.type === 'sub_out') {
+        const t1 = e.playerId ? playerTeamMap.get(e.playerId) : undefined;
+        const t2 = e.subPlayerId ? playerTeamMap.get(e.subPlayerId) : undefined;
+        
+        if (t1 && !t2 && isValidPlayerId(e.subPlayerId)) {
+          playerTeamMap.set(e.subPlayerId!, t1);
+          changed = true;
+        } else if (!t1 && t2 && isValidPlayerId(e.playerId)) {
+          playerTeamMap.set(e.playerId!, t2);
+          changed = true;
+        }
+      }
     }
   }
 
@@ -230,6 +273,7 @@ export function buildPlayerTeamMap(gameEvents: GameEvent[]): Map<string, string>
 
 export interface AdvancedPlayerStats {
   playerId: string;
+  teamId?: string;
   playerName: string;
   firstName: string;
   lastName: string;
@@ -452,6 +496,7 @@ export function computeAdvancedStats(
 
   // Accumulators
   const statsAccum = new Map<string, {
+    teamId: string;
     plus: number;
     minus: number;
     plusMinus: number;
@@ -469,9 +514,10 @@ export function computeAdvancedStats(
     gameIds: Set<string>;
   }>();
 
-  const getAccum = (pid: string) => {
+  const getAccum = (pid: string, teamId: string = '') => {
     if (!statsAccum.has(pid)) {
       statsAccum.set(pid, {
+        teamId,
         plus: 0,
         minus: 0,
         plusMinus: 0,
@@ -547,14 +593,14 @@ export function computeAdvancedStats(
     if (processHome) {
       homeStints = computePlayerStints(sorted, resolvedHomeId, homePlayerIds, gameEndTime);
       for (const stint of homeStints) {
-        const accum = getAccum(stint.playerId);
+        const accum = getAccum(stint.playerId, game.homeTeamId);
         accum.minutesPlayed += getGameMinutesInWindow(clockIntervals, stint.startTime, stint.endTime);
       }
     }
     if (processAway) {
       awayStints = computePlayerStints(sorted, resolvedAwayId, awayPlayerIds, gameEndTime);
       for (const stint of awayStints) {
-        const accum = getAccum(stint.playerId);
+        const accum = getAccum(stint.playerId, game.awayTeamId);
         accum.minutesPlayed += getGameMinutesInWindow(clockIntervals, stint.startTime, stint.endTime);
       }
     }
@@ -579,11 +625,7 @@ export function computeAdvancedStats(
 
       if (!isGoal && !isShot && !isTurnover && !isExplicitOffense && !isExplicitDefense && !isStartEvent) continue;
 
-      let eventTeamId = e.teamId;
-      if (!eventTeamId && e.playerId) {
-        eventTeamId = playerTeamMap.get(e.playerId);
-      }
-      // Fallback for single-team dataset or inferred home team
+      let eventTeamId = e.teamId || playerTeamMap.get(e.playerId);
       if (!eventTeamId && (playerTeamMap.size === 0 || (discHome === null && discAway))) {
         eventTeamId = resolvedHomeId;
       }
@@ -749,6 +791,7 @@ export function computeAdvancedStats(
 
     results.push({
       playerId: pid,
+      teamId: accum.teamId,
       playerName: `${p.firstName} ${p.lastName}`,
       firstName: p.firstName || pid,
       lastName: p.lastName || '',
@@ -889,7 +932,7 @@ export function computeExtendedStats(
     const usgPct = teamPoss > 0 ? Math.round((involvements / teamPoss) * 1000) / 10 : 0;
 
     // Effective Goal %: goals / (goals + shots), weight assists as half-goals
-    const totalAttempts = a.goals + a.shots;
+    const totalAttempts = a.shots; // a.shots is already total occurrences because it includes goals from computeAdvancedStats
     const eFGPct = totalAttempts > 0
       ? Math.round(((a.goals + 0.5 * a.assists) / totalAttempts) * 1000) / 10
       : 0;
@@ -975,6 +1018,8 @@ export interface TeamQuadballStats {
   assists: number;
   shots: number;
   turnovers: number;
+  goalsAgainst: number;
+  plusMinus: number;
   shotPct: number;
   goalsPerGame: number;
   assistsPerGame: number;
@@ -1042,6 +1087,11 @@ export function computeTeamQuadballStats(
 
   for (const g of filteredGames) {
     if (filters.teamId && g.homeTeamId !== filters.teamId && g.awayTeamId !== filters.teamId) continue;
+    
+    // Safety check - make sure both teams get initialized even if 0 events
+    getTA(g.homeTeamId);
+    getTA(g.awayTeamId);
+
     const gameEvents = events.filter(e => e.gameId === g.id);
     
     for (const e of gameEvents) {
@@ -1084,6 +1134,8 @@ export function computeTeamQuadballStats(
       teamName: team.name || tid,
       gamesPlayed: gp,
       goals: acc.goals,
+      goalsAgainst: acc.goalsAgainst,
+      plusMinus: acc.goals - acc.goalsAgainst,
       assists: acc.assists,
       shots: totalShots,
       turnovers: acc.turnovers,
@@ -1333,7 +1385,7 @@ function computeControlPeriodsFromEvents(
   let currentStart = 0;
 
   for (const e of gameEvents) {
-    if (e.type === 'control_change') {
+    if (e.type === 'control_change' || e.type === 'control_start') {
       if (currentTeam && e.videoTime > currentStart) {
         periods.push({ teamId: currentTeam, startTime: currentStart, endTime: e.videoTime });
       }
@@ -2161,7 +2213,7 @@ export function enrichEventsWithGameTime<T extends { videoTime: number, type: st
     if (event.type === 'gameStart') {
       clockRunning = true;
       lastStartTime = event.videoTime;
-    } else if (event.type === 'gamePause') {
+    } else if (event.type === 'gamePause' || event.type === 'gameEnd') {
       clockRunning = false;
       lastStartTime = -1;
     }

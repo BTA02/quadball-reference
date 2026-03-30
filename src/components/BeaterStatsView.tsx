@@ -93,13 +93,16 @@ interface BeaterStatsViewProps {
   onTeamChange?: (val: string) => void;
   search?: string;
   onSearchChange?: (val: string) => void;
+  onPlayerSelect?: (playerId: string) => void;
+  onTeamSelect?: (teamId: string) => void;
 }
 
 export default function BeaterStatsView({ 
   players, events, teams, games, seasons, statsFilter = 'all',
   seasonId: seasonFilter = '', onSeasonChange: setSeasonFilter,
   teamId: teamFilter = '', onTeamChange: setTeamFilter,
-  search = '', onSearchChange: setSearch
+  search = '', onSearchChange: setSearch,
+  onPlayerSelect, onTeamSelect
 }: BeaterStatsViewProps) {
   const [tab, setTab] = useState<'pairs' | 'solo' | 'team'>('pairs');
   const [minGames, setMinGames] = useState(1);
@@ -218,8 +221,8 @@ export default function BeaterStatsView({
           </select>
           <div className="flex items-center gap-1 bg-white border border-gray-200 rounded-md px-2 py-1">
             <span className="text-xs text-gray-500 font-medium">Min GP:</span>
-            <input type="number" min="1" value={minGames || ''} onChange={e => setMinGames(parseInt(e.target.value) || 0)}
-              className="w-16 p-1 bg-white border border-gray-200 rounded text-[10px] outline-none focus:border-red-400" />
+            <input type="number" min="0" value={minGames || ''} onChange={e => setMinGames(parseInt(e.target.value) || 0)}
+              className="w-12 p-1 bg-white border-transparent rounded text-xs outline-none focus:border-purple-400 focus:ring-1 focus:ring-purple-400 -my-1" />
           </div>
           <div className="relative">
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-400" />
@@ -271,12 +274,12 @@ export default function BeaterStatsView({
                         <span className="text-[10px] text-gray-300 w-4 text-right font-mono">{rank}</span>
                         {tab === 'pairs' ? (
                           <span className="text-xs font-medium text-gray-800 truncate">
-                            {row.player1Name} <span className="text-gray-300">&</span> {row.player2Name}
+                            <button onClick={() => onPlayerSelect?.(row.player1Id)} className="text-blue-600 hover:underline hover:text-blue-800">{row.player1Name}</button> <span className="text-gray-300">&</span> <button onClick={() => onPlayerSelect?.(row.player2Id)} className="text-blue-600 hover:underline hover:text-blue-800">{row.player2Name}</button>
                           </span>
                         ) : tab === 'team' ? (
-                          <span className="text-xs font-medium text-gray-800 truncate">{row.teamName}</span>
+                          <button onClick={() => onTeamSelect?.(row.teamId)} className="text-xs font-medium text-blue-600 hover:text-blue-800 hover:underline truncate">{row.teamName}</button>
                         ) : (
-                          <span className="text-xs font-medium text-gray-800 truncate">{row.firstName} {row.lastName}</span>
+                          <button onClick={() => onPlayerSelect?.(row.playerId)} className="text-xs font-medium text-blue-600 hover:text-blue-800 hover:underline truncate">{row.firstName} {row.lastName}</button>
                         )}
                       </div>
                     </td>

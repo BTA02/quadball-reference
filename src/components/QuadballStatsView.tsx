@@ -92,13 +92,16 @@ interface QuadballStatsViewProps {
   onTeamChange?: (val: string) => void;
   search?: string;
   onSearchChange?: (val: string) => void;
+  onPlayerSelect?: (playerId: string) => void;
+  onTeamSelect?: (teamId: string) => void;
 }
 
 export default function QuadballStatsView({ 
   players, events, teams, games, seasons, statsFilter = 'all',
   seasonId: seasonFilter = '', onSeasonChange: setSeasonFilter,
   teamId: teamFilter = '', onTeamChange: setTeamFilter,
-  search = '', onSearchChange: setSearch
+  search = '', onSearchChange: setSearch,
+  onPlayerSelect, onTeamSelect
 }: QuadballStatsViewProps) {
   const [tab, setTab] = useState<'basic' | 'advanced' | 'teamPlayers' | 'team'>('basic');
   const [positionFilter, setPositionFilter] = useState<'all' | 'chaser' | 'keeper'>('all');
@@ -262,8 +265,11 @@ export default function QuadballStatsView({
             <input type="text" placeholder="Search..." value={search} onChange={e => setSearch?.(e.target.value)}
               className="pl-6 pr-2 py-1 bg-white border border-gray-200 rounded-md text-xs outline-none focus:border-red-400 w-32" />
           </div>
-          <input type="number" min="0" value={minGames || ''} onChange={e => setMinGames(parseInt(e.target.value) || 0)}
-            className="w-16 p-1 bg-white border border-gray-200 rounded text-[10px] outline-none focus:border-red-400" />
+          <div className="flex items-center gap-1 bg-white border border-gray-200 rounded-md px-2 py-1">
+            <span className="text-xs text-gray-500 font-medium">Min GP:</span>
+            <input type="number" min="0" value={minGames || ''} onChange={e => setMinGames(parseInt(e.target.value) || 0)}
+              className="w-12 p-1 bg-white border-transparent rounded text-xs outline-none focus:border-red-400 focus:ring-1 focus:ring-red-400 -my-1" />
+          </div>
         </div>
       </div>
 
@@ -355,9 +361,15 @@ export default function QuadballStatsView({
                     <td className="px-2 py-1.5 sticky left-0 bg-white z-10 group-hover:bg-red-50/30">
                       <div className="flex items-center gap-2">
                         <span className="text-[10px] text-gray-300 w-4 text-right font-mono">{rank}</span>
-                        <span className="text-xs font-medium text-gray-800 truncate">
-                          {tab === 'team' ? row.teamName : `${row.firstName} ${row.lastName}`}
-                        </span>
+                        {tab === 'team' ? (
+                          <button onClick={() => onTeamSelect?.(row.teamId)} className="text-xs font-medium text-blue-600 hover:text-blue-800 hover:underline truncate">
+                            {row.teamName}
+                          </button>
+                        ) : (
+                          <button onClick={() => onPlayerSelect?.(row.playerId)} className="text-xs font-medium text-blue-600 hover:text-blue-800 hover:underline truncate">
+                            {row.firstName} {row.lastName}
+                          </button>
+                        )}
                       </div>
                     </td>
                     {tab === 'basic' ? (<>
