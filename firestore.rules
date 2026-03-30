@@ -58,6 +58,7 @@ service cloud.firestore {
              (data.seasonId == null || data.seasonId is string) &&
              (data.homeTeamId == null || data.homeTeamId is string) &&
              (data.awayTeamId == null || data.awayTeamId is string) &&
+             (data.isVerified == null || data.isVerified is bool) &&
              (data.createdAt == null || data.createdAt is timestamp);
     }
 

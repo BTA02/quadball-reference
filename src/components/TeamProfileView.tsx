@@ -5,7 +5,7 @@ import { computeTeamQuadballStats, getScoreboardName } from '../lib/statsComputa
 interface Player { id: string; firstName: string; lastName: string; [k: string]: any; }
 interface GameEvent { id: string; videoId: string; gameId: string; type: string; videoTime: number; status: string; playerId?: string; teamId?: string; [k: string]: any; }
 interface Team { id: string; name: string; [k: string]: any; }
-interface Game { id: string; seasonId: string; homeTeamId: string; awayTeamId: string; [k: string]: any; createdAt: any; }
+interface Game { id: string; isVerified?: boolean; seasonId: string; homeTeamId: string; awayTeamId: string; [k: string]: any; createdAt: any; }
 interface Season { id: string; name: string; description?: string; year?: string; league?: string; [k: string]: any; }
 
 function cn(...classes: (string | false | null | undefined)[]) {
@@ -85,7 +85,8 @@ export default function TeamProfileView({
            return {
              ...tStat,
              gameId: g.id,
-             opponent: oppName
+             opponent: oppName,
+             description: g.description
            };
          }
          return null;
@@ -205,8 +206,9 @@ export default function TeamProfileView({
                 <thead>{renderTableHeader()}</thead>
                 <tbody>
                   {sortedPerGame.map(r => renderRow(r, (
-                    <button onClick={() => onGameSelect?.(r.gameId)} className="text-emerald-600 hover:underline inline-flex text-left max-w-[150px] truncate font-bold">
-                      vs {r.opponent || 'Opponent'}
+                    <button onClick={() => onGameSelect?.(r.gameId)} className="text-emerald-600 hover:underline flex flex-col items-start max-w-[220px] overflow-hidden">
+                      <span className="font-bold truncate w-full text-left">vs {r.opponent || 'Opponent'}</span>
+                      {r.description && <span className="text-[10px] text-gray-400 font-normal truncate w-full text-left leading-tight mt-0.5">{r.description}</span>}
                     </button>
                   ), r.gameId))}
                 </tbody>

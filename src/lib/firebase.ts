@@ -2,6 +2,7 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut } from 'firebase/auth';
 import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
+import { toast } from 'sonner';
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
@@ -24,6 +25,7 @@ export enum OperationType {
 
 export interface FirestoreErrorInfo {
   error: string;
+  userMessage?: string;
   operationType: OperationType;
   path: string | null;
   authInfo: {
@@ -41,9 +43,12 @@ export interface FirestoreErrorInfo {
   }
 }
 
-export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): FirestoreErrorInfo {
+  const rawMsg = error instanceof Error ? error.message : String(error);
+  const isPermission = rawMsg.toLowerCase().includes('permission') || rawMsg.toLowerCase().includes('unauthorized');
+  
   const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: rawMsg,
     authInfo: {
       userId: auth.currentUser?.uid,
       email: auth.currentUser?.email,
@@ -60,6 +65,23 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     operationType,
     path
   }
+  
   console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+
+  // Build a user-friendly message for toast
+  const friendlyOp = operationType === 'list' ? 'load' : operationType;
+  const friendlyPath = path ? ` (${path})` : '';
+  const userMessage = isPermission
+    ? `Permission denied: You don't have access to ${friendlyOp}${friendlyPath}. Check your role or sign in again.`
+    : `Failed to ${friendlyOp}${friendlyPath}: ${rawMsg}`;
+  
+  errInfo.userMessage = userMessage;
+
+  // Show a popup for the user
+  toast.error(userMessage, {
+    description: isPermission ? "Role mismatch or session expired." : "Please try again or contact support.",
+    duration: 5000,
+  });
+
+  return errInfo;
 }

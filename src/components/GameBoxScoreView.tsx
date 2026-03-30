@@ -1,11 +1,11 @@
 import React, { useState, useMemo } from 'react';
 import { ChevronLeft } from 'lucide-react';
-import { computeAdvancedStats, computeBeaterPairStats } from '../lib/statsComputations';
+import { computeAdvancedStats, computeBeaterPairStats, computeBeaterSoloStats } from '../lib/statsComputations';
 
 interface Player { id: string; firstName: string; lastName: string; preferredName?: string; nickname?: string; [k: string]: any; }
 interface GameEvent { id: string; videoId: string; gameId: string; type: string; videoTime: number; status: string; playerId?: string; teamId?: string; position?: string; [k: string]: any; }
 interface Team { id: string; name: string; [k: string]: any; }
-interface Game { id: string; seasonId: string; homeTeamId: string; awayTeamId: string; [k: string]: any; }
+interface Game { id: string; isVerified?: boolean; seasonId: string; homeTeamId: string; awayTeamId: string; [k: string]: any; }
 interface Season { id: string; name: string; description?: string; year?: string; league?: string; [k: string]: any; }
 
 function cn(...classes: (string | false | null | undefined)[]) {
@@ -73,13 +73,21 @@ export default function GameBoxScoreView({
     if (!game) return { homeStats: [], awayStats: [], homePairs: [], awayPairs: [], score: {home: 0, away: 0, homeCatch: false, awayCatch: false} };
     const gEvents = events.filter(e => e.gameId === game.id);
     
-    // Purge specific beater sub events from chaser array so pure beaters get natively filtered out (via 0 minutes)
-    const chaserEvents = gEvents.filter(e => e.position !== 'beater');
-    const stats = computeAdvancedStats(chaserEvents, players, [game], {});
+    // Compute total combined game stats for all players
+    const stats = computeAdvancedStats(gEvents, players, [game], {});
     const pairs = computeBeaterPairStats(gEvents, players, [game], {});
+    const bSolos = computeBeaterSoloStats(gEvents, players, [game], {});
     
-    // Filter active
-    const activeStats = stats.filter(s => s.minutesPlayed > 0 || s.goals > 0 || s.assists > 0 || s.shots > 0);
+    // Map to identify pure beaters easily
+    const beaterSolosMap = new Map(bSolos.map(b => [b.playerId, b.totalMinutes]));
+
+    // Filter active Quaffle players (hide pure beaters who logged 0 actual offensive numbers)
+    const activeStats = stats.filter(s => {
+      const isBeater = beaterSolosMap.has(s.playerId) && (beaterSolosMap.get(s.playerId) || 0) >= s.minutesPlayed * 0.8;
+      if (isBeater && s.goals === 0 && s.assists === 0 && s.shots === 0) return false;
+      return s.minutesPlayed > 0 || s.goals > 0 || s.assists > 0 || s.shots > 0;
+    });
+    
     const activePairs = pairs.filter(p => p.totalMinutes > 0);
     
     const hStats = sortData(activeStats.filter(s => (s as any).teamId === game.homeTeamId), sortKeyHome, sortDirHome);

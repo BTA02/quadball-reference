@@ -30,6 +30,7 @@ interface Player {
 
 interface Game {
   id: string;
+  isVerified?: boolean;
   seasonId: string;
   homeTeamId: string;
   awayTeamId: string;
@@ -1605,6 +1606,7 @@ export function computeBeaterSoloStats(
 
 export interface BeaterPairStats {
   pairKey: string;          // sorted "playerA|playerB"
+  teamId: string;
   player1Id: string;
   player1Name: string;
   player2Id: string;
@@ -1669,18 +1671,20 @@ export function computeBeaterPairStats(
 
   const accum = new Map<string, {
     player1Id: string; player2Id: string;
+    teamId: string;
     plus: number; minus: number;
     teamGoalsTotal: number; oppGoalsTotal: number;
     controlSeconds: number; totalSeconds: number;
     gameIds: Set<string>;
   }>();
 
-  const getPairAcc = (p1: string, p2: string) => {
+  const getPairAcc = (p1: string, p2: string, teamId: string) => {
     const [a, b] = [p1, p2].sort();
     const key = `${a}|${b}`;
     if (!accum.has(key)) {
       accum.set(key, {
         player1Id: a, player2Id: b,
+        teamId: teamId,
         plus: 0, minus: 0,
         teamGoalsTotal: 0, oppGoalsTotal: 0,
         controlSeconds: 0, totalSeconds: 0,
@@ -1714,7 +1718,7 @@ export function computeBeaterPairStats(
 
     for (const overlap of pairOverlaps) {
       if (filters.teamId && overlap.teamId !== filters.teamId && filters.teamId !== game.homeTeamId && filters.teamId !== game.awayTeamId) continue;
-      const acc = getPairAcc(overlap.player1, overlap.player2);
+      const acc = getPairAcc(overlap.player1, overlap.player2, overlap.teamId);
       acc.gameIds.add(gameId);
       acc.controlSeconds += getControlSecondsInWindow(controlPeriods, overlap.teamId, overlap.start, overlap.end, clockIntervals);
       acc.totalSeconds += getGameSecondsInWindow(clockIntervals, overlap.start, overlap.end);
@@ -1735,8 +1739,12 @@ export function computeBeaterPairStats(
       else if (eventTeamId === resolvedAwayId) awayGoalsThisGame++;
 
       for (const overlap of pairOverlaps) {
+        let overlapTeamRaw = overlap.teamId;
+        if (overlapTeamRaw === resolvedHomeId) overlapTeamRaw = game.homeTeamId;
+        if (overlapTeamRaw === resolvedAwayId) overlapTeamRaw = game.awayTeamId;
+
         if (e.videoTime >= overlap.start && e.videoTime <= overlap.end) {
-          const acc = getPairAcc(overlap.player1, overlap.player2);
+          const acc = getPairAcc(overlap.player1, overlap.player2, overlapTeamRaw);
           acc.gameIds.add(gameId);
           if (eventTeamId === overlap.teamId) { acc.plus++; }
           else if (eventTeamId) { acc.minus++; }
@@ -1751,7 +1759,7 @@ export function computeBeaterPairStats(
     for (const pairKey of homePairsWithStints) {
       if (filters.teamId && filters.teamId !== resolvedHomeId && filters.teamId !== game.homeTeamId && filters.teamId !== game.awayTeamId) continue;
       const [p1, p2] = pairKey.split('|');
-      const acc = getPairAcc(p1, p2);
+      const acc = getPairAcc(p1, p2, game.homeTeamId);
       acc.teamGoalsTotal += homeGoalsThisGame;
       acc.oppGoalsTotal += awayGoalsThisGame;
     }
@@ -1763,7 +1771,7 @@ export function computeBeaterPairStats(
     for (const pairKey of awayPairsWithStints) {
       if (filters.teamId && filters.teamId !== resolvedAwayId && filters.teamId !== game.homeTeamId && filters.teamId !== game.awayTeamId) continue;
       const [p1, p2] = pairKey.split('|');
-      const acc = getPairAcc(p1, p2);
+      const acc = getPairAcc(p1, p2, game.awayTeamId);
       acc.teamGoalsTotal += awayGoalsThisGame;
       acc.oppGoalsTotal += homeGoalsThisGame;
     }
@@ -1787,6 +1795,7 @@ export function computeBeaterPairStats(
 
     results.push({
       pairKey: key,
+      teamId: a.teamId,
       player1Id: a.player1Id,
       player1Name: p1 ? `${p1.firstName} ${p1.lastName}`.trim() : a.player1Id,
       player2Id: a.player2Id,

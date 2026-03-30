@@ -18,7 +18,7 @@ import {
 interface Player { id: string; firstName: string; lastName: string; preferredName?: string; nickname?: string; [k: string]: any; }
 interface GameEvent { id: string; videoId: string; gameId: string; type: string; videoTime: number; gameTime?: number; status: string; playerId?: string; teamId?: string; [k: string]: any; }
 interface Team { id: string; name: string; [k: string]: any; }
-interface Game { id: string; seasonId: string; homeTeamId: string; awayTeamId: string; [k: string]: any; }
+interface Game { id: string; isVerified?: boolean; seasonId: string; homeTeamId: string; awayTeamId: string; [k: string]: any; }
 interface Season { id: string; name: string; [k: string]: any; }
 
 function cn(...classes: (string | false | null | undefined)[]) {

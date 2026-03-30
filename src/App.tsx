@@ -151,6 +151,7 @@ export interface DraftEvent {
 
 interface Game {
   id: string; // Unique Game ID
+  isVerified?: boolean;
   seasonId: string;
   homeTeamId: string;
   awayTeamId: string;
@@ -410,12 +411,50 @@ function computeTeamControlStats(
       shotsFacingControl: 0,
       turnoversWithControl: 0,
       controlPeriods: periods.filter(p => p.teamId === tid).length,
-      totalControlTimeSeconds: periods
-        .filter(p => p.teamId === tid)
-        .reduce((sum, p) => sum + ((p.endTime ?? p.startTime) - p.startTime), 0),
+      totalControlTimeSeconds: 0,
       scoringPctWithControl: 0,
       scoringPctFacingControl: 0,
     });
+  }
+
+  const sortedEvents = [...events].sort((a,b) => a.videoTime - b.videoTime);
+  let isClockRunning = false;
+  let currentControlTeam: string | null = null;
+  let lastTimeAccruedAt: number | null = null;
+
+  for (const event of sortedEvents) {
+    if (event.type === 'gameStart') {
+      isClockRunning = true;
+      if (currentControlTeam && lastTimeAccruedAt === null) {
+        lastTimeAccruedAt = event.videoTime;
+      }
+    } else if (event.type === 'gamePause' || event.type === 'gameEnd') {
+      if (isClockRunning && currentControlTeam && lastTimeAccruedAt !== null) {
+         const st = statsMap.get(currentControlTeam);
+         if (st) st.totalControlTimeSeconds += (event.videoTime - lastTimeAccruedAt);
+      }
+      isClockRunning = false;
+      lastTimeAccruedAt = null;
+    } else if (event.type === 'control_change' || event.type === 'control_start') {
+      const newTeamId = event.teamId ?? null;
+      if (currentControlTeam !== newTeamId) {
+         if (isClockRunning && currentControlTeam && lastTimeAccruedAt !== null) {
+           const st = statsMap.get(currentControlTeam);
+           if (st) st.totalControlTimeSeconds += (event.videoTime - lastTimeAccruedAt);
+         }
+         currentControlTeam = newTeamId;
+         lastTimeAccruedAt = isClockRunning ? event.videoTime : null;
+      }
+    }
+  }
+
+  // Trailing time if the clock was running at the end of the timeline
+  if (isClockRunning && currentControlTeam && lastTimeAccruedAt !== null) {
+     const lastEvent = sortedEvents[sortedEvents.length - 1];
+     if (lastEvent) {
+       const st = statsMap.get(currentControlTeam);
+       if (st) st.totalControlTimeSeconds += (lastEvent.videoTime - lastTimeAccruedAt);
+     }
   }
 
   for (const event of events) {
@@ -432,14 +471,14 @@ function computeTeamControlStats(
       if (hasControl) stats.goalsWithControl++;
       else stats.goalsFacingControl++;
     } else if (event.type === 'shot') {
-      if (hasControl) stats.shotsWithControl++;
+if (hasControl) stats.shotsWithControl++;
       else stats.shotsFacingControl++;
     } else if (event.type === 'turnover' && hasControl) {
       stats.turnoversWithControl++;
     }
   }
 
-  // Calculate scoring percentages
+  // Compute scoring percentages
   for (const stats of statsMap.values()) {
     stats.scoringPctWithControl = stats.shotsWithControl > 0
       ? Math.round((stats.goalsWithControl / stats.shotsWithControl) * 100)
@@ -2019,7 +2058,7 @@ function ManagementView({
                                     });
                                   }
 
-                                  setImportProgress(100);
+                                  setProgress(100);
                                   toast.success(`Sandbox Mode Loaded: ${csvData.length} records pushed to memory.`);
                                 } else {
                                   for (let i = 0; i < gameGroups.length; i += BATCH_SIZE) {
@@ -3182,6 +3221,8 @@ export default function App() {
   const [trackerTeamId, setTrackerTeamId] = useState<string>('all');
   const [trackerOpponentId, setTrackerOpponentId] = useState<string>('all');
   const [trackerGameId, setTrackerGameId] = useState<string>('');
+  const [verifiedYearId, setVerifiedYearId] = useState<string>('all');
+  const [verifiedTeamId, setVerifiedTeamId] = useState<string>('all');
   const [statsSeasonId, setStatsSeasonId] = useState<string>('');
   const [statsTeamId, setStatsTeamId] = useState<string>('');
   const [statsSearch, setStatsSearch] = useState<string>('');
@@ -3211,7 +3252,7 @@ export default function App() {
   }, [statsGamesRaw, statsFilter, legacySeasonIds]);
 
   const statsEvents = useMemo(() => {
-    let evs = statsEventsRaw;
+     let evs = Array.from(allEvents.values());
     if (statsFilter === 'verified') evs = evs.filter(e => e.status === 'verified');
     const validGameIds = new Set(statsGames.map(g => g.id));
     return evs.filter(e => validGameIds.has(e.gameId));
@@ -3596,6 +3637,50 @@ export default function App() {
     }
   };
 
+  const handleVerifyGame = async (gameId: string, verifyEventsToo: boolean) => {
+    if (!gameId) return;
+    const hasGameEnd = activeTrackingEvents.some(e => ['gameend', 'gameEnd'].includes((e.type || '').toLowerCase()));
+    if (!hasGameEnd) {
+      toast.error('Cannot verify: Game lacks a Game End event.');
+      return;
+    }
+    try {
+      const batch = writeBatch(db);
+      const gameRef = doc(db, 'games', gameId);
+      batch.update(gameRef, { isVerified: true });
+
+      const aggGameRef = doc(db, 'aggregated', 'games');
+      const aggSnap = await getDoc(aggGameRef);
+      if (aggSnap.exists()) {
+         const gamesList = aggSnap.data()?.data || [];
+         const updatedList = gamesList.map((g: any) => g.id === gameId ? { ...g, isVerified: true } : g);
+         batch.update(aggGameRef, { data: updatedList });
+      }
+
+      if (verifyEventsToo) {
+        const gameEventsRef = doc(db, 'gameEvents', gameId);
+        const snap = await getDoc(gameEventsRef);
+        if (snap.exists()) {
+          const currentEvents = (snap.data()?.events || []) as GameEvent[];
+          const updatedEvents = currentEvents.map(e => {
+            // Only update events for THIS game that aren't drafts and aren't already verified
+            if (e.id && !e.id.includes('_draft') && e.status !== 'verified') {
+              return { ...e, status: 'verified' };
+            }
+            return e;
+          });
+          batch.update(gameEventsRef, { events: updatedEvents });
+        }
+      }
+
+      await batch.commit();
+      setGames(prev => prev.map(g => g.id === gameId ? { ...g, isVerified: true } : g));
+      toast.success(verifyEventsToo ? 'Game & All Events verified!' : 'Game verified successfully!');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `games/${gameId}`);
+    }
+  };
+
   const handleSaveDraftEvent = (draft: DraftEvent, chainNext: boolean = false) => {
     if (!draft.type) {
       toast.error("Please select an event type");
@@ -3678,7 +3763,7 @@ export default function App() {
       const pData = pSnap.docs.map(doc => ({ id: doc.id, firstName: doc.data().firstName || '', lastName: doc.data().lastName || '', preferredName: doc.data().preferredName || '', nickname: doc.data().nickname || '' }));
       const tData = tSnap.docs.map(doc => ({ id: doc.id, name: doc.data().name || '' }));
       const sData = sSnap.docs.map(doc => ({ id: doc.id, name: doc.data().name || '', league: doc.data().league || '', year: doc.data().year || '', description: doc.data().description || '' }));
-      const gData = gSnap.docs.map(doc => ({ id: doc.id, seasonId: doc.data().seasonId || '', homeTeamId: doc.data().homeTeamId || '', awayTeamId: doc.data().awayTeamId || '', createdAt: serializeTimestamp(doc.data().createdAt) }));
+      const gData = gSnap.docs.map(doc => ({ id: doc.id, seasonId: doc.data().seasonId || '', homeTeamId: doc.data().homeTeamId || '', awayTeamId: doc.data().awayTeamId || '', isVerified: doc.data().isVerified || false, createdAt: serializeTimestamp(doc.data().createdAt) }));
       const vData = vSnap.docs.map(doc => ({ id: doc.id, videoId: doc.data().videoId || '', youtubeId: doc.data().youtubeId || '', gameId: doc.data().gameId || '', title: doc.data().title || '', createdAt: serializeTimestamp(doc.data().createdAt) }));
       
       const batch = writeBatch(db);
@@ -3793,7 +3878,7 @@ export default function App() {
 
       // Cascade Delete Games
       for (const g of relatedGames) {
-        const oldAgg = { id: g.id, seasonId: g.seasonId || '', homeTeamId: g.homeTeamId || '', awayTeamId: g.awayTeamId || '', createdAt: serializeTimestamp(g.createdAt) };
+        const oldAgg = { id: g.id, seasonId: g.seasonId || '', homeTeamId: g.homeTeamId || '', awayTeamId: g.awayTeamId || '', isVerified: g.isVerified || false, createdAt: serializeTimestamp(g.createdAt) };
         await deleteDoc(doc(db, 'games', g.id));
         await updateDoc(doc(db, 'aggregated', 'games'), { data: arrayRemove(oldAgg) }).catch(() => {});
         await deleteDoc(doc(db, 'gameEvents', g.id)); // Destroys all events tied to the game
@@ -3819,7 +3904,7 @@ export default function App() {
     try {
       const g = games.find(g => g.id === id);
       if (g) {
-        const oldAgg = { id: g.id, seasonId: g.seasonId || '', homeTeamId: g.homeTeamId || '', awayTeamId: g.awayTeamId || '', createdAt: serializeTimestamp(g.createdAt) };
+      const oldAgg = { id: g.id, seasonId: g.seasonId || '', homeTeamId: g.homeTeamId || '', awayTeamId: g.awayTeamId || '', isVerified: g.isVerified || false, createdAt: serializeTimestamp(g.createdAt) };
         await updateDoc(doc(db, 'aggregated', 'games'), { data: arrayRemove(oldAgg) }).catch(() => {});
       }
       await deleteDoc(doc(db, 'games', id));
@@ -4080,7 +4165,7 @@ export default function App() {
       
       if (!gameSnap.exists()) {
         await setDoc(gameRef, {
-          id: gId, seasonId, homeTeamId: homeId, awayTeamId: awayId, createdAt: serverTimestamp(), tag: newVideoData.tag || null
+          id: gId, seasonId, homeTeamId: homeId, awayTeamId: awayId, isVerified: false, createdAt: serverTimestamp(), tag: newVideoData.tag || null
         });
       } else {
         const d = gameSnap.data();
@@ -4089,7 +4174,7 @@ export default function App() {
 
       // Auto-heal the Games cache safely without string duplication
       await updateDoc(doc(db, 'aggregated', 'games'), {
-        data: arrayUnion({ id: gId, seasonId, homeTeamId: homeId, awayTeamId: awayId, createdAt: gCreatedAt, tag: newVideoData.tag || null })
+        data: arrayUnion({ id: gId, seasonId, homeTeamId: homeId, awayTeamId: awayId, isVerified: false, createdAt: gCreatedAt, tag: newVideoData.tag || null })
       }).catch(() => {});
 
       // Always Provision Unique Video Document 1:1 Mapping to Game
@@ -4124,7 +4209,11 @@ export default function App() {
     let totalGameTime = 0;
     let lastStartTime = -1;
 
-    for (const event of events) {
+    const chronologicalEvents = [...events]
+      .filter(e => e.videoTime <= currentTime)
+      .sort((a, b) => a.videoTime - b.videoTime);
+
+    for (const event of chronologicalEvents) {
       if (event.type === 'gameStart') {
         lastStartTime = event.videoTime;
       } else if (event.type === 'gamePause' || event.type === 'gameEnd') {
@@ -4219,6 +4308,43 @@ export default function App() {
     });
   }, [statsGames, statsSeasons, statsTeams, trackerYearId, trackerTeamId, trackerOpponentId]);
 
+  const verifiedTeams = useMemo(() => {
+    const tSet = new Set<string>();
+    statsGames.forEach(g => {
+      if (!g.isVerified) return;
+      if (verifiedYearId !== 'all') {
+        const s = statsSeasons.find(sea => sea.id === g.seasonId);
+        const yearStr = (s && s.name) ? s.name : g.seasonId;
+        if (yearStr !== verifiedYearId) return;
+      }
+      tSet.add(g.homeTeamId);
+      tSet.add(g.awayTeamId);
+    });
+    return Array.from(tSet)
+      .map(tid => statsTeams.find(t => t.id === tid))
+      .filter((t): t is Team => !!t)
+      .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  }, [statsGames, statsSeasons, statsTeams, verifiedYearId]);
+
+  const verifiedFilteredGames = useMemo(() => {
+    return statsGames.filter(g => {
+      if (!g.isVerified) return false;
+      if (verifiedYearId !== 'all') {
+        const s = statsSeasons.find(sea => sea.id === g.seasonId);
+        const yearStr = (s && s.name) ? s.name : g.seasonId;
+        if (yearStr !== verifiedYearId) return false;
+      }
+      if (verifiedTeamId !== 'all') {
+        if (g.homeTeamId !== verifiedTeamId && g.awayTeamId !== verifiedTeamId) return false;
+      }
+      return true;
+    }).map(g => {
+      const hName = statsTeams.find(t => t.id === g.homeTeamId)?.name || g.homeTeamId;
+      const aName = statsTeams.find(t => t.id === g.awayTeamId)?.name || g.awayTeamId;
+      return { ...g, displayName: g.tag ? `${hName} vs ${aName} (${g.tag})` : `${hName} vs ${aName}` };
+    });
+  }, [statsGames, statsSeasons, statsTeams, verifiedYearId, verifiedTeamId]);
+
   const trackerActiveVideos = useMemo(() => {
     if (!trackerGameId && trackingFilteredGames.length === 0) return [];
     const targetId = trackerGameId || trackingFilteredGames[0]?.id;
@@ -4289,7 +4415,7 @@ export default function App() {
               )}
             >
               <Play className="w-4 h-4" />
-              Record Game
+              Watch
             </button>
             <button
               onClick={() => setView('help')}
@@ -4597,14 +4723,14 @@ export default function App() {
               onTeamSelect={handleTeamProfileClick}
             />
           ) : !currentVideo ? (
-          <div className="max-w-5xl mx-auto mt-8 px-4 pb-12">
+          <div className="max-w-7xl mx-auto mt-8 px-4 pb-12">
             <div className="text-center mb-10">
-              <h2 className="text-4xl font-extrabold text-gray-900 tracking-tight">Record a Game</h2>
-              <p className="mt-3 text-lg text-gray-500">Add a new YouTube video link to track, or continue an existing session.</p>
+              <h2 className="text-4xl font-extrabold text-gray-900 tracking-tight">Watch and Contribute</h2>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
+            <div className={cn("grid grid-cols-1 gap-8 items-start", (effectiveRole === 'admin' || effectiveRole === 'author' || effectiveRole === 'trusted') ? "lg:grid-cols-3 md:grid-cols-2" : "md:grid-cols-2 max-w-4xl mx-auto")}>
               {/* Start New Video */}
+              {['admin', 'author', 'trusted'].includes(effectiveRole) && (
               <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
                 <div className="bg-gray-50/50 border-b border-gray-100 p-5">
                   <h3 className="text-xl font-bold text-gray-900 flex items-center gap-3"><Play className="w-5 h-5 text-red-600" /> Start Tracking New Video</h3>
@@ -4657,10 +4783,11 @@ export default function App() {
                   </button>
                 </div>
               </div>
+              )}
 
               {/* Continue Existing */}
-              <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden p-6 flex flex-col h-full max-h-[800px]">
-                <h3 className="text-xl font-bold text-gray-900 mb-5 flex items-center gap-3"><Database className="w-5 h-5 text-gray-400" /> Continue Tracker Session</h3>
+              <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden p-6 flex flex-col h-full max-h-[500px]">
+                <h3 className="text-xl font-bold text-gray-900 mb-5 flex items-center gap-3"><Database className="w-5 h-5 text-gray-400" /> Continue Tracking Session</h3>
 
                 <div className="grid grid-cols-2 gap-3 mb-5 shrink-0">
                   <div>
@@ -4692,8 +4819,8 @@ export default function App() {
                 </div>
 
                 <div className="space-y-2.5 flex-1 min-h-[300px] overflow-y-auto custom-scrollbar pr-1">
-                  {trackingFilteredGames.map(g => {
-                    const acts = videos.filter(v => v.gameId === g.id);
+                  {trackingFilteredGames.filter(g => !g.isVerified).map(g => {
+                    const acts = statsVideos.filter(v => v.gameId === g.id);
                     if (acts.length === 0) return null;
                     return acts.map((vid, idx) => (
                       <button
@@ -4718,9 +4845,78 @@ export default function App() {
                     ));
                   })}
                   
-                  {trackingFilteredGames.length === 0 && (
+                  {trackingFilteredGames.filter(g => !g.isVerified).length === 0 && (
                     <div className="text-center py-10 border border-dashed border-gray-200 rounded-xl bg-gray-50 h-full flex flex-col justify-center">
-                      <p className="text-gray-400 italic">No existing videos match filters.</p>
+                      <p className="text-gray-400 italic">No existing unverified videos match filters.</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Verified Games */}
+              <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden p-6 flex flex-col h-full max-h-[500px]">
+                <div className="flex flex-col gap-1 mb-5">
+                  <h3 className="text-xl font-bold text-gray-900 flex items-center gap-3"><ShieldCheck className="w-5 h-5 text-amber-500" /> Verified Games</h3>
+                  <p className="text-[11px] text-gray-500 font-medium">Verified games and stats ready to watch</p>
+                </div>
+
+                <div className="flex gap-2 mb-4 shrink-0 px-1">
+                  <div className="flex-1">
+                    <span className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-1.5 block">Season</span>
+                    <select
+                      value={verifiedYearId}
+                      onChange={e => { setVerifiedYearId(e.target.value); setVerifiedTeamId('all'); }}
+                      className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-red-500 font-medium"
+                    >
+                      <option value="all">All Seasons</option>
+                      {trackingYears.map(y => (
+                        <option key={`v_y_${y}`} value={y}>{y}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex-1">
+                    <span className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-1.5 block">Team</span>
+                    <select
+                      value={verifiedTeamId}
+                      onChange={e => setVerifiedTeamId(e.target.value)}
+                      className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-red-500 font-medium"
+                    >
+                      <option value="all">All Teams</option>
+                      {verifiedTeams.map(t => (
+                        <option key={`v_t_${t.id}`} value={t.id}>{t.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="space-y-2.5 flex-1 overflow-y-auto custom-scrollbar pr-1">
+                  {verifiedFilteredGames.map(g => {
+                    const acts = statsVideos.filter(v => v.gameId === g.id);
+                    if (acts.length === 0) return null;
+                    return acts.map((vid, idx) => (
+                      <button
+                        key={`v_${g.id}_${vid.id}_${idx}`}
+                        onClick={() => setCurrentVideo(vid)}
+                        className="w-full p-3 bg-amber-50/40 border border-amber-100 rounded-xl flex items-center gap-4 hover:border-amber-300 hover:shadow-md transition-all text-left group"
+                      >
+                         <div className="w-20 h-14 bg-black rounded-lg overflow-hidden flex-shrink-0 border border-amber-200/50">
+                           <img src={`https://img.youtube.com/vi/${vid.youtubeId}/mqdefault.jpg`} alt="" className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" referrerPolicy="no-referrer" />
+                         </div>
+                         <div className="flex-1 min-w-0">
+                           <p className="font-bold text-gray-900 leading-tight group-hover:text-amber-700 transition-colors line-clamp-2">{g.displayName}</p>
+                           <p className="text-xs text-amber-600/80 mt-1 flex items-center gap-1.5 font-medium">
+                             <Clock className="w-3 h-3" />
+                             {new Date(vid.createdAt).toLocaleDateString()}
+                           </p>
+                         </div>
+                         <ChevronRight className="w-5 h-5 text-amber-300 group-hover:text-amber-500 flex-shrink-0" />
+                      </button>
+                    ));
+                  })}
+                  
+                  {verifiedFilteredGames.length === 0 && (
+                    <div className="text-center py-10 border border-dashed border-gray-200 rounded-xl bg-gray-50 h-full flex flex-col justify-center">
+                      <p className="text-gray-400 italic">No verified games match filters.</p>
                     </div>
                   )}
                 </div>
@@ -4842,31 +5038,32 @@ export default function App() {
                   const currentDodgeballTeamId = getControlTeamAtTime(computeControlPeriods(pastEvents), currentTime);
 
                   return (
-                     <div className={cn("bg-white border rounded-xl p-3 shrink-0 shadow-sm", winCond.flagOnPitch && !winCond.winner ? "bg-yellow-50 border-yellow-300" : "border-gray-200")}>
-                        <div className="flex items-center justify-between relative mb-2">
-                          <div className="text-center flex-1 w-0">
-                            <p className="text-[10px] uppercase tracking-widest text-red-500 font-bold mb-0.5 truncate px-1" title={homeName}>{homeName}</p>
-                            <div className="flex items-center justify-center gap-2">
-                               <p className="text-3xl font-mono font-bold text-red-400 leading-none shadow-sm">{liveScores.home}</p>
-                               <div className="flex flex-col gap-1 justify-center">
-                                 {currentDodgeballTeamId === currentGame.homeTeamId && <div title="Dodgeball Control" className="w-1.5 h-1.5 bg-black rounded-sm shadow-sm" />}
-                               </div>
+                     <div className={cn("bg-white border rounded-lg p-2 shrink-0 shadow-sm flex gap-2 items-center", winCond.flagOnPitch && !winCond.winner ? "bg-yellow-50 border-yellow-300" : "border-gray-200")}>
+                        <div className="flex-1 w-0">
+                          <div className="flex items-center justify-between relative mb-1">
+                            <div className="text-center flex-1 w-0">
+                              <p className="text-[9px] uppercase tracking-widest text-red-500 font-bold mb-0.5 truncate px-1" title={homeName}>{homeName}</p>
+                              <div className="flex items-center justify-center gap-1.5">
+                                 <p className="text-2xl font-mono font-bold text-red-400 leading-none shadow-sm">{liveScores.home}</p>
+                                 <div className="flex flex-col gap-1 justify-center">
+                                   {currentDodgeballTeamId === currentGame.homeTeamId && <div title="Dodgeball Control" className="w-1.5 h-1.5 bg-black rounded-sm shadow-sm" />}
+                                 </div>
+                              </div>
+                            </div>
+                            <div className="text-center px-1 flex flex-col items-center shrink-0 border-x border-gray-100 opacity-80">
+                              <p className="text-[10px] text-gray-600 font-mono bg-gray-100 px-1 py-0.5 rounded shadow-inner leading-none whitespace-nowrap">{formatTime(gameTime)}</p>
+                              <p className="text-[7px] font-bold text-gray-400 mt-0.5 mb-0.5">VS</p>
+                            </div>
+                            <div className="text-center flex-1 w-0">
+                              <p className="text-[9px] uppercase tracking-widest text-blue-500 font-bold mb-0.5 truncate px-1" title={awayName}>{awayName}</p>
+                              <div className="flex items-center justify-center gap-1.5 flex-row-reverse">
+                                 <p className="text-2xl font-mono font-bold text-blue-400 leading-none shadow-sm">{liveScores.away}</p>
+                                 <div className="flex flex-col gap-1 justify-center">
+                                   {currentDodgeballTeamId === currentGame.awayTeamId && <div title="Dodgeball Control" className="w-1.5 h-1.5 bg-black rounded-sm shadow-sm" />}
+                                 </div>
+                              </div>
                             </div>
                           </div>
-                          <div className="text-center px-1 flex flex-col items-center shrink-0 border-x border-gray-100 opacity-80">
-                            <p className="text-[11px] text-gray-600 font-mono bg-gray-100 px-1 py-0.5 rounded shadow-inner leading-none whitespace-nowrap">{formatTime(gameTime)}</p>
-                            <p className="text-[8px] font-bold text-gray-400 mt-1 mb-0.5">VS</p>
-                          </div>
-                          <div className="text-center flex-1 w-0">
-                            <p className="text-[10px] uppercase tracking-widest text-blue-500 font-bold mb-0.5 truncate px-1" title={awayName}>{awayName}</p>
-                            <div className="flex items-center justify-center gap-2 flex-row-reverse">
-                               <p className="text-3xl font-mono font-bold text-blue-400 leading-none shadow-sm">{liveScores.away}</p>
-                               <div className="flex flex-col gap-1 justify-center">
-                                 {currentDodgeballTeamId === currentGame.awayTeamId && <div title="Dodgeball Control" className="w-1.5 h-1.5 bg-black rounded-sm shadow-sm" />}
-                               </div>
-                            </div>
-                          </div>
-                        </div>
 
                         {winCond.winner ? (
                           <div className="flex items-center justify-center gap-2 bg-yellow-500/10 border border-yellow-500/30 rounded-lg px-2 py-1.5 mt-2">
@@ -4881,6 +5078,20 @@ export default function App() {
                             <span className="text-[10px] uppercase font-bold tracking-wider">Target Score: {winCond.threshold}</span>
                           </div>
                         ) : null}
+                        </div>
+
+                        {['admin', 'author', 'trusted'].includes(effectiveRole) && rightPanelTab === 'record' && (
+                           <div className="flex flex-col gap-1 border-l border-gray-100 pl-2 shrink-0 justify-center h-full my-auto text-center border-t-0 pt-0 mt-0">
+                             <button onClick={() => handleVerifyGame(currentGame.id, false)} className="flex items-center justify-center gap-1 text-[8px] font-bold uppercase tracking-wider text-gray-400 hover:text-emerald-600 px-1 py-1 rounded bg-gray-50 hover:bg-emerald-50 border border-gray-200 hover:border-emerald-200 transition-colors w-full" title={currentGame.isVerified ? "Game Already Verified" : "Verify Game"}>
+                               <ShieldCheck className={cn("w-3 h-3", currentGame.isVerified ? "text-emerald-500" : "")} />
+                               Verify
+                             </button>
+                             <button onClick={() => handleVerifyGame(currentGame.id, true)} className="flex items-center justify-center gap-1 text-[8px] font-bold uppercase tracking-wider text-gray-400 hover:text-amber-600 px-1 py-1 rounded bg-gray-50 hover:bg-amber-50 border border-gray-200 hover:border-amber-200 transition-colors w-full" title="Verify Game & All Unverified Events">
+                               <ShieldCheck className="w-3 h-3" />
+                               + Events
+                             </button>
+                           </div>
+                        )}
                      </div>
                   );
                })()}
@@ -4929,67 +5140,74 @@ export default function App() {
                     {/* Event Type Grid */}
                     <div className="flex flex-col gap-3 mb-2">
                       {(() => {
-                        const groups = [
-                          { title: 'Chaser Actions', types: ['goal', 'shot', 'turnover'] },
-                          { title: 'Game Clock', types: ['gameStart', 'gamePause', 'gameEnd'] },
-                        ];
+                        const chaserTypes = ['goal', 'shot', 'turnover'];
+                        const clockTypes = ['gameStart', 'gamePause', 'gameEnd'];
 
-                        return groups.map(group => (
-                          <div key={group.title} className="flex flex-col gap-1.5">
-                            <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">{group.title}</span>
-                            <div className="grid grid-cols-3 gap-1.5">
-                              {group.types.map(type => {
-                                const config = EVENT_CONFIG[type as EventType];
-                                if (!config) return null;
-                                const resolvedTeamId =
-                                  ['control_change', 'control_start', 'gameStart', 'gamePause', 'gameEnd', 'flag_released'].includes(type) ? null :
-                                    selectedTeamContext === 'home' ? (currentGame?.homeTeamId ?? null) :
-                                      selectedTeamContext === 'away' ? (currentGame?.awayTeamId ?? null) :
-                                        null;
-
-                                return (
-                                  <button
-                                    key={type}
-                                    onClick={() => {
-                                      if (type === 'control_change' || type === 'control_start') {
-                                        const ctrlTeamId = selectedTeamContext === 'home' ? (currentGame?.homeTeamId ?? null) :
-                                          selectedTeamContext === 'away' ? (currentGame?.awayTeamId ?? null) : null;
-                                        handleCreateDraftEvent(type as EventType, ctrlTeamId, null, null, null);
-                                        return;
-                                      }
-                                      handleCreateDraftEvent(type as EventType, resolvedTeamId, selectedPlayerId || null, null, null);
-                                    }}
-                                    className={cn(
-                                      "flex flex-col items-center justify-center p-2 rounded-lg border transition-all active:scale-95 group text-center bg-white shadow-sm",
-                                      (type === 'control_change' || type === 'control_start')
-                                        ? "border-emerald-200 hover:border-emerald-500 hover:bg-emerald-50"
-                                        : "border-gray-200 hover:border-red-500 hover:bg-red-50"
-                                    )}
-                                  >
-                                    <span className="text-[10px] uppercase font-bold tracking-tight text-gray-700 leading-tight">{config.label}</span>
-                                  </button>
-                                );
-                              })}
+                        return (
+                          <>
+                            <div className="flex flex-col gap-1.5 mb-2">
+                              <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Chaser Actions</span>
+                              <div className="grid grid-cols-3 gap-1.5">
+                                {chaserTypes.map(type => {
+                                  const config = EVENT_CONFIG[type as EventType];
+                                  if (!config) return null;
+                                  return (
+                                    <div key={type} className="flex rounded-lg overflow-hidden border border-gray-200 shadow-sm transition-all focus-within:ring-2 focus-within:ring-red-200">
+                                      <button
+                                        onClick={() => handleCreateDraftEvent(type as EventType, currentGame?.homeTeamId ?? null, selectedPlayerId || null, null, null)}
+                                        className="flex-1 flex flex-col items-center justify-center py-1.5 px-0.5 border-r border-gray-100 transition-all hover:bg-red-50 bg-white group active:bg-red-100"
+                                      >
+                                        <span className="text-[9px] uppercase font-bold tracking-tighter text-red-600 leading-[10px] group-hover:text-red-700">H.<br/>{config.label}</span>
+                                      </button>
+                                      <button
+                                        onClick={() => handleCreateDraftEvent(type as EventType, currentGame?.awayTeamId ?? null, selectedPlayerId || null, null, null)}
+                                        className="flex-1 flex flex-col items-center justify-center py-1.5 px-0.5 transition-all hover:bg-blue-50 bg-white group active:bg-blue-100"
+                                      >
+                                        <span className="text-[9px] uppercase font-bold tracking-tighter text-blue-600 leading-[10px] group-hover:text-blue-700">A.<br/>{config.label}</span>
+                                      </button>
+                                    </div>
+                                  );
+                                })}
+                              </div>
                             </div>
-                          </div>
-                        ));
+                            
+                            <div className="flex flex-col gap-1.5">
+                              <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Game Clock</span>
+                              <div className="grid grid-cols-3 gap-1.5">
+                                {clockTypes.map(type => {
+                                  const config = EVENT_CONFIG[type as EventType];
+                                  if (!config) return null;
+                                  return (
+                                    <button
+                                      key={type}
+                                      onClick={() => handleCreateDraftEvent(type as EventType, null, null, null, null)}
+                                      className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-gray-200 hover:border-gray-500 hover:bg-gray-50 transition-all active:scale-95 text-center bg-white shadow-sm"
+                                    >
+                                      <span className="text-[10px] uppercase font-bold tracking-tight text-gray-700 leading-tight">{config.label}</span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          </>
+                        );
                       })()}
 
                       {/* Control Change UI */}
                       <div className="flex flex-col gap-1.5 mt-1">
                         <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Control Change</span>
-                        <div className="grid grid-cols-2 gap-1.5">
+                        <div className="flex rounded-lg overflow-hidden border border-emerald-200 shadow-sm">
                           <button
                             onClick={() => handleCreateDraftEvent('control_change', currentGame?.homeTeamId || null, null, null, null)}
-                            className="flex flex-col items-center justify-center p-2 rounded-lg border transition-all active:scale-95 group text-center bg-white shadow-sm border-emerald-200 hover:border-emerald-500 hover:bg-emerald-50"
+                            className="flex-1 flex flex-col items-center justify-center py-1.5 px-1 bg-white hover:bg-emerald-50 active:bg-emerald-100 transition-all border-r border-emerald-100 group"
                           >
-                            <span className="text-[10px] uppercase font-bold tracking-tight text-gray-700 leading-tight">Home Control</span>
+                            <span className="text-[10px] uppercase font-bold tracking-tight text-emerald-700 leading-tight group-hover:text-emerald-800">Home Control</span>
                           </button>
                           <button
                             onClick={() => handleCreateDraftEvent('control_change', currentGame?.awayTeamId || null, null, null, null)}
-                            className="flex flex-col items-center justify-center p-2 rounded-lg border transition-all active:scale-95 group text-center bg-white shadow-sm border-emerald-200 hover:border-emerald-500 hover:bg-emerald-50"
+                            className="flex-1 flex flex-col items-center justify-center py-1.5 px-1 bg-white hover:bg-emerald-50 active:bg-emerald-100 transition-all group"
                           >
-                            <span className="text-[10px] uppercase font-bold tracking-tight text-gray-700 leading-tight">Away Control</span>
+                            <span className="text-[10px] uppercase font-bold tracking-tight text-emerald-700 leading-tight group-hover:text-emerald-800">Away Control</span>
                           </button>
                         </div>
                       </div>
@@ -4998,20 +5216,20 @@ export default function App() {
                       <div className="flex flex-col gap-1.5 mt-1">
                         <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Penalties</span>
                         <div className="grid grid-cols-3 gap-1.5">
-                          <button onClick={() => { handleCreateDraftEvent('card', selectedTeamContext === 'home' ? currentGame?.homeTeamId || null : selectedTeamContext === 'away' ? currentGame?.awayTeamId || null : null, selectedPlayerId || null, null, null); setDraftEvents(d => { const last = d[0]; if (last) last.color = 'blue'; return [...d]; }); }} className="flex flex-col items-center justify-center p-2 rounded-lg border border-blue-200 hover:border-blue-500 hover:bg-blue-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[10px] uppercase font-bold tracking-tight text-blue-700">Blue Card</span></button>
-                          <button onClick={() => { handleCreateDraftEvent('card', selectedTeamContext === 'home' ? currentGame?.homeTeamId || null : selectedTeamContext === 'away' ? currentGame?.awayTeamId || null : null, selectedPlayerId || null, null, null); setDraftEvents(d => { const last = d[0]; if (last) last.color = 'yellow'; return [...d]; }); }} className="flex flex-col items-center justify-center p-2 rounded-lg border border-yellow-200 hover:border-yellow-500 hover:bg-yellow-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[10px] uppercase font-bold tracking-tight text-yellow-700">Yellow Card</span></button>
-                          <button onClick={() => { handleCreateDraftEvent('card', selectedTeamContext === 'home' ? currentGame?.homeTeamId || null : selectedTeamContext === 'away' ? currentGame?.awayTeamId || null : null, selectedPlayerId || null, null, null); setDraftEvents(d => { const last = d[0]; if (last) last.color = 'red'; return [...d]; }); }} className="flex flex-col items-center justify-center p-2 rounded-lg border border-red-200 hover:border-red-500 hover:bg-red-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[10px] uppercase font-bold tracking-tight text-red-700">Red Card</span></button>
+                          <button onClick={() => { handleCreateDraftEvent('card', selectedTeamContext === 'home' ? currentGame?.homeTeamId || null : selectedTeamContext === 'away' ? currentGame?.awayTeamId || null : null, selectedPlayerId || null, null, null); setDraftEvents(d => { const last = d[0]; if (last) last.color = 'blue'; return [...d]; }); }} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-blue-200 hover:border-blue-500 hover:bg-blue-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[10px] uppercase font-bold tracking-tight text-blue-700">Blue Card</span></button>
+                          <button onClick={() => { handleCreateDraftEvent('card', selectedTeamContext === 'home' ? currentGame?.homeTeamId || null : selectedTeamContext === 'away' ? currentGame?.awayTeamId || null : null, selectedPlayerId || null, null, null); setDraftEvents(d => { const last = d[0]; if (last) last.color = 'yellow'; return [...d]; }); }} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-yellow-200 hover:border-yellow-500 hover:bg-yellow-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[10px] uppercase font-bold tracking-tight text-yellow-700">Yellow Card</span></button>
+                          <button onClick={() => { handleCreateDraftEvent('card', selectedTeamContext === 'home' ? currentGame?.homeTeamId || null : selectedTeamContext === 'away' ? currentGame?.awayTeamId || null : null, selectedPlayerId || null, null, null); setDraftEvents(d => { const last = d[0]; if (last) last.color = 'red'; return [...d]; }); }} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-red-200 hover:border-red-500 hover:bg-red-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[10px] uppercase font-bold tracking-tight text-red-700">Red Card</span></button>
                         </div>
                       </div>
 
                       {/* Game Phase Events */}
                       <div className="flex flex-col gap-1.5 mt-1">
                         <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Game Phase Events</span>
-                        <div className="grid grid-cols-2 gap-1.5">
-                          <button onClick={() => handleCreateDraftEvent('quadball_start', null, null, null, null)} className="flex flex-col items-center justify-center p-2 rounded-lg border border-gray-200 hover:border-red-500 hover:bg-red-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[10px] uppercase font-bold tracking-tight text-gray-700">Quadball Start</span></button>
-                          <button onClick={() => handleCreateDraftEvent('control_start', null, null, null, null)} className="flex flex-col items-center justify-center p-2 rounded-lg border border-gray-200 hover:border-emerald-500 hover:bg-emerald-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[10px] uppercase font-bold tracking-tight text-emerald-800">Control Start</span></button>
-                          <button onClick={() => handleCreateDraftEvent('flag_released', null, null, null, null)} className="flex flex-col items-center justify-center p-2 rounded-lg border border-gray-200 hover:border-purple-500 hover:bg-purple-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[10px] uppercase font-bold tracking-tight text-purple-800">Flag Released</span></button>
-                          <button onClick={() => handleCreateDraftEvent('flag_catch', selectedTeamContext === 'home' ? currentGame?.homeTeamId || null : currentGame?.awayTeamId || null, selectedPlayerId || null, null, null)} className="flex flex-col items-center justify-center p-2 rounded-lg border border-gray-200 hover:border-purple-500 hover:bg-purple-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[10px] uppercase font-bold tracking-tight text-purple-800">Flag Catch</span></button>
+                        <div className="grid grid-cols-4 gap-1.5">
+                          <button onClick={() => handleCreateDraftEvent('quadball_start', null, null, null, null)} className="flex flex-col items-center justify-center py-1.5 px-0.5 rounded-lg border border-gray-200 hover:border-red-500 hover:bg-red-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[8px] sm:text-[9px] uppercase font-bold tracking-tight text-gray-700 leading-tight text-center">Quadball Start</span></button>
+                          <button onClick={() => handleCreateDraftEvent('control_start', null, null, null, null)} className="flex flex-col items-center justify-center py-1.5 px-0.5 rounded-lg border border-gray-200 hover:border-emerald-500 hover:bg-emerald-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[8px] sm:text-[9px] uppercase font-bold tracking-tight text-emerald-800 leading-tight text-center">Control Start</span></button>
+                          <button onClick={() => handleCreateDraftEvent('flag_released', null, null, null, null)} className="flex flex-col items-center justify-center py-1.5 px-0.5 rounded-lg border border-gray-200 hover:border-purple-500 hover:bg-purple-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[8px] sm:text-[9px] uppercase font-bold tracking-tight text-purple-800 leading-tight text-center">Flag Released</span></button>
+                          <button onClick={() => handleCreateDraftEvent('flag_catch', selectedTeamContext === 'home' ? currentGame?.homeTeamId || null : currentGame?.awayTeamId || null, selectedPlayerId || null, null, null)} className="flex flex-col items-center justify-center py-1.5 px-0.5 rounded-lg border border-gray-200 hover:border-purple-500 hover:bg-purple-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[8px] sm:text-[9px] uppercase font-bold tracking-tight text-purple-800 leading-tight text-center">Flag Catch</span></button>
                         </div>
                       </div>
 
@@ -5194,13 +5412,13 @@ export default function App() {
                                   <div className="flex gap-1 flex-1">
                                     <button 
                                       onClick={() => handleSaveDraftEvent(draft, false)}
-                                      className="flex-1 shrink-0 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] py-2.5 rounded-lg transition-colors shadow flex items-center justify-center gap-1 min-h-[40px] px-1"
+                                      className="flex-1 shrink-0 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] py-1.5 rounded-lg transition-colors shadow flex items-center justify-center gap-1 min-h-[32px] px-1"
                                     >
                                       <CheckCircle2 className="w-3.5 h-3.5" /> Save
                                     </button>
                                     <button 
                                       onClick={() => handleSaveDraftEvent(draft, true)}
-                                      className="flex-1 shrink-0 bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-[11px] py-2.5 rounded-lg transition-colors shadow flex items-center justify-center gap-1 min-h-[40px] px-1"
+                                      className="flex-1 shrink-0 bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-[11px] py-1.5 rounded-lg transition-colors shadow flex items-center justify-center gap-1 min-h-[32px] px-1"
                                     >
                                       <CheckCircle2 className="w-3.5 h-3.5" /> + Next
                                     </button>
@@ -5208,26 +5426,26 @@ export default function App() {
                                 ) : (
                                   <button 
                                     onClick={() => handleSaveDraftEvent(draft, false)}
-                                    className="flex-1 shrink-0 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs py-2.5 rounded-lg transition-colors shadow flex items-center justify-center gap-2 min-h-[40px]"
+                                    className="flex-1 shrink-0 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] py-1.5 rounded-lg transition-colors shadow flex items-center justify-center gap-1.5 min-h-[32px]"
                                   >
-                                    <CheckCircle2 className="w-4 h-4" /> Save to Timeline
+                                    <CheckCircle2 className="w-3.5 h-3.5" /> Save to Timeline
                                   </button>
                                 )}
                                 <button 
                                   onClick={() => handleDeleteDraftEvent(draft.id)}
-                                  className="w-10 shrink-0 bg-red-50 border border-red-100 hover:bg-red-100 text-red-500 font-bold p-2 text-xs rounded-lg transition-colors flex items-center justify-center min-h-[40px]"
+                                  className="w-10 shrink-0 bg-red-50 border border-red-100 hover:bg-red-100 text-red-500 font-bold p-1.5 text-[11px] rounded-lg transition-colors flex items-center justify-center min-h-[32px]"
                                 >
-                                  <Trash2 className="w-4 h-4" />
+                                  <Trash2 className="w-3.5 h-3.5" />
                                 </button>
                               </div>
                             </div>
                           ))}
                         </div>
                       ) : (
-                        <div className="flex flex-col items-center justify-center text-center py-12 px-6 bg-gray-100 rounded-xl border border-dashed border-gray-300">
-                          <History className="w-10 h-10 text-gray-300 mb-3" />
-                          <p className="text-sm font-bold text-gray-400">No pending events.</p>
-                          <p className="text-xs text-gray-400 mt-1">Select an action above to draft an event at the current video timestamp.</p>
+                        <div className="flex flex-col items-center justify-center text-center py-6 px-4 bg-gray-100 rounded-xl border border-dashed border-gray-300">
+                          <History className="w-8 h-8 text-gray-300 mb-2" />
+                          <p className="text-[11px] font-bold text-gray-400">No pending events.</p>
+                          <p className="text-[10px] text-gray-400 mt-0.5">Select an action above to draft an event at the current video timestamp.</p>
                         </div>
                       )}
                     </div>
@@ -5237,7 +5455,7 @@ export default function App() {
                   </div>
 
                   <div className={cn("absolute inset-0 overflow-y-auto custom-scrollbar p-4 space-y-8 bg-gray-50", rightPanelTab === 'rosters' ? "block" : "hidden")}>
-                    {(() => {
+                    {rightPanelTab === 'rosters' && (() => {
                         const pastEvents = activeTrackingEvents.filter(e => e.videoTime <= currentTime);
                         const liveStats = new Map<string, { g: number, a: number, plus: number, minus: number }>();
                         
@@ -5728,7 +5946,7 @@ export default function App() {
                   </div>
 
                   <div className={cn("absolute inset-0 overflow-y-auto custom-scrollbar bg-white", rightPanelTab === 'gamecast' ? "block" : "hidden")}>
-                    <GameCastView players={allPlayers} events={enrichedEvents} teams={teams} games={games} overrideGameId={currentGame?.id} />
+                    {rightPanelTab === 'gamecast' && <GameCastView players={allPlayers} events={enrichedEvents} teams={teams} games={games} overrideGameId={currentGame?.id} />}
                   </div>
                 </div>
 
