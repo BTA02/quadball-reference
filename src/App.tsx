@@ -3947,7 +3947,14 @@ export default function App() {
   const handleDeleteGame = async (id: string) => {
     const relatedVideos = videos.filter(v => v.gameId === id);
     const relatedEventsCount = allEvents.filter(e => e.gameId === id).length;
-    if (!confirm(`Delete this Game? WARNING: This will permanently destroy ${relatedVideos.length} connected Videos AND ${relatedEventsCount} recorded statistical events attached to them. Proceed?`)) return;
+    const shortId = id.length > 16 ? id.substring(0, 16) + '…' : id;
+    const typed = prompt(
+      `⚠️ DESTRUCTIVE ACTION ⚠️\n\nThis will permanently delete:\n• 1 game (${id})\n• ${relatedVideos.length} connected video(s)\n• ${relatedEventsCount} recorded events\n\nType "${shortId}" to confirm:`
+    );
+    if (!typed || typed.trim() !== shortId) {
+      toast.info('Deletion cancelled.');
+      return;
+    }
 
     try {
       // 1. Remove from aggregated games (read-filter-write to avoid arrayRemove field mismatch)
