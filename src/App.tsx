@@ -3945,26 +3945,37 @@ export default function App() {
   };
 
   const handleDeleteGame = async (id: string) => {
-    const relatedVideos = statsVideos.filter(v => v.gameId === id);
-    const relatedEventsCount = statsEvents.filter(e => e.gameId === id).length;
+    const relatedVideos = videos.filter(v => v.gameId === id);
+    const relatedEventsCount = allEvents.filter(e => e.gameId === id).length;
     if (!confirm(`Delete this Game? WARNING: This will permanently destroy ${relatedVideos.length} connected Videos AND ${relatedEventsCount} recorded statistical events attached to them. Proceed?`)) return;
 
     try {
-      const g = games.find(g => g.id === id);
-      if (g) {
-      const oldAgg = { id: g.id, seasonId: g.seasonId || '', homeTeamId: g.homeTeamId || '', awayTeamId: g.awayTeamId || '', isVerified: g.isVerified || false, createdAt: serializeTimestamp(g.createdAt) };
-        await updateDoc(doc(db, 'aggregated', 'games'), { data: arrayRemove(oldAgg) }).catch(() => {});
-      }
-      await deleteDoc(doc(db, 'games', id));
-      
-      // Cascade to Videos
-      for (const v of relatedVideos) {
-        const oldAgg = { id: v.id, gameId: v.gameId, videoId: v.videoId, youtubeId: v.youtubeId || '', title: v.title || '', createdAt: serializeTimestamp(v.createdAt) };
-        await deleteDoc(doc(db, 'videos', v.id));
-        await updateDoc(doc(db, 'aggregated', 'videos'), { data: arrayRemove(oldAgg) }).catch(() => {});
+      // 1. Remove from aggregated games (read-filter-write to avoid arrayRemove field mismatch)
+      const aggGamesSnap = await getDoc(doc(db, 'aggregated', 'games'));
+      if (aggGamesSnap.exists()) {
+        const currentData = (aggGamesSnap.data().data || []) as any[];
+        const filtered = currentData.filter((g: any) => g.id !== id);
+        await updateDoc(doc(db, 'aggregated', 'games'), { data: filtered });
       }
 
-      // Cascade Destroy entire Game Event Log natively!
+      // 2. Delete the individual game doc
+      await deleteDoc(doc(db, 'games', id));
+
+      // 3. Cascade to Videos — remove from aggregated and delete docs
+      if (relatedVideos.length > 0) {
+        const aggVideosSnap = await getDoc(doc(db, 'aggregated', 'videos'));
+        if (aggVideosSnap.exists()) {
+          const currentVideoData = (aggVideosSnap.data().data || []) as any[];
+          const videoIds = new Set(relatedVideos.map(v => v.id));
+          const filteredVideos = currentVideoData.filter((v: any) => !videoIds.has(v.id));
+          await updateDoc(doc(db, 'aggregated', 'videos'), { data: filteredVideos });
+        }
+        for (const v of relatedVideos) {
+          await deleteDoc(doc(db, 'videos', v.id));
+        }
+      }
+
+      // 4. Cascade Destroy entire Game Event Log
       await deleteDoc(doc(db, 'gameEvents', id));
 
       toast.success('Game and all connected dependencies wiped');
