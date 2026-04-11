@@ -58,6 +58,7 @@ service cloud.firestore {
              (data.seasonId == null || data.seasonId is string) &&
              (data.homeTeamId == null || data.homeTeamId is string) &&
              (data.awayTeamId == null || data.awayTeamId is string) &&
+             (data.authorTeamId == null || data.authorTeamId is string) &&
              (data.isVerified == null || data.isVerified is bool) &&
              (data.createdAt == null || data.createdAt is timestamp);
     }
@@ -88,8 +89,9 @@ service cloud.firestore {
     }
 
     function isValidTeam(data) {
-      return hasOnlyAllowedFields(['name', 'createdAt']) &&
-             data.name is string && data.name.size() > 0 && data.name.size() < 100;
+      return (hasOnlyAllowedFields(['name', 'createdAt']) || hasOnlyAllowedFields(['name', 'emails', 'createdAt'])) &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             (!('emails' in data) || data.emails is list);
     }
 
     function isValidSeason(data) {
@@ -144,9 +146,9 @@ service cloud.firestore {
     // Teams
     match /teams/{teamId} {
       allow read: if true;
-      allow create: if isAuthenticated() && isValidTeam(request.resource.data);
-      allow update: if isAuthenticated() && isValidTeam(request.resource.data);
-      allow delete: if isAuthenticated();
+      allow create: if isAdmin() && isValidTeam(request.resource.data);
+      allow update: if (isAdmin() || (isAuthenticated() && request.auth.token.email in resource.data.emails)) && isValidTeam(request.resource.data);
+      allow delete: if isAdmin();
     }
 
     // Seasons
@@ -160,9 +162,9 @@ service cloud.firestore {
     // Rosters
     match /rosters/{rosterId} {
       allow read: if true;
-      allow create: if isAuthenticated() && isValidRoster(request.resource.data);
-      allow update: if isAuthenticated() && isValidRoster(request.resource.data);
-      allow delete: if isAuthenticated();
+      allow create: if (isAdmin() || (isAuthenticated() && request.auth.token.email in get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.emails)) && isValidRoster(request.resource.data);
+      allow update: if (isAdmin() || (isAuthenticated() && request.auth.token.email in get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.emails)) && isValidRoster(request.resource.data);
+      allow delete: if isAdmin();
 
       match /players/{playerId} {
         allow read: if true;
@@ -188,9 +190,9 @@ service cloud.firestore {
 
     // GameEvents (Modern Array-Based Schema)
     match /gameEvents/{gameId} {
-      allow read: if true;
+      allow read: if isAuthenticated() || gameId == 'game_53Ci_TOlkVQ';
       allow create: if isAuthenticated() || isAdmin();
-      allow update: if isAuthenticated() || isAdmin();
+      allow update: if isAuthenticated() || gameId == 'game_53Ci_TOlkVQ';
       allow delete: if isAdmin();
     }
 

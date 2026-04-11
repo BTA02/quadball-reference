@@ -324,7 +324,7 @@ interface StintRecord {
  * Returns array of [startTime, endTime] pairs representing when the
  * game clock was running (in video-time seconds).
  */
-function computeGameClockIntervals(gameEvents: GameEvent[]): [number, number][] {
+export function computeGameClockIntervals(gameEvents: GameEvent[]): [number, number][] {
   const intervals: [number, number][] = [];
   let lastStart = -1;
 
@@ -369,6 +369,69 @@ function getGameMinutesInWindow(
     }
   }
   return total / 60; // convert to minutes
+}
+
+/**
+ * Global helper to check if a specific team is in the active filter state at a specific video time.
+ */
+function isStateActiveForTeam(
+  teamId: string,
+  time: number,
+  controlPeriods: { teamId: string; startTime: number; endTime: number }[],
+  flagReleaseTime: number,
+  filters: { controlFilter?: 'all' | 'with' | 'without'; flagFilter?: 'all' | 'on' | 'off' }
+): boolean {
+  if (filters.flagFilter === 'on' && time < flagReleaseTime) return false;
+  if (filters.flagFilter === 'off' && time >= flagReleaseTime) return false;
+  if (filters.controlFilter === 'with' || filters.controlFilter === 'without') {
+     let currentControl = null;
+     for (const cp of controlPeriods) {
+        if (time >= cp.startTime && time <= cp.endTime) {
+           currentControl = cp.teamId;
+           break;
+        }
+     }
+     const hasCtrl = currentControl === teamId;
+     if (filters.controlFilter === 'with' && !hasCtrl) return false;
+     if (filters.controlFilter === 'without' && hasCtrl) return false;
+  }
+  return true;
+}
+
+/**
+ * Global helper to get filter-adjusted play seconds and control seconds for a team within a window.
+ */
+function getFilteredSecondsInWindow(
+  teamId: string,
+  windowStart: number,
+  windowEnd: number,
+  clockIntervals: [number, number][],
+  controlPeriods: { teamId: string; startTime: number; endTime: number }[],
+  flagReleaseTime: number,
+  filters: { controlFilter?: 'all' | 'with' | 'without'; flagFilter?: 'all' | 'on' | 'off' }
+): { activeSeconds: number; activeControlSeconds: number } {
+  let activeSeconds = 0;
+  let activeControlSeconds = 0;
+
+  for (const [start, end] of clockIntervals) {
+    const os = Math.max(start, windowStart);
+    const oe = Math.min(end, windowEnd);
+    for (let s = Math.floor(os); s < Math.floor(oe); s++) {
+      if (isStateActiveForTeam(teamId, s, controlPeriods, flagReleaseTime, filters)) {
+        activeSeconds++;
+        // Check if team has control for this second
+        let currentControl = null;
+        for (const cp of controlPeriods) {
+           if (s >= cp.startTime && s <= cp.endTime) {
+              currentControl = cp.teamId;
+              break;
+           }
+        }
+        if (currentControl === teamId) activeControlSeconds++;
+      }
+    }
+  }
+  return { activeSeconds, activeControlSeconds };
 }
 
 /**
@@ -474,26 +537,13 @@ export function computeAdvancedStats(
   events: GameEvent[],
   players: Player[],
   games: Game[],
-  filters: { seasonId?: string; teamId?: string; position?: 'chaser' | 'keeper' }
+  filters: { seasonId?: string; teamId?: string; position?: 'chaser' | 'keeper'; controlFilter?: 'all' | 'with' | 'without'; flagFilter?: 'all' | 'on' | 'off'; outlierFilter?: 'include' | 'exclude' }
 ): AdvancedPlayerStats[] {
   // Build player lookup by ID
   const playerMap = new Map<string, Player>();
   players.forEach(p => playerMap.set(p.id, p));
 
-  // Filter games by season
-  let relevantGames = games;
-  if (filters.seasonId) {
-    relevantGames = games.filter(g => g.seasonId === filters.seasonId);
-  }
-  const relevantGameIds = new Set(relevantGames.map(g => g.id));
-
-  // Group events by game
-  const eventsByGame = new Map<string, GameEvent[]>();
-  for (const e of events) {
-    if (!relevantGameIds.has(e.gameId)) continue;
-    if (!eventsByGame.has(e.gameId)) eventsByGame.set(e.gameId, []);
-    eventsByGame.get(e.gameId)!.push(e);
-  }
+  const { eventsByGame, relevantGames } = groupEventsByGame(events, games, filters);
 
   // Accumulators
   const statsAccum = new Map<string, {
@@ -587,22 +637,33 @@ export function computeAdvancedStats(
     const gameEndEvent = sorted.find(e => e.type === 'gameEnd' || e.type === 'gameend');
     const gameEndTime = gameEndEvent?.videoTime ?? sorted[sorted.length - 1]?.videoTime ?? 0;
 
+    const controlPeriods = computeControlPeriodsFromEvents(sorted);
+    const flagReleaseEvent = sorted.find(ev => ev.type === 'flag_released');
+    const flagReleaseTime = flagReleaseEvent?.videoTime ?? Infinity;
+
     // Compute stints for minutes
     let homeStints: StintRecord[] = [];
     let awayStints: StintRecord[] = [];
+
+    const calculateActiveMinutes = (stint: StintRecord, teamId: string) => {
+      if (!filters.flagFilter && !filters.controlFilter) {
+         return getGameMinutesInWindow(clockIntervals, stint.startTime, stint.endTime);
+      }
+      return getFilteredSecondsInWindow(teamId, stint.startTime, stint.endTime, clockIntervals, controlPeriods, flagReleaseTime, filters).activeSeconds / 60;
+    };
 
     if (processHome) {
       homeStints = computePlayerStints(sorted, resolvedHomeId, homePlayerIds, gameEndTime);
       for (const stint of homeStints) {
         const accum = getAccum(stint.playerId, game.homeTeamId);
-        accum.minutesPlayed += getGameMinutesInWindow(clockIntervals, stint.startTime, stint.endTime);
+        accum.minutesPlayed += calculateActiveMinutes(stint, resolvedHomeId);
       }
     }
     if (processAway) {
       awayStints = computePlayerStints(sorted, resolvedAwayId, awayPlayerIds, gameEndTime);
       for (const stint of awayStints) {
         const accum = getAccum(stint.playerId, game.awayTeamId);
-        accum.minutesPlayed += getGameMinutesInWindow(clockIntervals, stint.startTime, stint.endTime);
+        accum.minutesPlayed += calculateActiveMinutes(stint, resolvedAwayId);
       }
     }
 
@@ -635,14 +696,10 @@ export function computeAdvancedStats(
       let isNewPossessionForEventTeam = false;
 
       if (!hasExplicitPossessions) {
-        if (isGoal || isTurnover) {
-           isNewPossessionForEventTeam = (currentInferredPossTeam !== eventTeamId);
-           currentInferredPossTeam = null;
-           didCurrentPossShoot = false;
-        } else if (isShot) {
+        if (isGoal || isShot || isTurnover) {
            isNewPossessionForEventTeam = (currentInferredPossTeam !== eventTeamId);
            currentInferredPossTeam = eventTeamId;
-           didCurrentPossShoot = true;
+           didCurrentPossShoot = isShot;
         } else if (isStartEvent) {
            isNewPossessionForEventTeam = false;
            currentInferredPossTeam = eventTeamId;
@@ -650,8 +707,11 @@ export function computeAdvancedStats(
         }
       }
 
-      const activeHome = processHome ? getActivePlayersAtTime(homeStints, e.videoTime, filters.position) : new Set<string>();
-      const activeAway = processAway ? getActivePlayersAtTime(awayStints, e.videoTime, filters.position) : new Set<string>();
+      const homeActive = isStateActiveForTeam(resolvedHomeId, e.videoTime, controlPeriods, flagReleaseTime, filters);
+      const awayActive = isStateActiveForTeam(resolvedAwayId, e.videoTime, controlPeriods, flagReleaseTime, filters);
+
+      const activeHome = processHome && homeActive ? getActivePlayersAtTime(homeStints, e.videoTime, filters.position) : new Set<string>();
+      const activeAway = processAway && awayActive ? getActivePlayersAtTime(awayStints, e.videoTime, filters.position) : new Set<string>();
 
       for (const pid of activeHome) {
         const accum = getAccum(pid);
@@ -710,8 +770,8 @@ export function computeAdvancedStats(
         if (!eTeam && e.playerId) eTeam = playerTeamMap.get(e.playerId);
         if (!eTeam && (playerTeamMap.size === 0 || (discHome === null && discAway))) eTeam = resolvedHomeId;
 
-        if (eTeam === resolvedHomeId) homeGoalsThisGame++;
-        else if (eTeam === resolvedAwayId) awayGoalsThisGame++;
+        if (eTeam === resolvedHomeId && isStateActiveForTeam(resolvedHomeId, e.videoTime, controlPeriods, flagReleaseTime, filters)) homeGoalsThisGame++;
+        else if (eTeam === resolvedAwayId && isStateActiveForTeam(resolvedAwayId, e.videoTime, controlPeriods, flagReleaseTime, filters)) awayGoalsThisGame++;
       }
     }
 
@@ -751,6 +811,9 @@ export function computeAdvancedStats(
       if (filters.teamId && eTeam !== filters.teamId && filters.teamId !== game.homeTeamId && filters.teamId !== game.awayTeamId) continue;
 
       const isP_Home = homePlayerIds.has(pid);
+      if (isP_Home && !isStateActiveForTeam(resolvedHomeId, e.videoTime, controlPeriods, flagReleaseTime, filters)) continue;
+      if (!isP_Home && !isStateActiveForTeam(resolvedAwayId, e.videoTime, controlPeriods, flagReleaseTime, filters)) continue;
+
       if (isP_Home && processHome) homePlayersInGame.add(pid);
       if (!isP_Home && processAway) awayPlayersInGame.add(pid);
 
@@ -865,6 +928,9 @@ export interface ExtendedPlayerStats {
   oRtg: number;          // Offensive Rating — Team goals scored per 100 possessions while on pitch
   dRtg: number;          // Defensive Rating — Opponent goals conceded per 100 possessions while on pitch
   netRtg: number;        // Net Rating — oRtg - dRtg
+  iORTG: number;         // Individual ORTG (Weighted plus)
+  iDRTG: number;         // Individual DRTG (Weighted minus)
+  iNet: number;          // Individual Net Rating
   tovPct: number;        // Turnover Rate — team turnovers per team possession while on field
   fTovPct: number;       // Forced Turnover Rate — opponent turnovers per opponent possession while on field
   // Per-20 rates
@@ -884,7 +950,7 @@ export function computeExtendedStats(
   events: GameEvent[],
   players: Player[],
   games: Game[],
-  filters: { seasonId?: string; teamId?: string }
+  filters: { seasonId?: string; teamId?: string; position?: 'chaser' | 'keeper'; controlFilter?: 'all' | 'with' | 'without'; flagFilter?: 'all' | 'on' | 'off'; outlierFilter?: 'include' | 'exclude' }
 ): ExtendedPlayerStats[] {
   // Reuse advanced stats computation for the heavy lifting
   const advanced = computeAdvancedStats(events, players, games, filters);
@@ -947,6 +1013,14 @@ export function computeExtendedStats(
     // Net Rating
     const netRtg = Math.round((oRtg - dRtg) * 10) / 10;
 
+    // Individual Metric Scaling (iNET)
+    const iPointsScored = a.plus + (a.goals * 0.75) + (a.assists * 0.25);
+    const iPointsConceded = a.minus + (a.turnovers * 0.75) + (a.shots * 0.25); // penalty
+    
+    const iORTG = teamPoss > 0 ? Math.round((iPointsScored / teamPoss) * 100 * 10) / 10 : 0;
+    const iDRTG = oppPoss > 0 ? Math.round((iPointsConceded / oppPoss) * 100 * 10) / 10 : 0;
+    const iNet = Math.round((iORTG - iDRTG) * 10) / 10;
+
     // Game Score (GS/20): Normalized to impact per 20 minutes
     const points = a.goals + a.assists;
     const rawGameScore = (
@@ -994,6 +1068,9 @@ export function computeExtendedStats(
       oRtg,
       dRtg,
       netRtg,
+      iORTG,
+      iDRTG,
+      iNet,
       tovPct,
       fTovPct,
       turnoversPer20: Math.round(a.turnovers * per20 * 100) / 100,
@@ -1061,11 +1138,11 @@ export function computeTeamQuadballStats(
 
   // Also figure out game IDs per team
   const teamGameIds = new Map<string, Set<string>>();
-  const filteredGames = filters.seasonId
-    ? games.filter(g => g.seasonId === filters.seasonId)
-    : games;
+  const { relevantGames } = groupEventsByGame(events, games, filters as any);
+  const validGamesForParams = relevantGames.map(x => x.id);
+  const filteredGames = games.filter(g => validGamesForParams.includes(g.id) && (!filters.teamId || g.homeTeamId === filters.teamId || g.awayTeamId === filters.teamId));
+
   for (const g of filteredGames) {
-    if (filters.teamId && g.homeTeamId !== filters.teamId && g.awayTeamId !== filters.teamId) continue;
     if (!teamGameIds.has(g.homeTeamId)) teamGameIds.set(g.homeTeamId, new Set());
     if (!teamGameIds.has(g.awayTeamId)) teamGameIds.set(g.awayTeamId, new Set());
     teamGameIds.get(g.homeTeamId)!.add(g.id);
@@ -1076,44 +1153,61 @@ export function computeTeamQuadballStats(
   const teamEventAccum = new Map<string, {
     goals: number; assists: number; shots: number; turnovers: number;
     goalsAgainst: number; turnoversForced: number;
+    teamPoss: number; oppPoss: number;
     gameIds: Set<string>;
   }>();
 
   const getTA = (tid: string) => {
     if (!teamEventAccum.has(tid)) {
-      teamEventAccum.set(tid, { goals: 0, assists: 0, shots: 0, turnovers: 0, goalsAgainst: 0, turnoversForced: 0, gameIds: new Set() });
+      teamEventAccum.set(tid, { goals: 0, assists: 0, shots: 0, turnovers: 0, goalsAgainst: 0, turnoversForced: 0, teamPoss: 0, oppPoss: 0, gameIds: new Set() });
     }
     return teamEventAccum.get(tid)!;
   };
 
   for (const g of filteredGames) {
-    if (filters.teamId && g.homeTeamId !== filters.teamId && g.awayTeamId !== filters.teamId) continue;
-    
     // Safety check - make sure both teams get initialized even if 0 events
     getTA(g.homeTeamId);
     getTA(g.awayTeamId);
 
     const gameEvents = events.filter(e => e.gameId === g.id);
+    const sorted = [...gameEvents].sort((a,b) => a.videoTime - b.videoTime);
+    const controlPeriods = computeControlPeriodsFromEvents(sorted);
+    const flagReleaseTime = gameEvents.find(x => x.type === 'flag_released')?.videoTime ?? Infinity;
     
-    for (const e of gameEvents) {
+    let currentInferredPossTeam: string | null = null;
+    
+    for (const e of sorted) {
       if (!e.teamId) continue;
       const t = e.type?.toLowerCase() || '';
-      const acc = getTA(e.teamId);
-      acc.gameIds.add(g.id);
-      
-      if (t === 'goal') {
-        acc.goals++;
-        // Count against for opponent
-        const oppId = e.teamId === g.homeTeamId ? g.awayTeamId : g.homeTeamId;
-        getTA(oppId).goalsAgainst++;
-        getTA(oppId).gameIds.add(g.id);
+      const oppId = e.teamId === g.homeTeamId ? g.awayTeamId : g.homeTeamId;
+
+      if (['goal', 'shot', 'turnover'].includes(t)) {
+        if (currentInferredPossTeam !== e.teamId) {
+          getTA(e.teamId).teamPoss++;
+          getTA(oppId).oppPoss++;
+          currentInferredPossTeam = e.teamId;
+        }
       }
-      if (t === 'assist') acc.assists++;
-      if (t === 'shot') acc.shots++;
-      if (t === 'turnover') {
-        acc.turnovers++;
-        const oppId = e.teamId === g.homeTeamId ? g.awayTeamId : g.homeTeamId;
-        getTA(oppId).turnoversForced++;
+
+      const isValidForTeam = isStateActiveForTeam(e.teamId, e.videoTime, controlPeriods, flagReleaseTime, filters as any);
+      const isValidForOpp = isStateActiveForTeam(oppId, e.videoTime, controlPeriods, flagReleaseTime, filters as any);
+
+      if (isValidForTeam) {
+        const acc = getTA(e.teamId);
+        acc.gameIds.add(g.id);
+        
+        if (t === 'goal') acc.goals++;
+        if (t === 'assist') acc.assists++;
+        if (t === 'shot') acc.shots++;
+        if (t === 'turnover') acc.turnovers++;
+      }
+
+      if (isValidForOpp) {
+        const oppAcc = getTA(oppId);
+        oppAcc.gameIds.add(g.id);
+
+        if (t === 'goal') oppAcc.goalsAgainst++;
+        if (t === 'turnover') oppAcc.turnoversForced++;
       }
     }
   }
@@ -1126,9 +1220,9 @@ export function computeTeamQuadballStats(
     
     const gp = acc.gameIds.size;
     const totalShots = acc.shots + acc.goals; // total attempts
-    // Possessions approximation: goals + shots (misses) + turnovers
-    const teamPoss = acc.goals + acc.shots + acc.turnovers;
-    const oppPoss = acc.goalsAgainst + acc.turnoversForced; // simplified
+    // Dynamic true alternating possessions tracking
+    const teamPoss = acc.teamPoss;
+    const oppPoss = acc.oppPoss;
     
     results.push({
       teamId: tid,
@@ -1177,7 +1271,7 @@ export function computeTeamBeaterStats(
   players: Player[],
   teams: { id: string; name: string; [k: string]: any }[],
   games: Game[],
-  filters: { seasonId?: string; teamId?: string }
+  filters: { seasonId?: string; teamId?: string; controlFilter?: 'all' | 'with' | 'without'; flagFilter?: 'all' | 'on' | 'off'; outlierFilter?: 'include' | 'exclude' }
 ): TeamBeaterStats[] {
   const soloStats = computeBeaterSoloStats(events, players, games, filters);
   const teamMap = new Map<string, typeof teams[0]>();
@@ -1212,6 +1306,9 @@ export function computeTeamBeaterStats(
 
     const totalGameSec = getGameSecondsInWindow(clockIntervals, gameStartTime, gameEndTime);
 
+    const flagReleaseEvent = sorted.find(ev => ev.type === 'flag_released');
+    const flagReleaseTime = flagReleaseEvent?.videoTime ?? Infinity;
+
     for (const teamId of [game.homeTeamId, game.awayTeamId]) {
       if (filters.teamId && teamId !== filters.teamId) continue;
       if (!teamAccum.has(teamId)) {
@@ -1219,8 +1316,15 @@ export function computeTeamBeaterStats(
       }
       const acc = teamAccum.get(teamId)!;
       acc.gameIds.add(gameId);
-      acc.totalSeconds += totalGameSec;
-      acc.controlSeconds += getControlSecondsInWindow(controlPeriods, teamId, gameStartTime, gameEndTime, clockIntervals);
+
+      if (!filters.flagFilter && !filters.controlFilter) {
+        acc.totalSeconds += totalGameSec;
+        acc.controlSeconds += getControlSecondsInWindow(controlPeriods, teamId, gameStartTime, gameEndTime, clockIntervals);
+      } else {
+        const { activeSeconds, activeControlSeconds } = getFilteredSecondsInWindow(teamId, gameStartTime, gameEndTime, clockIntervals, controlPeriods, flagReleaseTime, filters);
+        acc.totalSeconds += activeSeconds;
+        acc.controlSeconds += activeControlSeconds;
+      }
     }
   }
 
@@ -1430,7 +1534,7 @@ function getControlSecondsInWindow(
 /**
  * Get total game-clock seconds in a window (reusing the existing function but returning seconds).
  */
-function getGameSecondsInWindow(
+export function getGameSecondsInWindow(
   clockIntervals: [number, number][],
   windowStart: number,
   windowEnd: number
@@ -1473,7 +1577,7 @@ export function computeBeaterSoloStats(
   events: GameEvent[],
   players: Player[],
   games: Game[],
-  filters: { seasonId?: string; teamId?: string }
+  filters: { seasonId?: string; teamId?: string; controlFilter?: 'all' | 'with' | 'without'; flagFilter?: 'all' | 'on' | 'off'; outlierFilter?: 'include' | 'exclude' }
 ): BeaterSoloStats[] {
   const playerMap = buildPlayerMap(events, players);
   const { eventsByGame, relevantGames } = groupEventsByGame(events, games, filters);
@@ -1512,13 +1616,23 @@ export function computeBeaterSoloStats(
     const homeStints = computeBeaterStints(sorted, resolvedHomeId, gameId, gameEndTime, playerTeamMap);
     const awayStints = computeBeaterStints(sorted, resolvedAwayId, gameId, gameEndTime, playerTeamMap);
     const beaterStints = [...homeStints, ...awayStints];
+    
+    const flagReleaseEvent = sorted.find(ev => ev.type === 'flag_released');
+    const flagReleaseTime = flagReleaseEvent?.videoTime ?? Infinity;
 
     for (const stint of beaterStints) {
       if (filters.teamId && stint.teamId !== filters.teamId && filters.teamId !== game.homeTeamId && filters.teamId !== game.awayTeamId) continue;
       const acc = getAcc(stint.playerId);
       acc.gameIds.add(gameId);
-      acc.controlSeconds += getControlSecondsInWindow(controlPeriods, stint.teamId, stint.startTime, stint.endTime, clockIntervals);
-      acc.totalSeconds += getGameSecondsInWindow(clockIntervals, stint.startTime, stint.endTime);
+
+      if (!filters.flagFilter && !filters.controlFilter) {
+        acc.controlSeconds += getControlSecondsInWindow(controlPeriods, stint.teamId, stint.startTime, stint.endTime, clockIntervals);
+        acc.totalSeconds += getGameSecondsInWindow(clockIntervals, stint.startTime, stint.endTime);
+      } else {
+        const { activeSeconds, activeControlSeconds } = getFilteredSecondsInWindow(stint.teamId, stint.startTime, stint.endTime, clockIntervals, controlPeriods, flagReleaseTime, filters);
+        acc.totalSeconds += activeSeconds;
+        acc.controlSeconds += activeControlSeconds;
+      }
     }
 
     let homeGoalsThisGame = 0;
@@ -1532,15 +1646,16 @@ export function computeBeaterSoloStats(
       if (!eventTeamId && e.playerId) eventTeamId = playerTeamMap.get(e.playerId);
       if (!eventTeamId && (playerTeamMap.size === 0 || (discHome === null && discAway))) eventTeamId = resolvedHomeId;
 
-      if (eventTeamId === resolvedHomeId) homeGoalsThisGame++;
-      else if (eventTeamId === resolvedAwayId) awayGoalsThisGame++;
+      if (eventTeamId === resolvedHomeId && isStateActiveForTeam(resolvedHomeId, e.videoTime, controlPeriods, flagReleaseTime, filters)) homeGoalsThisGame++;
+      else if (eventTeamId === resolvedAwayId && isStateActiveForTeam(resolvedAwayId, e.videoTime, controlPeriods, flagReleaseTime, filters)) awayGoalsThisGame++;
 
       for (const stint of beaterStints) {
+        if (filters.teamId && stint.teamId !== filters.teamId && stint.teamId !== game.homeTeamId && stint.teamId !== game.awayTeamId) continue;
         if (e.videoTime >= stint.startTime && e.videoTime <= stint.endTime) {
+          if (!isStateActiveForTeam(stint.teamId, e.videoTime, controlPeriods, flagReleaseTime, filters)) continue;
           const acc = getAcc(stint.playerId);
-          acc.gameIds.add(gameId);
-          if (eventTeamId === stint.teamId) { acc.plus++; }
-          else if (eventTeamId) { acc.minus++; }
+          if (stint.teamId === eventTeamId) acc.plus++;
+          else acc.minus++;
         }
       }
     }
@@ -1664,7 +1779,7 @@ export function computeBeaterPairStats(
   events: GameEvent[],
   players: Player[],
   games: Game[],
-  filters: { seasonId?: string; teamId?: string }
+  filters: { seasonId?: string; teamId?: string; controlFilter?: 'all' | 'with' | 'without'; flagFilter?: 'all' | 'on' | 'off'; outlierFilter?: 'include' | 'exclude' }
 ): BeaterPairStats[] {
   const playerMap = buildPlayerMap(events, players);
   const { eventsByGame, relevantGames } = groupEventsByGame(events, games, filters);
@@ -1713,6 +1828,9 @@ export function computeBeaterPairStats(
     const homeStints = computeBeaterStints(sorted, resolvedHomeId, gameId, gameEndTime, playerTeamMap);
     const awayStints = computeBeaterStints(sorted, resolvedAwayId, gameId, gameEndTime, playerTeamMap);
     const beaterStints = [...homeStints, ...awayStints];
+    
+    const flagReleaseEvent = sorted.find(ev => ev.type === 'flag_released');
+    const flagReleaseTime = flagReleaseEvent?.videoTime ?? Infinity;
 
     const pairOverlaps = computePairOverlaps(beaterStints);
 
@@ -1720,8 +1838,15 @@ export function computeBeaterPairStats(
       if (filters.teamId && overlap.teamId !== filters.teamId && filters.teamId !== game.homeTeamId && filters.teamId !== game.awayTeamId) continue;
       const acc = getPairAcc(overlap.player1, overlap.player2, overlap.teamId);
       acc.gameIds.add(gameId);
-      acc.controlSeconds += getControlSecondsInWindow(controlPeriods, overlap.teamId, overlap.start, overlap.end, clockIntervals);
-      acc.totalSeconds += getGameSecondsInWindow(clockIntervals, overlap.start, overlap.end);
+
+      if (!filters.flagFilter && !filters.controlFilter) {
+        acc.controlSeconds += getControlSecondsInWindow(controlPeriods, overlap.teamId, overlap.start, overlap.end, clockIntervals);
+        acc.totalSeconds += getGameSecondsInWindow(clockIntervals, overlap.start, overlap.end);
+      } else {
+        const { activeSeconds, activeControlSeconds } = getFilteredSecondsInWindow(overlap.teamId, overlap.start, overlap.end, clockIntervals, controlPeriods, flagReleaseTime, filters);
+        acc.totalSeconds += activeSeconds;
+        acc.controlSeconds += activeControlSeconds;
+      }
     }
 
     let homeGoalsThisGame = 0;
@@ -1840,7 +1965,7 @@ function buildPlayerMap(events: GameEvent[], players: Player[]): Map<string, Pla
 function groupEventsByGame(
   events: GameEvent[],
   games: Game[],
-  filters: { seasonId?: string; teamId?: string }
+  filters: { seasonId?: string; teamId?: string; outlierFilter?: 'include' | 'exclude' }
 ): { eventsByGame: Map<string, GameEvent[]>; relevantGames: Game[] } {
   let relevantGames = games;
   if (filters.seasonId) {
@@ -1853,6 +1978,48 @@ function groupEventsByGame(
     if (!relevantGameIds.has(e.gameId)) continue;
     if (!eventsByGame.has(e.gameId)) eventsByGame.set(e.gameId, []);
     eventsByGame.get(e.gameId)!.push(e);
+  }
+
+  if (filters.outlierFilter === 'exclude') {
+    const keptGames = new Set<string>();
+    for (const [gameId, gameEvents] of eventsByGame) {
+      const game = relevantGames.find(g => g.id === gameId);
+      if (game) {
+        const sorted = [...gameEvents].sort((a, b) => a.videoTime - b.videoTime);
+        const { homeTeamId: discHome, awayTeamId: discAway } = discoverGameTeams(sorted, game.homeTeamId, game.awayTeamId);
+        const resolvedHomeId = (discHome === null && discAway) ? 'home_inferred' : (discHome || game.homeTeamId);
+        const resolvedAwayId = discAway || game.awayTeamId;
+        const playerTeamMap = buildPlayerTeamMap(sorted);
+
+        let homeScore = 0;
+        let awayScore = 0;
+
+        for (const e of sorted) {
+          let eTeam = e.teamId;
+          if (!eTeam && e.playerId) eTeam = playerTeamMap.get(e.playerId);
+          if (!eTeam && (playerTeamMap.size === 0 || (discHome === null && discAway))) eTeam = resolvedHomeId;
+
+          const t = (e.type || '').toLowerCase();
+          if (t === 'goal') {
+            if (eTeam === resolvedHomeId) homeScore += 10;
+            else if (eTeam === resolvedAwayId) awayScore += 10;
+          } else if (t === 'flag_catch') {
+            if (eTeam === resolvedHomeId) homeScore += 35;
+            else if (eTeam === resolvedAwayId) awayScore += 35;
+          }
+        }
+
+        if (Math.abs(homeScore - awayScore) < 145) {
+          keptGames.add(gameId);
+        }
+      }
+    }
+    
+    // Prune eventsByGame and relevantGames
+    for (const key of eventsByGame.keys()) {
+      if (!keptGames.has(key)) eventsByGame.delete(key);
+    }
+    relevantGames = relevantGames.filter(g => keptGames.has(g.id));
   }
 
   return { eventsByGame, relevantGames };
@@ -1905,7 +2072,7 @@ export function computeSeekerStats(
   events: GameEvent[],
   players: Player[],
   games: Game[],
-  filters: { seasonId?: string; teamId?: string }
+  filters: { seasonId?: string; teamId?: string; controlFilter?: 'all' | 'with' | 'without'; flagFilter?: 'all' | 'on' | 'off'; outlierFilter?: 'include' | 'exclude' }
 ): SeekerStats[] {
   const playerMap = buildPlayerMap(events, players);
   const { eventsByGame, relevantGames } = groupEventsByGame(events, games, filters);
@@ -1991,21 +2158,30 @@ export function computeSeekerStats(
       }
     }
 
+    // Find flag_released time
+    const flagReleasedEvent = sorted.find(e => e.type === 'flag_released');
+    const flagReleasedTime = flagReleasedEvent?.videoTime ?? null;
+    const flagReleaseTimeForFilter = flagReleasedTime ?? Infinity;
+    const flagReleasedGameTime = flagReleasedEvent?.gameTime ?? null;
+
     // Compute time stats for each seeker stint
     for (const stint of seekerStints) {
       if (filters.teamId && stint.teamId !== filters.teamId) continue;
       const acc = getTimeAcc(stint.playerId);
       acc.gameIds.add(gameId);
-      acc.minutesSeeking += getGameMinutesInWindow(clockIntervals, stint.startTime, stint.endTime);
-      const totalSec = getGameSecondsInWindow(clockIntervals, stint.startTime, stint.endTime);
-      acc.totalSeconds += totalSec;
-      acc.controlSeconds += getControlSecondsInWindow(controlPeriods, stint.teamId, stint.startTime, stint.endTime, clockIntervals);
+      
+      if (!filters.flagFilter && !filters.controlFilter) {
+         acc.minutesSeeking += getGameMinutesInWindow(clockIntervals, stint.startTime, stint.endTime);
+         const totalSec = getGameSecondsInWindow(clockIntervals, stint.startTime, stint.endTime);
+         acc.totalSeconds += totalSec;
+         acc.controlSeconds += getControlSecondsInWindow(controlPeriods, stint.teamId, stint.startTime, stint.endTime, clockIntervals);
+      } else {
+         const { activeSeconds, activeControlSeconds } = getFilteredSecondsInWindow(stint.teamId, stint.startTime, stint.endTime, clockIntervals, controlPeriods, flagReleaseTimeForFilter, filters);
+         acc.minutesSeeking += activeSeconds / 60;
+         acc.totalSeconds += activeSeconds;
+         acc.controlSeconds += activeControlSeconds;
+      }
     }
-
-    // Find flag_released time
-    const flagReleasedEvent = sorted.find(e => e.type === 'flag_released');
-    const flagReleasedTime = flagReleasedEvent?.videoTime ?? null;
-    const flagReleasedGameTime = flagReleasedEvent?.gameTime ?? null;
 
     // Compute running scores at flag_released time
     let homeAtRelease = 0;
@@ -2028,6 +2204,10 @@ export function computeSeekerStats(
 
     // For each catch, compute stats
     for (const catchEvent of catchEvents) {
+      // Respect filters for catches
+      if (!isStateActiveForTeam(catchEvent.teamId, catchEvent.videoTime, controlPeriods, flagReleaseTimeForFilter, filters)) {
+         continue; // Catch happened outside the filter state!
+      }
       let homeAtCatch = 0;
       let awayAtCatch = 0;
       for (const e of sorted) {
@@ -2075,9 +2255,12 @@ export function computeSeekerStats(
       });
 
       // Find opponent seekers who were on field when this catch happened — they get an OpCTH
+      let foundOpponent = false;
+      const CATCH_GRACE_PERIOD = 15; // 15 seconds grace for logging delays
       for (const stint of seekerStints) {
         if (stint.teamId === catchEvent.teamId) continue; // same team, skip
-        if (catchEvent.videoTime >= stint.startTime && catchEvent.videoTime <= stint.endTime) {
+        if (catchEvent.videoTime >= stint.startTime - CATCH_GRACE_PERIOD && catchEvent.videoTime <= stint.endTime + CATCH_GRACE_PERIOD) {
+          foundOpponent = true;
           const sIsHome = stint.teamId === game.homeTeamId;
           const sOwnAtRelease = sIsHome ? homeAtRelease : awayAtRelease;
           const sOppAtRelease = sIsHome ? awayAtRelease : homeAtRelease;
@@ -2087,6 +2270,31 @@ export function computeSeekerStats(
           allResults.push({
             playerId: stint.playerId,
             teamId: stint.teamId,
+            gameId,
+            caught: false,
+            opponentCaught: true,
+            timeToCatch: null,
+            pointDiffAtCatch: null,
+            gameWinning: false,
+            teamLeadingAtRelease: sTeamStatus,
+          });
+        }
+      }
+
+      // If we still didn't find an opponent seeker to blame, guess the only known opponent seeker if there is exactly 1
+      if (!foundOpponent) {
+        const oppSeekers = Array.from(seekerPlayers.entries()).filter(([_, t]) => t !== catchEvent.teamId);
+        if (oppSeekers.length === 1) {
+          const [oppPid, oppTeamId] = oppSeekers[0];
+          const sIsHome = oppTeamId === game.homeTeamId;
+          const sOwnAtRelease = sIsHome ? homeAtRelease : awayAtRelease;
+          const sOppAtRelease = sIsHome ? awayAtRelease : homeAtRelease;
+          const sTeamStatus: 'winning' | 'losing' | 'tied' =
+            sOwnAtRelease > sOppAtRelease ? 'winning' : sOwnAtRelease < sOppAtRelease ? 'losing' : 'tied';
+
+          allResults.push({
+            playerId: oppPid,
+            teamId: oppTeamId,
             gameId,
             caught: false,
             opponentCaught: true,

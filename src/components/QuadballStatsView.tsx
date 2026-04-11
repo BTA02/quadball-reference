@@ -67,13 +67,15 @@ function SortHeader({ label, sortKey, currentSort, currentDir, onSort, tooltip }
   );
 }
 
-function Cell({ value, highlight, bold }: { value: string | number; highlight?: 'pos' | 'neg'; bold?: boolean }) {
+function Cell({ value, highlight, bold, align = 'center' }: { value: string | number; highlight?: 'pos' | 'neg'; bold?: boolean, align?: 'left'|'center'|'right' }) {
   return (
-    <td className={cn('px-2 py-1.5 text-center text-xs tabular-nums font-mono',
-        highlight === 'pos' && 'text-green-600',
-        highlight === 'neg' && 'text-red-500',
+    <td className={cn('px-2 py-1.5 text-xs tabular-nums font-mono',
+        align === 'center' ? 'text-center' : align === 'left' ? 'text-left' : 'text-right',
+        highlight === 'pos' && 'text-emerald-700 font-medium',
+        highlight === 'neg' && 'text-rose-600 font-medium',
         !highlight && 'text-gray-700',
-        bold && 'font-bold')}>
+        bold && 'font-bold'
+    )}>
       {typeof value === 'number' && value === Infinity ? '∞' : value}
     </td>
   );
@@ -87,32 +89,31 @@ interface QuadballStatsViewProps {
   seasons: Season[];
   statsFilter?: 'all' | 'verified' | 'legacy';
   seasonId?: string;
-  onSeasonChange?: (val: string) => void;
   teamId?: string;
-  onTeamChange?: (val: string) => void;
   search?: string;
-  onSearchChange?: (val: string) => void;
+  minGames?: number;
+  controlFilter?: 'all' | 'with' | 'without';
+  flagFilter?: 'all' | 'on' | 'off';
+  positionFilter?: 'all' | 'chaser' | 'keeper';
+  outlierFilter?: 'include' | 'exclude';
   onPlayerSelect?: (playerId: string) => void;
   onTeamSelect?: (teamId: string) => void;
 }
 
 export default function QuadballStatsView({ 
   players, events, teams, games, seasons, statsFilter = 'all',
-  seasonId: seasonFilter = '', onSeasonChange: setSeasonFilter,
-  teamId: teamFilter = '', onTeamChange: setTeamFilter,
-  search = '', onSearchChange: setSearch,
+  seasonId: seasonFilter = '', teamId: teamFilter = '', search = '',
+  minGames = 1, controlFilter = 'all', flagFilter = 'all', positionFilter = 'all', outlierFilter = 'include',
   onPlayerSelect, onTeamSelect
 }: QuadballStatsViewProps) {
   const [tab, setTab] = useState<'basic' | 'advanced' | 'teamPlayers' | 'team'>('basic');
-  const [positionFilter, setPositionFilter] = useState<'all' | 'chaser' | 'keeper'>('all');
-  const [minGames, setMinGames] = useState(1);
   const [page, setPage] = useState(1);
   const [sortKey, setSortKey] = useState('points');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [showHelp, setShowHelp] = useState(false);
   const perPage = 25;
 
-  useEffect(() => { setPage(1); }, [search, seasonFilter, teamFilter, positionFilter, minGames]);
+  useEffect(() => { setPage(1); }, [search, seasonFilter, teamFilter, positionFilter, minGames, controlFilter, flagFilter]);
 
   const handleSort = (key: string) => {
     if (key === sortKey) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -149,7 +150,10 @@ export default function QuadballStatsView({
     seasonId: seasonFilter || undefined,
     teamId: teamFilter || undefined,
     position: positionFilter === 'all' ? undefined : positionFilter,
-  }), [seasonFilter, teamFilter, positionFilter]);
+    controlFilter: controlFilter === 'all' ? undefined : controlFilter,
+    flagFilter: flagFilter === 'all' ? undefined : flagFilter,
+    outlierFilter
+  }), [seasonFilter, teamFilter, positionFilter, controlFilter, flagFilter, outlierFilter]);
 
   const advancedStats = useMemo(() => computeAdvancedStats(events, players, games, filters), [events, players, games, filters]);
   const extendedStats = useMemo(() => computeExtendedStats(events, players, games, filters), [events, players, games, filters]);
@@ -243,33 +247,6 @@ export default function QuadballStatsView({
           <button onClick={() => setShowHelp(!showHelp)} className="p-1.5 text-gray-400 hover:text-red-600 transition-colors ml-1 bg-white border border-gray-200 rounded-md" title="How stats are calculated">
             <Info className="w-4 h-4" />
           </button>
-
-          <select value={seasonFilter} onChange={e => setSeasonFilter?.(e.target.value)}
-            className="pl-2 pr-1 py-1 bg-white border border-gray-200 rounded-md text-xs outline-none focus:border-red-400 cursor-pointer">
-            <option value="">All Seasons</option>
-            {filteredSeasons.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-          <select value={teamFilter} onChange={e => setTeamFilter?.(e.target.value)}
-            className="pl-2 pr-1 py-1 bg-white border border-gray-200 rounded-md text-xs outline-none focus:border-red-400 cursor-pointer">
-            <option value="">All Teams</option>
-            {filteredTeams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-          </select>
-          <select value={positionFilter} onChange={e => setPositionFilter(e.target.value as any)}
-            className="pl-2 pr-1 py-1 bg-white border border-gray-200 rounded-md text-xs outline-none focus:border-red-400 cursor-pointer">
-            <option value="all">All Positions</option>
-            <option value="chaser">Chaser Only</option>
-            <option value="keeper">Keeper Only</option>
-          </select>
-          <div className="relative">
-            <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-400" />
-            <input type="text" placeholder="Search..." value={search} onChange={e => setSearch?.(e.target.value)}
-              className="pl-6 pr-2 py-1 bg-white border border-gray-200 rounded-md text-xs outline-none focus:border-red-400 w-32" />
-          </div>
-          <div className="flex items-center gap-1 bg-white border border-gray-200 rounded-md px-2 py-1">
-            <span className="text-xs text-gray-500 font-medium">Min GP:</span>
-            <input type="number" min="0" value={minGames || ''} onChange={e => setMinGames(parseInt(e.target.value) || 0)}
-              className="w-12 p-1 bg-white border-transparent rounded text-xs outline-none focus:border-red-400 focus:ring-1 focus:ring-red-400 -my-1" />
-          </div>
         </div>
       </div>
 
@@ -280,9 +257,9 @@ export default function QuadballStatsView({
           <ul className="list-disc pl-4 space-y-1 opacity-90">
             <li><strong>Possessions</strong> are inferred dynamically. Since "OFFENSE" tags are unreliable, a team possession ends when a Goal, Shot (Miss), or Turnover occurs while a player is on the field.</li>
             <li><strong>USG% (Usage Rate)</strong> estimates the percentage of team possessions a player is directly involved in (Goals + Assists + Shots + Turnovers / Team Possessions).</li>
-            <li><strong>ORTG (Offensive Rating)</strong>: Points produced per 100 offensive possessions while on the field.</li>
-            <li><strong>DRTG (Defensive Rating)</strong>: Opponent goals conceded per 100 defensive possessions while on the field.</li>
-            <li><strong>+ (Plus) and − (Minus)</strong> track goals scored and conceded while the player is actively on the field.</li>
+            <li><strong>DRTG (Defensive Rating)</strong>: Points conceded per 100 team defensive possessions while on the field.</li>
+            <li><strong>NET (Net Rating)</strong>: Points differential per 100 team possessions while on the field (ORTG - DRTG).</li>
+            <li><strong>USG% (Usage Rate)</strong>: Rebounds, points, and turnovers normalized evaluating a specific player's dominance over their team's possession outcomes.</li>
           </ul>
         </div>
       )}
@@ -325,8 +302,8 @@ export default function QuadballStatsView({
                   <SortHeader label="PTS/G" sortKey="pointsPerGame" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Points per Game" />
                 </>) : tab === 'teamPlayers' ? (<>
                   <SortHeader label="GP" sortKey="gamesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Games Played" />
-                  <SortHeader label="ORTG" sortKey="oRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Offensive Rating (Points produced per 100 offensive possessions)" />
-                  <SortHeader label="DRTG" sortKey="dRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Defensive Rating (Opponent points conceded per 100 defensive possessions)" />
+                  <SortHeader label="ORTG" sortKey="oRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Offensive Rating (Team points scored per 100 offensive possessions while on field)" />
+                  <SortHeader label="DRTG" sortKey="dRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Defensive Rating (Team points conceded per 100 defensive possessions while on field)" />
                   <SortHeader label="NET" sortKey="netRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Net Rating (ORTG - DRTG)" />
                   <SortHeader label="TOV%" sortKey="tovPct" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Team Turnover Rate (Team Turnovers per possession while on field)" />
                   <SortHeader label="FTOV%" sortKey="fTovPct" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Forced Turnover Rate (Opponent Turnovers per possession while on field)" />
@@ -380,7 +357,7 @@ export default function QuadballStatsView({
                       <Cell value={row.assists} bold highlight={row.assists > 0 ? 'pos' : undefined} />
                       <Cell value={row.turnovers} highlight={row.turnovers > 3 ? 'neg' : undefined} />
                       <Cell value={row.turnovers > 0 ? (Math.round((row.assists / row.turnovers) * 100) / 100) : row.assists > 0 ? '∞' : 0} highlight={row.turnovers > 0 && row.assists / row.turnovers >= 2 ? 'pos' : undefined} />
-                      <Cell value={`${(row.goals + row.shots) > 0 ? Math.round((row.goals / (row.goals + row.shots)) * 1000) / 10 : 0}%`} highlight={(row.goals + row.shots) > 0 && (row.goals / (row.goals + row.shots)) >= 0.5 ? 'pos' : undefined} />
+                      <Cell value={`${row.shots > 0 ? Math.round((row.goals / row.shots) * 1000) / 10 : 0}%`} highlight={row.shots > 0 && (row.goals / row.shots) >= 0.5 ? 'pos' : undefined} />
                       <Cell value={`${row.controlPctOnField}%`} highlight={row.controlPctOnField >= 55 ? 'pos' : row.controlPctOnField <= 45 ? 'neg' : undefined} />
                     </>) : tab === 'advanced' ? (<>
                       <Cell value={row.gamesPlayed} />

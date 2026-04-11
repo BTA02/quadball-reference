@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { ChevronLeft } from 'lucide-react';
-import { computeAdvancedStats, computeBeaterPairStats, computeBeaterSoloStats } from '../lib/statsComputations';
+import { computeAdvancedStats, computeBeaterPairStats, computeBeaterSoloStats, computeGameClockIntervals, getGameSecondsInWindow } from '../lib/statsComputations';
 
 interface Player { id: string; firstName: string; lastName: string; preferredName?: string; nickname?: string; [k: string]: any; }
 interface GameEvent { id: string; videoId: string; gameId: string; type: string; videoTime: number; status: string; playerId?: string; teamId?: string; position?: string; [k: string]: any; }
@@ -39,7 +39,7 @@ function Cell({ value, highlight, bold, align = 'center' }: any) {
   return (
     <td className={cn('px-2 py-1.5 text-xs tabular-nums font-mono', 
       align === 'center' ? 'text-center' : align === 'left' ? 'text-left' : 'text-right',
-      highlight === 'pos' && 'text-green-600', highlight === 'neg' && 'text-red-500', !highlight && 'text-gray-700', bold && 'font-bold'
+      highlight === 'pos' && 'text-green-600', highlight === 'neg' && 'text-red-500', !highlight && 'text-[#e2e8f0]', bold && 'font-bold'
     )}>
       {typeof value === 'number' && value === Infinity ? '∞' : value}
     </td>
@@ -70,7 +70,7 @@ export default function GameBoxScoreView({
   const [sortDirAwayP, setSortDirAwayP] = useState<SortDir>('desc');
 
   const { homeStats, awayStats, homePairs, awayPairs, score } = useMemo(() => {
-    if (!game) return { homeStats: [], awayStats: [], homePairs: [], awayPairs: [], score: {home: 0, away: 0, homeCatch: false, awayCatch: false} };
+    if (!game) return { homeStats: [], awayStats: [], homePairs: [], awayPairs: [], score: {home: 0, away: 0, homeCatch: false, awayCatch: false, setScore: null, gameTimeStr: ''} };
     const gEvents = events.filter(e => e.gameId === game.id);
     
     // Compute total combined game stats for all players
@@ -98,15 +98,28 @@ export default function GameBoxScoreView({
 
     const matchHomeGoals = gEvents.filter(e => e.teamId === game.homeTeamId && e.type === 'goal').length * 10;
     const matchAwayGoals = gEvents.filter(e => e.teamId === game.awayTeamId && e.type === 'goal').length * 10;
-    const hCatch = gEvents.some(e => e.type === 'catch' && e.teamId === game.homeTeamId);
-    const aCatch = gEvents.some(e => e.type === 'catch' && e.teamId === game.awayTeamId);
+    const hCatch = gEvents.some(e => e.type === 'flag_catch' && e.teamId === game.homeTeamId);
+    const aCatch = gEvents.some(e => e.type === 'flag_catch' && e.teamId === game.awayTeamId);
+
+    const sortedEvents = [...gEvents].sort((a, b) => a.videoTime - b.videoTime);
+    let setScore: number | null = null;
+    const flagReleaseEvent = sortedEvents.find(e => e.type === 'flag_released');
+    if (flagReleaseEvent) {
+       const preReleaseHome = sortedEvents.filter(e => e.videoTime <= flagReleaseEvent.videoTime && e.teamId === game.homeTeamId && e.type === 'goal').length * 10;
+       const preReleaseAway = sortedEvents.filter(e => e.videoTime <= flagReleaseEvent.videoTime && e.teamId === game.awayTeamId && e.type === 'goal').length * 10;
+       setScore = Math.max(preReleaseHome, preReleaseAway) + 60;
+    }
+
+    const clockIntervals = computeGameClockIntervals(sortedEvents);
+    const gameDurationSec = getGameSecondsInWindow(clockIntervals, 0, Infinity);
+    const gameTimeStr = `${Math.floor(gameDurationSec / 60)}:${String(Math.floor(gameDurationSec % 60)).padStart(2, '0')}`;
 
     return {
       homeStats: hStats,
       awayStats: aStats,
       homePairs: hPairs,
       awayPairs: aPairs,
-      score: { home: matchHomeGoals + (hCatch ? 30 : 0), away: matchAwayGoals + (aCatch ? 30 : 0), homeCatch: hCatch, awayCatch: aCatch }
+      score: { home: matchHomeGoals + (hCatch ? 35 : 0), away: matchAwayGoals + (aCatch ? 35 : 0), homeCatch: hCatch, awayCatch: aCatch, setScore, gameTimeStr }
     };
   }, [events, players, game, sortKeyHome, sortDirHome, sortKeyAway, sortDirAway, sortKeyHomeP, sortDirHomeP, sortKeyAwayP, sortDirAwayP]);
 
@@ -208,7 +221,15 @@ export default function GameBoxScoreView({
             </div>
           </div>
           
-          <div className="text-gray-300 font-bold text-lg hidden md:block">VS</div>
+          <div className="flex flex-col items-center gap-2">
+            <div className="text-gray-300 font-bold text-lg hidden md:block">VS</div>
+            <div className="text-sm font-bold text-gray-400 font-mono tracking-widest mt-2">{score.gameTimeStr}</div>
+            {score.setScore && (
+              <div className="text-xs font-semibold text-gray-500 tracking-wider">
+                SET {score.setScore}
+              </div>
+            )}
+          </div>
           
           <div className="flex flex-col items-center">
             <button onClick={() => onTeamSelect?.(game.awayTeamId)} className="text-2xl font-black text-gray-900 hover:text-blue-600 transition-colors">

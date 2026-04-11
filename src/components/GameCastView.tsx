@@ -286,8 +286,8 @@ export default function GameCastView({ players, events, teams, games, overrideGa
 
               return (
                 <div key={poss.id || i} className={cn(
-                  "flex flex-col text-xs p-2.5 rounded-lg shadow-sm border transition-all",
-                  poss.isHome ? "bg-red-50/50 border-red-100" : "bg-blue-50/50 border-blue-100"
+                  "flex flex-col text-xs p-2.5 rounded-lg shadow-sm bg-transparent border-l-4 border-r border-y border-r-gray-200 border-y-gray-200 transition-all",
+                  poss.isHome ? "border-l-red-500" : "border-l-blue-500"
                 )}>
                   <div
                      className={cn("flex items-center justify-between mb-1", hasExpandableEvents && "cursor-pointer group")}

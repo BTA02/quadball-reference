@@ -37,7 +37,7 @@ function SortHeader({ label, sortKey, currentSort, currentDir, onSort, tooltip }
 
 function Cell({ value, highlight, bold }: any) {
   return (
-    <td className={cn('px-2 py-1.5 text-center text-xs tabular-nums font-mono', highlight === 'pos' && 'text-green-600', highlight === 'neg' && 'text-red-500', !highlight && 'text-gray-700', bold && 'font-bold')}>
+    <td className={cn('px-2 py-1.5 text-center text-xs tabular-nums font-mono', highlight === 'pos' && 'text-green-600', highlight === 'neg' && 'text-red-500', !highlight && 'text-[#e2e8f0]', bold && 'font-bold')}>
       {typeof value === 'number' && value === Infinity ? '∞' : value}
     </td>
   );

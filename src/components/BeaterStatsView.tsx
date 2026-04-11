@@ -73,7 +73,7 @@ function Cell({ value, highlight, bold }: { value: string | number; highlight?: 
     <td className={cn('px-2 py-1.5 text-center text-xs tabular-nums font-mono',
         highlight === 'pos' && 'text-green-600',
         highlight === 'neg' && 'text-red-500',
-        !highlight && 'text-gray-700',
+        !highlight && 'text-[#e2e8f0]',
         bold && 'font-bold')}>
       {value}
     </td>
@@ -88,30 +88,29 @@ interface BeaterStatsViewProps {
   seasons: Season[];
   statsFilter?: 'all' | 'verified' | 'legacy';
   seasonId?: string;
-  onSeasonChange?: (val: string) => void;
   teamId?: string;
-  onTeamChange?: (val: string) => void;
   search?: string;
-  onSearchChange?: (val: string) => void;
+  minGames?: number;
+  controlFilter?: 'all' | 'with' | 'without';
+  flagFilter?: 'all' | 'on' | 'off';
+  outlierFilter?: 'include' | 'exclude';
   onPlayerSelect?: (playerId: string) => void;
   onTeamSelect?: (teamId: string) => void;
 }
 
 export default function BeaterStatsView({ 
   players, events, teams, games, seasons, statsFilter = 'all',
-  seasonId: seasonFilter = '', onSeasonChange: setSeasonFilter,
-  teamId: teamFilter = '', onTeamChange: setTeamFilter,
-  search = '', onSearchChange: setSearch,
+  seasonId: seasonFilter = '', teamId: teamFilter = '', search = '',
+  minGames = 1, controlFilter = 'all', flagFilter = 'all', outlierFilter = 'include',
   onPlayerSelect, onTeamSelect
 }: BeaterStatsViewProps) {
   const [tab, setTab] = useState<'pairs' | 'solo' | 'team'>('pairs');
-  const [minGames, setMinGames] = useState(1);
   const [page, setPage] = useState(1);
   const [sortKey, setSortKey] = useState('plusMinus');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const perPage = 25;
 
-  useEffect(() => { setPage(1); }, [search, seasonFilter, teamFilter, minGames]);
+  useEffect(() => { setPage(1); }, [search, seasonFilter, teamFilter, minGames, controlFilter, flagFilter, outlierFilter]);
 
   const handleSort = (key: string) => {
     if (key === sortKey) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -144,7 +143,13 @@ export default function BeaterStatsView({
       .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   }, [teams, games, filteredSeasons, statsFilter]);
 
-  const filters = useMemo(() => ({ seasonId: seasonFilter || undefined, teamId: teamFilter || undefined }), [seasonFilter, teamFilter]);
+  const filters = useMemo(() => ({
+    seasonId: seasonFilter || undefined,
+    teamId: teamFilter || undefined,
+    controlFilter: controlFilter === 'all' ? undefined : controlFilter,
+    flagFilter: flagFilter === 'all' ? undefined : flagFilter,
+    outlierFilter
+  }), [seasonFilter, teamFilter, controlFilter, flagFilter, outlierFilter]);
 
   const soloStats = useMemo(() => computeBeaterSoloStats(events, players, games, filters), [events, players, games, filters]);
   const pairStats = useMemo(() => computeBeaterPairStats(events, players, games, filters), [events, players, games, filters]);
@@ -208,26 +213,6 @@ export default function BeaterStatsView({
               className={cn('px-3 py-1 font-medium transition-colors border-l border-gray-200', tab === 'team' ? 'bg-purple-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50')}>
               Team
             </button>
-          </div>
-          <select value={seasonFilter} onChange={e => setSeasonFilter?.(e.target.value)}
-            className="pl-2 pr-1 py-1 bg-white border border-gray-200 rounded-md text-xs outline-none focus:border-purple-400 cursor-pointer">
-            <option value="">All Seasons</option>
-            {filteredSeasons.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-          <select value={teamFilter} onChange={e => setTeamFilter?.(e.target.value)}
-            className="pl-2 pr-1 py-1 bg-white border border-gray-200 rounded-md text-xs outline-none focus:border-purple-400 cursor-pointer">
-            <option value="">All Teams</option>
-            {filteredTeams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-          </select>
-          <div className="flex items-center gap-1 bg-white border border-gray-200 rounded-md px-2 py-1">
-            <span className="text-xs text-gray-500 font-medium">Min GP:</span>
-            <input type="number" min="0" value={minGames || ''} onChange={e => setMinGames(parseInt(e.target.value) || 0)}
-              className="w-12 p-1 bg-white border-transparent rounded text-xs outline-none focus:border-purple-400 focus:ring-1 focus:ring-purple-400 -my-1" />
-          </div>
-          <div className="relative">
-            <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-400" />
-            <input type="text" placeholder="Search..." value={search} onChange={e => setSearch?.(e.target.value)}
-              className="pl-6 pr-2 py-1 bg-white border border-gray-200 rounded-md text-xs outline-none focus:border-purple-400 w-32" />
           </div>
         </div>
       </div>
