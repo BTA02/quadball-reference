@@ -1,0 +1,699 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 5a61688..ccfba52 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -69,6 +69,7 @@ import GameCastView from './components/GameCastView';
+ import PlayerProfileView from './components/PlayerProfileView';
+ import TeamProfileView from './components/TeamProfileView';
+ import GameBoxScoreView from './components/GameBoxScoreView';
++import StatsFilters from './components/StatsFilters';
+ import { enrichEventsWithGameTime, getScoreboardName } from './lib/statsComputations';
+ // --- Types ---
+ 
+@@ -157,6 +158,8 @@ interface Game {
+   awayTeamId: string;
+   tag?: string;
+   createdAt: any;
++  authorId?: string;
++  authorTeamId?: string;
+ }
+ 
+ interface Video {
+@@ -895,8 +898,260 @@ function UnifiedRosterEditor({
+   );
+ }
+ 
++// === EventsManagementTab ===
++function EventsManagementTab({ games, teams, players }: { games: Game[]; teams: Team[]; players: Player[] }) {
++  const [allGameDocs, setAllGameDocs] = useState<{ gameId: string; events: GameEvent[] }[]>([]);
++  const [loading, setLoading] = useState(false);
++  const [loaded, setLoaded] = useState(false);
++  const [filterGameId, setFilterGameId] = useState('');
++  const [filterMissing, setFilterMissing] = useState<'all' | 'no_player' | 'no_team' | 'no_type' | 'no_game'>('all');
++  const [filterType, setFilterType] = useState('');
++  const [sortField, setSortField] = useState<'gameId' | 'videoTime' | 'type'>('gameId');
++  const [sortAsc, setSortAsc] = useState(true);
++  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
++  const [batchField, setBatchField] = useState<'teamId' | 'playerId' | 'type' | 'position' | 'status'>('teamId');
++  const [batchValue, setBatchValue] = useState('');
++  const [saving, setSaving] = useState(false);
++
++  const loadEvents = async () => {
++    setLoading(true);
++    try {
++      const snap = await getDocs(collection(db, 'gameEvents'));
++      const docs = snap.docs.map(d => ({ gameId: d.id, events: (d.data().events || []) as GameEvent[] }));
++      setAllGameDocs(docs);
++      setLoaded(true);
++    } catch (e: any) {
++      toast.error('Failed to load events: ' + e.message);
++    } finally {
++      setLoading(false);
++    }
++  };
++
++  const flatEvents = useMemo(() => {
++    const flat: (GameEvent & { _docGameId: string })[] = [];
++    for (const d of allGameDocs) {
++      for (const ev of d.events) {
++        flat.push({ ...ev, _docGameId: d.gameId, gameId: ev.gameId || d.gameId });
++      }
++    }
++    return flat;
++  }, [allGameDocs]);
++
++  const filteredEvents = useMemo(() => {
++    let evs = [...flatEvents];
++    if (filterGameId.trim()) {
++      const q = filterGameId.trim().toLowerCase();
++      evs = evs.filter(e => 
++        (e.gameId || '').toLowerCase().includes(q) || 
++        (e.videoId || '').toLowerCase().includes(q)
++      );
++    }
++    if (filterType) evs = evs.filter(e => e.type === filterType);
++    if (filterMissing === 'no_player') evs = evs.filter(e => !e.playerId);
++    else if (filterMissing === 'no_team') evs = evs.filter(e => !e.teamId);
++    else if (filterMissing === 'no_type') evs = evs.filter(e => !e.type);
++    else if (filterMissing === 'no_game') evs = evs.filter(e => !e.gameId || e.gameId.includes('unknown'));
++    evs.sort((a, b) => {
++      let va: any = a[sortField as keyof GameEvent] ?? '';
++      let vb: any = b[sortField as keyof GameEvent] ?? '';
++      if (typeof va === 'string') va = va.toLowerCase();
++      if (typeof vb === 'string') vb = vb.toLowerCase();
++      if (va < vb) return sortAsc ? -1 : 1;
++      if (va > vb) return sortAsc ? 1 : -1;
++      return 0;
++    });
++    return evs;
++  }, [flatEvents, filterGameId, filterType, filterMissing, sortField, sortAsc]);
++
++  const toggleSelect = (id: string) => setSelectedIds(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
++  const selectAll = () => setSelectedIds(new Set(filteredEvents.map(e => e.id)));
++  const clearSel = () => setSelectedIds(new Set());
++
++  const handleBatchUpdate = async () => {
++    if (selectedIds.size === 0) { toast.error('No events selected.'); return; }
++    if (!confirm(`Update "${batchField}" to "${batchValue}" for ${selectedIds.size} event(s)?`)) return;
++    setSaving(true);
++    try {
++      const grouped = new Map<string, GameEvent[]>();
++      for (const d of allGameDocs) {
++        if (d.events.some(ev => selectedIds.has(ev.id))) grouped.set(d.gameId, d.events);
++      }
++      const batch = writeBatch(db);
++      for (const [docGameId, events] of grouped) {
++        const updated = events.map(ev => {
++          if (!selectedIds.has(ev.id)) return ev;
++          const val: any = (batchValue === 'null' || batchValue === '') ? null : batchValue;
++          return { ...ev, [batchField]: val };
++        });
++        batch.update(doc(db, 'gameEvents', docGameId), { events: updated });
++      }
++      await batch.commit();
++      setAllGameDocs(prev => prev.map(d => {
++        if (!grouped.has(d.gameId)) return d;
++        return { ...d, events: d.events.map(ev => { if (!selectedIds.has(ev.id)) return ev; const val: any = (batchValue === 'null' || batchValue === '') ? null : batchValue; return { ...ev, [batchField]: val } as GameEvent; }) };
++      }));
++      toast.success(`Updated ${selectedIds.size} event(s).`);
++      setSelectedIds(new Set());
++    } catch (e: any) {
++      toast.error('Batch update failed: ' + e.message);
++    } finally {
++      setSaving(false);
++    }
++  };
++
++  const EVENT_TYPES = ['goal','assist','shot','turnover','card','sub_in','sub_out','control_change','control_start','quadball_start','flag_released','flag_catch','gameStart','gamePause','gameEnd'];
++  const getPlayerName = (id?: string) => { if (!id) return ''; const p = players.find(pl => pl.id === id); return p ? `${p.firstName} ${p.lastName}` : id.slice(0,10)+'…'; };
++  const getTeamName = (id?: string) => { if (!id) return ''; const t = teams.find(tm => tm.id === id); return t ? t.name : id.slice(0,10)+'…'; };
++
++  return (
++    <div className="lg:col-span-3 space-y-4">
++      <div className="bg-gray-50 border border-gray-200 rounded-2xl p-6">
++        <div className="flex items-center justify-between mb-4">
++          <div>
++            <h3 className="text-xl font-bold text-gray-900">Event Manager</h3>
++            <p className="text-sm text-gray-500 mt-0.5">Browse, filter, and batch-update events across all games.</p>
++          </div>
++          <button onClick={loadEvents} disabled={loading}
++            className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl text-sm transition-all disabled:opacity-50">
++            {loading ? 'Loading…' : loaded ? '↻ Reload' : 'Load All Events'}
++          </button>
++        </div>
++
++        {loaded && <p className="text-xs text-gray-400 mb-4">{flatEvents.length.toLocaleString()} events across {allGameDocs.length} game documents.</p>}
++
++        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
++          <div>
++            <label className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1 block">Game / Video ID</label>
++            <input value={filterGameId} onChange={e => setFilterGameId(e.target.value)}
++              placeholder="Search ID contains…"
++              className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-red-500" />
++          </div>
++          <div>
++            <label className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1 block">Event Type</label>
++            <select value={filterType} onChange={e => setFilterType(e.target.value)}
++              className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-red-500">
++              <option value="">All Types</option>
++              {EVENT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
++            </select>
++          </div>
++          <div>
++            <label className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1 block">Missing Data</label>
++            <select value={filterMissing} onChange={e => setFilterMissing(e.target.value as any)}
++              className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-red-500">
++              <option value="all">Show All</option>
++              <option value="no_player">Missing Player</option>
++              <option value="no_team">Missing Team</option>
++              <option value="no_type">Missing Type</option>
++              <option value="no_game">Missing Game ID</option>
++            </select>
++          </div>
++          <div>
++            <label className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1 block">Sort By</label>
++            <div className="flex gap-1">
++              <select value={sortField} onChange={e => setSortField(e.target.value as any)}
++                className="flex-1 bg-white border border-gray-200 rounded-lg px-2 py-2 text-sm outline-none focus:border-red-500">
++                <option value="gameId">Game ID</option>
++                <option value="videoTime">Time</option>
++                <option value="type">Type</option>
++              </select>
++              <button onClick={() => setSortAsc(!sortAsc)}
++                className="px-2 py-2 bg-white border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 text-sm font-bold">
++                {sortAsc ? '↑' : '↓'}
++              </button>
++            </div>
++          </div>
++        </div>
++
++        {loaded && (
++          <div className="flex flex-wrap items-center gap-2 mb-4 bg-amber-50 border border-amber-200 rounded-xl p-3">
++            <span className="text-xs font-bold text-amber-700 whitespace-nowrap uppercase tracking-wider shrink-0">Batch Update ({selectedIds.size} selected)</span>
++            <select value={batchField} onChange={e => setBatchField(e.target.value as any)}
++              className="bg-white border border-amber-200 rounded-lg px-2 py-1.5 text-sm outline-none">
++              <option value="teamId">Team ID</option>
++              <option value="playerId">Player ID</option>
++              <option value="type">Event Type</option>
++              <option value="position">Position</option>
++              <option value="status">Status</option>
++            </select>
++            <input value={batchValue} onChange={e => setBatchValue(e.target.value)}
++              placeholder={batchField === 'type' ? 'e.g. goal' : batchField === 'status' ? 'verified / unverified' : 'value or "null" to clear'}
++              className="flex-1 min-w-[140px] bg-white border border-amber-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-amber-400" />
++            <button onClick={selectAll} className="text-xs font-bold px-2 py-1.5 bg-gray-700 hover:bg-gray-800 text-white rounded-lg transition-colors">All ({filteredEvents.length})</button>
++            <button onClick={clearSel} className="text-xs font-bold px-2 py-1.5 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg transition-colors">Clear</button>
++            <button onClick={handleBatchUpdate} disabled={saving || selectedIds.size === 0}
++              className="text-xs font-bold px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg transition-colors disabled:opacity-50">
++              {saving ? 'Saving…' : 'Apply'}
++            </button>
++          </div>
++        )}
++
++        {!loaded ? (
++          <div className="text-center py-16 text-gray-400">
++            <Database className="w-12 h-12 mx-auto mb-3 text-gray-200" />
++            <p className="font-bold">Click "Load All Events" to begin</p>
++          </div>
++        ) : (
++          <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
++            <div className="max-h-[600px] overflow-y-auto custom-scrollbar">
++              <table className="w-full text-xs">
++                <thead className="sticky top-0 bg-gray-50 border-b border-gray-200 z-10">
++                  <tr>
++                    <th className="p-2 w-8"><input type="checkbox" checked={selectedIds.size > 0 && selectedIds.size === filteredEvents.length} onChange={e => e.target.checked ? selectAll() : clearSel()} className="rounded" /></th>
++                    <th className="p-2 text-left text-[10px] uppercase tracking-wider text-gray-400 font-bold">Game ID</th>
++                    <th className="p-2 text-left text-[10px] uppercase tracking-wider text-gray-400 font-bold">Video ID</th>
++                    <th className="p-2 text-left text-[10px] uppercase tracking-wider text-gray-400 font-bold">Type</th>
++                    <th className="p-2 text-left text-[10px] uppercase tracking-wider text-gray-400 font-bold">Time</th>
++                    <th className="p-2 text-left text-[10px] uppercase tracking-wider text-gray-400 font-bold">Team</th>
++                    <th className="p-2 text-left text-[10px] uppercase tracking-wider text-gray-400 font-bold">Player</th>
++                    <th className="p-2 text-left text-[10px] uppercase tracking-wider text-gray-400 font-bold">Pos</th>
++                    <th className="p-2 text-left text-[10px] uppercase tracking-wider text-gray-400 font-bold">Status</th>
++                  </tr>
++                </thead>
++                <tbody className="divide-y divide-gray-100">
++                  {filteredEvents.slice(0, 500).map(ev => {
++                    const hasIssue = !ev.playerId || !ev.teamId;
++                    const isSel = selectedIds.has(ev.id);
++                    const vt = typeof ev.videoTime === 'number' ? `${Math.floor(ev.videoTime/60)}:${String(Math.floor(ev.videoTime%60)).padStart(2,'0')}` : '—';
++                    return (
++                      <tr key={ev.id} onClick={() => toggleSelect(ev.id)}
++                        className={cn('cursor-pointer transition-colors', isSel ? 'bg-amber-50 hover:bg-amber-100' : hasIssue ? 'bg-red-50/30 hover:bg-red-50' : 'hover:bg-gray-50')}>
++                        <td className="p-2 text-center"><input type="checkbox" checked={isSel} onChange={() => toggleSelect(ev.id)} onClick={e => e.stopPropagation()} className="rounded" /></td>
++                        <td className="p-2 font-mono text-gray-500 max-w-[120px] truncate" title={ev.gameId}>{ev.gameId}</td>
++                        <td className="p-2 font-mono text-gray-400 max-w-[120px] truncate" title={ev.videoId}>{ev.videoId || '—'}</td>
++                        <td className="p-2">
++                          <span className={cn('px-1.5 py-0.5 rounded font-bold text-[10px] uppercase',
++                            !ev.type ? 'bg-red-100 text-red-500' :
++                            ev.type === 'goal' ? 'bg-green-100 text-green-700' :
++                            ev.type.startsWith('sub') ? 'bg-blue-100 text-blue-700' :
++                            ev.type.includes('control') ? 'bg-emerald-100 text-emerald-700' :
++                            ev.type.includes('flag') ? 'bg-yellow-100 text-yellow-700' :
++                            'bg-gray-100 text-gray-600'
++                          )}>{ev.type || 'MISSING'}</span>
++                        </td>
++                        <td className="p-2 font-mono text-gray-500">{vt}</td>
++                        <td className={cn('p-2 truncate max-w-[90px]', !ev.teamId ? 'text-red-400' : 'text-gray-700')} title={ev.teamId || ''}>{getTeamName(ev.teamId) || <span className="italic">—</span>}</td>
++                        <td className={cn('p-2 truncate max-w-[90px]', !ev.playerId ? 'text-red-400' : 'text-gray-700')} title={ev.playerId || ''}>{getPlayerName(ev.playerId) || <span className="italic">—</span>}</td>
++                        <td className="p-2 text-gray-400">{ev.position || '—'}</td>
++                        <td className="p-2">{ev.status === 'verified' ? <span className="text-amber-500 font-bold">✓</span> : <span className="text-gray-300">—</span>}</td>
++                      </tr>
++                    );
++                  })}
++                </tbody>
++              </table>
++              {filteredEvents.length > 500 && <p className="text-center py-3 text-xs text-gray-400 border-t">Showing first 500 of {filteredEvents.length.toLocaleString()} — use filters to narrow down.</p>}
++              {filteredEvents.length === 0 && <div className="py-16 text-center text-gray-400">No events match the current filters.</div>}
++            </div>
++          </div>
++        )}
++      </div>
++    </div>
++  );
++}
++
+ function ManagementView({
++
+   teams,
++
+   seasons,
+   players,
+   videos,
+@@ -922,7 +1177,7 @@ function ManagementView({
+   onAddRole,
+   onRemoveRole
+ }: ManagementViewProps) {
+-  const [activeTab, setActiveTab] = useState<'teams' | 'seasons' | 'players' | 'rosters' | 'games' | 'import' | 'roles'>('teams');
++  const [activeTab, setActiveTab] = useState<'teams' | 'seasons' | 'players' | 'rosters' | 'games' | 'import' | 'roles' | 'events'>('teams');
+   const [newItemFirstName, setNewItemFirstName] = useState('');
+   const [newItemLastName, setNewItemLastName] = useState('');
+   const [newPlayerPreferredName, setNewPlayerPreferredName] = useState('');
+@@ -1028,7 +1283,7 @@ function ManagementView({
+           </button>
+         </div>
+         <div className="flex bg-gray-50 p-1 rounded-xl border border-gray-200">
+-          {(['teams', 'seasons', 'players', 'rosters', 'games', 'roles', 'import'] as const).map(tab => (
++          {(['teams', 'seasons', 'players', 'rosters', 'games', 'roles', 'events', 'import'] as const).map(tab => (
+             <button
+               key={tab}
+               onClick={() => setActiveTab(tab)}
+@@ -1044,7 +1299,9 @@ function ManagementView({
+       </div>
+ 
+       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+-        {activeTab === 'import' ? (
++        {activeTab === 'events' ? (
++          <EventsManagementTab games={games} teams={teams} players={players} />
++        ) : activeTab === 'import' ? (
+           <div className="lg:col-span-3 space-y-6">
+             <div className="bg-gray-50 border border-gray-200 rounded-2xl p-8">
+               <div className="flex items-center gap-4 mb-8">
+@@ -2058,7 +2315,7 @@ function ManagementView({
+                                     });
+                                   }
+ 
+-                                  setProgress(100);
++                                  setImportProgress(100);
+                                   toast.success(`Sandbox Mode Loaded: ${csvData.length} records pushed to memory.`);
+                                 } else {
+                                   for (let i = 0; i < gameGroups.length; i += BATCH_SIZE) {
+@@ -3202,8 +3459,8 @@ export default function App() {
+   const [simulateRole, setSimulateRole] = useState<'voter' | 'author' | 'trusted'>('trusted');
+   const [userRoles, setUserRoles] = useState<{authors: string[]; trusted: string[]}>({authors: [], trusted: []});
+   // Effective role: admin can simulate any role; otherwise check config assignments
+-  const effectiveRole = isAdmin ? simulateRole : userRoles.trusted.includes(user?.email || '') ? 'trusted' : userRoles.authors.includes(user?.email || '') ? 'author' : 'voter';
+-  const [statsFilter, setStatsFilter] = useState<'all' | 'verified' | 'legacy'>('all');
++  const effectiveRole = isAdmin ? simulateRole : userRoles.trusted.includes(user?.email || '') ? 'trusted' : user ? 'author' : 'voter';
++  const [statsFilter, setStatsFilter] = useState<'all' | 'verified'>('all');
+ 
+   // Demo data for when Firestore is unavailable
+   const [demoData, setDemoData] = useState<{
+@@ -3226,6 +3483,11 @@ export default function App() {
+   const [statsSeasonId, setStatsSeasonId] = useState<string>('');
+   const [statsTeamId, setStatsTeamId] = useState<string>('');
+   const [statsSearch, setStatsSearch] = useState<string>('');
++  const [statsMinGames, setStatsMinGames] = useState<number>(1);
++  const [statsControlFilter, setStatsControlFilter] = useState<'all' | 'with' | 'without'>('all');
++  const [statsFlagFilter, setStatsFlagFilter] = useState<'all' | 'on' | 'off'>('all');
++  const [statsOutlierFilter, setStatsOutlierFilter] = useState<'include' | 'exclude'>('include');
++  const [statsPositionFilter, setStatsPositionFilter] = useState<'all' | 'chaser' | 'keeper'>('all');
+ 
+   // Resolve which data to use for stats: demo data takes priority
+   const statsPlayers = demoData ? demoData.players : allPlayers;
+@@ -3244,19 +3506,59 @@ export default function App() {
+   }, [statsSeasons]);
+ 
+   const statsGames = useMemo(() => {
+-    let validGames = statsGamesRaw;
+-    if (statsFilter !== 'legacy') {
+-      validGames = validGames.filter(g => !legacySeasonIds.has(g.seasonId));
+-    }
+-    return validGames;
+-  }, [statsGamesRaw, statsFilter, legacySeasonIds]);
++    const currentSeasonObj = statsSeasons.find(s => (s.name || '').toLowerCase().includes('2025'));
++    const currentSeasonId = currentSeasonObj ? currentSeasonObj.id : '2024-2025';
++    const currentUserTeamId = teams.find(t => t.emails?.includes(user?.email || ''))?.id;
++
++    return statsGamesRaw.filter(g => {
++      // 1. Strip legacy entirely
++      if (legacySeasonIds.has(g.seasonId)) return false;
++
++      // 2. Hide current season games from guests / non-authors
++      if (!user) {
++        if (g.seasonId !== currentSeasonId) return true;
++        return false;
++      } else {
++        const isTrusted = userRoles.trusted?.includes(user.email || '');
++        if (!isTrusted) {
++          if (g.authorId === user.uid) return true;
++          if (currentUserTeamId && g.authorTeamId === currentUserTeamId) return true;
++          if (g.seasonId !== currentSeasonId) return true;
++          return false;
++        }
++      }
++      return true;
++    });
++  }, [statsGamesRaw, legacySeasonIds, user, userRoles, statsSeasons, teams]);
+ 
+   const statsEvents = useMemo(() => {
+-     let evs = Array.from(allEvents.values());
++    let evs = Array.from(statsEventsRaw.values());
+     if (statsFilter === 'verified') evs = evs.filter(e => e.status === 'verified');
++
++    const currentSeasonObj = statsSeasons.find(s => (s.name || '').toLowerCase().includes('2025'));
++    const currentSeasonId = currentSeasonObj ? currentSeasonObj.id : '2024-2025';
++
++    if (!user) {
++      evs = evs.filter(e => {
++        const game = statsGames.find(g => g.id === e.gameId);
++        if (game && game.seasonId !== currentSeasonId) return true;
++        return false;
++      });
++    } else {
++      const isTrusted = userRoles.trusted?.includes(user.email || '');
++      if (!isTrusted) {
++        evs = evs.filter(e => {
++          const game = statsGames.find(g => g.id === e.gameId);
++          if (e.userId === user.uid) return true;
++          if (game && game.seasonId !== currentSeasonId) return true;
++          return false;
++        });
++      }
++    }
++
+     const validGameIds = new Set(statsGames.map(g => g.id));
+     return evs.filter(e => validGameIds.has(e.gameId));
+-  }, [statsEventsRaw, statsFilter, statsGames]);
++  }, [statsEventsRaw, statsFilter, statsGames, user, userRoles, statsSeasons]);
+   const [newVideoData, setNewVideoData] = useState({
+     seasonId: '',
+     homeTeamId: '',
+@@ -3897,26 +4199,44 @@ export default function App() {
+   };
+ 
+   const handleDeleteGame = async (id: string) => {
+-    const relatedVideos = statsVideos.filter(v => v.gameId === id);
+-    const relatedEventsCount = statsEvents.filter(e => e.gameId === id).length;
+-    if (!confirm(`Delete this Game? WARNING: This will permanently destroy ${relatedVideos.length} connected Videos AND ${relatedEventsCount} recorded statistical events attached to them. Proceed?`)) return;
++    const relatedVideos = videos.filter(v => v.gameId === id);
++    const relatedEventsCount = allEvents.filter(e => e.gameId === id).length;
++    const shortId = id.length > 16 ? id.substring(0, 16) + '…' : id;
++    const typed = prompt(
++      `⚠️ DESTRUCTIVE ACTION ⚠️\n\nThis will permanently delete:\n• 1 game (${id})\n• ${relatedVideos.length} connected video(s)\n• ${relatedEventsCount} recorded events\n\nType "${shortId}" to confirm:`
++    );
++    if (!typed || typed.trim() !== shortId) {
++      toast.info('Deletion cancelled.');
++      return;
++    }
+ 
+     try {
+-      const g = games.find(g => g.id === id);
+-      if (g) {
+-      const oldAgg = { id: g.id, seasonId: g.seasonId || '', homeTeamId: g.homeTeamId || '', awayTeamId: g.awayTeamId || '', isVerified: g.isVerified || false, createdAt: serializeTimestamp(g.createdAt) };
+-        await updateDoc(doc(db, 'aggregated', 'games'), { data: arrayRemove(oldAgg) }).catch(() => {});
++      // 1. Remove from aggregated games (read-filter-write to avoid arrayRemove field mismatch)
++      const aggGamesSnap = await getDoc(doc(db, 'aggregated', 'games'));
++      if (aggGamesSnap.exists()) {
++        const currentData = (aggGamesSnap.data().data || []) as any[];
++        const filtered = currentData.filter((g: any) => g.id !== id);
++        await updateDoc(doc(db, 'aggregated', 'games'), { data: filtered });
+       }
++
++      // 2. Delete the individual game doc
+       await deleteDoc(doc(db, 'games', id));
+-      
+-      // Cascade to Videos
+-      for (const v of relatedVideos) {
+-        const oldAgg = { id: v.id, gameId: v.gameId, videoId: v.videoId, youtubeId: v.youtubeId || '', title: v.title || '', createdAt: serializeTimestamp(v.createdAt) };
+-        await deleteDoc(doc(db, 'videos', v.id));
+-        await updateDoc(doc(db, 'aggregated', 'videos'), { data: arrayRemove(oldAgg) }).catch(() => {});
++
++      // 3. Cascade to Videos — remove from aggregated and delete docs
++      if (relatedVideos.length > 0) {
++        const aggVideosSnap = await getDoc(doc(db, 'aggregated', 'videos'));
++        if (aggVideosSnap.exists()) {
++          const currentVideoData = (aggVideosSnap.data().data || []) as any[];
++          const videoIds = new Set(relatedVideos.map(v => v.id));
++          const filteredVideos = currentVideoData.filter((v: any) => !videoIds.has(v.id));
++          await updateDoc(doc(db, 'aggregated', 'videos'), { data: filteredVideos });
++        }
++        for (const v of relatedVideos) {
++          await deleteDoc(doc(db, 'videos', v.id));
++        }
+       }
+ 
+-      // Cascade Destroy entire Game Event Log natively!
++      // 4. Cascade Destroy entire Game Event Log
+       await deleteDoc(doc(db, 'gameEvents', id));
+ 
+       toast.success('Game and all connected dependencies wiped');
+@@ -4589,33 +4909,32 @@ export default function App() {
+             {/* Data source indicator */}
+             <div className="flex items-center gap-3 mb-2 text-[10px] font-mono text-gray-400">
+               <span className={demoData ? 'text-amber-500' : 'text-green-500'}>● {demoData ? 'Demo CSV' : 'Firestore'}</span>
+-              <span>{statsEvents.length.toLocaleString()} events{statsFilter === 'verified' ? ' (verified)' : statsFilter === 'legacy' ? ' (legacy)' : ''}</span>
++              <span>{statsEvents.length.toLocaleString()} events{statsFilter === 'verified' ? ' (verified)' : ''}</span>
+               <span>{statsPlayers.length} players</span>
+               <span>{statsGames.length} games</span>
+               <span>{statsTeams.length} teams</span>
+               <span>{statsSeasons.length} seasons</span>
+-              {!demoData && (
+-                <button
+-                  onClick={() => { 
+-                    loadGlobalData(); 
+-                    if(view === 'stats' || view === 'review') {
+-                      setEventsLoaded(false); 
+-                      loadAllEvents(); 
+-                    }
+-                    toast.success('Refreshing data...'); 
+-                  }}
+-                  className="px-2 py-0.5 bg-gray-100 hover:bg-gray-200 rounded text-gray-500 transition-colors"
+-                >
+-                  ↻ Refresh
+-                </button>
+-              )}
++              <button
++                onClick={() => {
++                  loadGlobalData();
++                  if (view === 'stats' || view === 'review') {
++                    setEventsLoaded(false);
++                    loadAllEvents();
++                  }
++                  toast.success('Refreshing data...');
++                }}
++                className="px-2 py-0.5 bg-gray-100 hover:bg-gray-200 rounded text-gray-500 transition-colors"
++                id="refresh-btn"
++              >
++                ↻ Refresh
++              </button>
+             </div>
+             {/* Stats toolbar */}
+             <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+               <div className="flex items-center border border-gray-200 rounded-md overflow-hidden w-fit bg-white text-xs">
+                 <button onClick={() => setStatsSubView('quadball')}
+                   className={cn('px-3 py-1.5 font-medium transition-colors',
+-                    statsSubView === 'quadball' ? 'bg-green-600 text-white' : 'text-gray-500 hover:bg-gray-50')}>
++                    statsSubView === 'quadball' ? 'bg-white text-green-600' : 'text-gray-500 hover:bg-gray-50')}>
+                   Quadball
+                 </button>
+                 <button onClick={() => setStatsSubView('beaters')}
+@@ -4630,70 +4949,88 @@ export default function App() {
+                 </button>
+               </div>
+               <div className="flex border rounded-lg bg-gray-50 overflow-hidden text-xs font-bold shadow-sm">
+-                {(['all', 'verified', 'legacy'] as const).map(option => (
++                {(['verified', 'all'] as const).map(option => (
+                   <button
+                     key={option}
+                     onClick={() => setStatsFilter(option)}
+                     className={cn(
+                       'flex items-center gap-1.5 px-3 py-1.5 transition-all outline-none',
+-                      statsFilter === option ? (option === 'verified' ? 'bg-amber-500/10 text-amber-600 shadow-sm border border-amber-500/30' : option === 'legacy' ? 'bg-purple-500/10 text-purple-600 shadow-sm border border-purple-500/30' : 'bg-white shadow-sm border border-gray-200 text-gray-800') : 'text-gray-400 hover:text-gray-600 border border-transparent hover:bg-white/50'
++                      statsFilter === option ? (option === 'verified' ? 'bg-amber-500/10 text-amber-600 shadow-sm border border-amber-500/30' : 'bg-white shadow-sm border border-gray-200 text-gray-800') : 'text-gray-400 hover:text-gray-600 border border-transparent hover:bg-white/50'
+                     )}
+                   >
+                     {option === 'verified' && <ShieldCheck className="w-3.5 h-3.5" />}
+-                    {option === 'all' ? 'Stats' : option === 'verified' ? 'Verified Only' : 'Legacy'}
++                    {option === 'all' ? 'Pending' : 'Verified Only'}
+                   </button>
+                 ))}
+               </div>
+             </div>
+ 
++            {/* Shared Filters component */}
++            <StatsFilters
++              viewType={statsSubView as 'quadball' | 'beaters' | 'seekers'}
++              seasonId={statsSeasonId} onSeasonChange={setStatsSeasonId}
++              teamId={statsTeamId} onTeamChange={setStatsTeamId}
++              seasons={statsSeasons} teams={statsTeams}
++              search={statsSearch} onSearchChange={setStatsSearch}
++              minGames={statsMinGames} onMinGamesChange={setStatsMinGames}
++              controlFilter={statsControlFilter} onControlFilterChange={setStatsControlFilter}
++              flagFilter={statsFlagFilter} onFlagFilterChange={setStatsFlagFilter}
++              outlierFilter={statsOutlierFilter} onOutlierFilterChange={setStatsOutlierFilter}
++              positionFilter={statsSubView === 'quadball' ? statsPositionFilter : undefined}
++              onPositionFilterChange={statsSubView === 'quadball' ? setStatsPositionFilter : undefined}
++            />
++
+             {statsSubView === 'quadball' ? (
+-              <QuadballStatsView 
+-                players={statsPlayers} 
+-                events={statsEvents} 
+-                teams={statsTeams} 
+-                games={statsGames} 
+-                seasons={statsSeasons} 
++              <QuadballStatsView
++                players={statsPlayers}
++                events={statsEvents}
++                teams={statsTeams}
++                games={statsGames}
++                seasons={statsSeasons}
+                 statsFilter={statsFilter}
+                 seasonId={statsSeasonId}
+-                onSeasonChange={setStatsSeasonId}
+                 teamId={statsTeamId}
+-                onTeamChange={setStatsTeamId}
+                 search={statsSearch}
+-                onSearchChange={setStatsSearch}
++                minGames={statsMinGames}
++                controlFilter={statsControlFilter}
++                flagFilter={statsFlagFilter}
++                outlierFilter={statsOutlierFilter}
++                positionFilter={statsPositionFilter}
+                 onPlayerSelect={handlePlayerProfileClick}
+                 onTeamSelect={handleTeamProfileClick}
+               />
+             ) : statsSubView === 'beaters' ? (
+-              <BeaterStatsView 
+-                players={statsPlayers} 
+-                events={statsEvents} 
+-                teams={statsTeams} 
+-                games={statsGames} 
+-                seasons={statsSeasons} 
++              <BeaterStatsView
++                players={statsPlayers}
++                events={statsEvents}
++                teams={statsTeams}
++                games={statsGames}
++                seasons={statsSeasons}
+                 statsFilter={statsFilter}
+                 seasonId={statsSeasonId}
+-                onSeasonChange={setStatsSeasonId}
+                 teamId={statsTeamId}
+-                onTeamChange={setStatsTeamId}
+                 search={statsSearch}
+-                onSearchChange={setStatsSearch}
++                minGames={statsMinGames}
++                controlFilter={statsControlFilter}
++                flagFilter={statsFlagFilter}
++                outlierFilter={statsOutlierFilter}
+                 onPlayerSelect={handlePlayerProfileClick}
+                 onTeamSelect={handleTeamProfileClick}
+               />
+             ) : statsSubView === 'seekers' ? (
+-              <SeekerStatsView 
+-                players={statsPlayers} 
+-                events={statsEvents} 
+-                teams={statsTeams} 
+-                games={statsGames} 
+-                seasons={statsSeasons} 
++              <SeekerStatsView
++                players={statsPlayers}
++                events={statsEvents}
++                teams={statsTeams}
++                games={statsGames}
++                seasons={statsSeasons}
+                 statsFilter={statsFilter}
+                 seasonId={statsSeasonId}
+-                onSeasonChange={setStatsSeasonId}
+                 teamId={statsTeamId}
+-                onTeamChange={setStatsTeamId}
+                 search={statsSearch}
+-                onSearchChange={setStatsSearch}
++                minGames={statsMinGames}
++                controlFilter={statsControlFilter}
++                flagFilter={statsFlagFilter}
+                 onPlayerSelect={handlePlayerProfileClick}
+               />
+               ) : null}
+@@ -4728,9 +5065,9 @@ export default function App() {
+               <h2 className="text-4xl font-extrabold text-gray-900 tracking-tight">Watch and Contribute</h2>
+             </div>
+ 
+-            <div className={cn("grid grid-cols-1 gap-8 items-start", (effectiveRole === 'admin' || effectiveRole === 'author' || effectiveRole === 'trusted') ? "lg:grid-cols-3 md:grid-cols-2" : "md:grid-cols-2 max-w-4xl mx-auto")}>
++            <div className={cn("grid grid-cols-1 gap-8 items-start", (effectiveRole === 'author' || effectiveRole === 'trusted') ? "lg:grid-cols-3 md:grid-cols-2" : "md:grid-cols-2 max-w-4xl mx-auto")}>
+               {/* Start New Video */}
+-              {['admin', 'author', 'trusted'].includes(effectiveRole) && (
++              {['author', 'trusted'].includes(effectiveRole) && (
+               <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
+                 <div className="bg-gray-50/50 border-b border-gray-100 p-5">
+                   <h3 className="text-xl font-bold text-gray-900 flex items-center gap-3"><Play className="w-5 h-5 text-red-600" /> Start Tracking New Video</h3>
+@@ -4968,6 +5305,22 @@ export default function App() {
+               {/* Horizontal Recent Events Ticker */}
+               <div className="bg-gray-50 border border-gray-200 rounded-xl p-2 shrink-0 flex items-center gap-3 overflow-x-auto custom-scrollbar">
+                  <div className="flex items-center gap-2 sticky left-0 bg-gray-50 pr-4 z-10 shrink-0 border-r border-gray-200 py-1">
++                    {/* -5 / +5 Seek Buttons */}
++                    <button
++                      onClick={() => { if (player) { const t = player.getCurrentTime(); player.seekTo(Math.max(0, t - 5), true); } }}
++                      title="Seek back 5 seconds"
++                      className="flex items-center justify-center h-7 px-2 rounded bg-gray-800 hover:bg-gray-700 active:scale-95 text-white text-[10px] font-bold tracking-tight transition-all select-none"
++                    >
++                      −5s
++                    </button>
++                    <button
++                      onClick={() => { if (player) { const t = player.getCurrentTime(); player.seekTo(t + 5, true); } }}
++                      title="Seek forward 5 seconds"
++                      className="flex items-center justify-center h-7 px-2 rounded bg-gray-800 hover:bg-gray-700 active:scale-95 text-white text-[10px] font-bold tracking-tight transition-all select-none"
++                    >
++                      +5s
++                    </button>
++                    <div className="w-px h-5 bg-gray-300 mx-1" />
+                     <span className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Recent</span>
+                     <span className="relative flex h-2 w-2">
+                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+@@ -5279,11 +5632,22 @@ export default function App() {
+                             <div key={draft.id} className="p-2.5 bg-emerald-50/20 border border-emerald-200 rounded-lg shadow-sm flex flex-col gap-2 animate-in fade-in slide-in-from-top-2">
+                               {/* Header */}
+                               <div className="flex items-center justify-between">
+-                                <div className="flex items-center gap-2">
++                                <div className="flex items-center gap-1.5">
++                                  {/* -1s / +1s time adjusters */}
++                                  <button
++                                    onClick={() => setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, videoTime: Math.max(0, d.videoTime - 1) } : d))}
++                                    title="Shift timestamp back 1 second"
++                                    className="h-5 w-5 flex items-center justify-center rounded bg-gray-200 hover:bg-gray-300 active:scale-95 text-gray-700 text-[10px] font-bold transition-all select-none"
++                                  >−</button>
+                                   <div className="px-2 py-0.5 bg-gray-800 text-white rounded text-[10px] font-mono shadow-inner tracking-wider">
+                                     {formatTime(draft.videoTime)}
+                                   </div>
+-                                  <span className="text-xs font-bold text-gray-600">Pending Log</span>
++                                  <button
++                                    onClick={() => setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, videoTime: d.videoTime + 1 } : d))}
++                                    title="Shift timestamp forward 1 second"
++                                    className="h-5 w-5 flex items-center justify-center rounded bg-gray-200 hover:bg-gray-300 active:scale-95 text-gray-700 text-[10px] font-bold transition-all select-none"
++                                  >+</button>
++                                  <span className="text-xs font-bold text-gray-600 ml-1">Pending Log</span>
+                                 </div>
+                               </div>
+                               

@@ -877,12 +877,12 @@ export function computeAdvancedStats(
       minutesPlayed: Math.round(minutes * 10) / 10,
       teamPossessions: accum.teamPossessions,
       oppPossessions: accum.oppPossessions,
-      goalsPerTwenty: minutes > 0 ? Math.round((accum.goals / minutes) * 20 * 100) / 100 : 0,
-      assistsPerTwenty: minutes > 0 ? Math.round((accum.assists / minutes) * 20 * 100) / 100 : 0,
-      pointsPerTwenty: minutes > 0 ? Math.round((points / minutes) * 20 * 100) / 100 : 0,
-      goalsPerGame: accum.gameIds.size > 0 ? Math.round((accum.goals / accum.gameIds.size) * 100) / 100 : 0,
-      assistsPerGame: accum.gameIds.size > 0 ? Math.round((accum.assists / accum.gameIds.size) * 100) / 100 : 0,
-      pointsPerGame: accum.gameIds.size > 0 ? Math.round((points / accum.gameIds.size) * 100) / 100 : 0,
+      goalsPerTwenty: minutes > 0 ? Math.round((accum.goals / minutes) * 20 * 100) / 100 : ('N/A' as any),
+      assistsPerTwenty: minutes > 0 ? Math.round((accum.assists / minutes) * 20 * 100) / 100 : ('N/A' as any),
+      pointsPerTwenty: minutes > 0 ? Math.round((points / minutes) * 20 * 100) / 100 : ('N/A' as any),
+      goalsPerGame: accum.gameIds.size > 0 ? Math.round((accum.goals / accum.gameIds.size) * 100) / 100 : ('N/A' as any),
+      assistsPerGame: accum.gameIds.size > 0 ? Math.round((accum.assists / accum.gameIds.size) * 100) / 100 : ('N/A' as any),
+      pointsPerGame: accum.gameIds.size > 0 ? Math.round((points / accum.gameIds.size) * 100) / 100 : ('N/A' as any),
       shotPct: (accum.goals + accum.shots) > 0 ? Math.round((accum.goals / (accum.goals + accum.shots)) * 1000) / 10 : 0,
       assistToTurnover: accum.turnovers > 0
         ? Math.round((accum.assists / accum.turnovers) * 100) / 100
