@@ -69,6 +69,7 @@ import GameCastView from './components/GameCastView';
 import PlayerProfileView from './components/PlayerProfileView';
 import TeamProfileView from './components/TeamProfileView';
 import GameBoxScoreView from './components/GameBoxScoreView';
+import StatsFilters from './components/StatsFilters';
 import { enrichEventsWithGameTime, getScoreboardName } from './lib/statsComputations';
 // --- Types ---
 
@@ -157,6 +158,8 @@ interface Game {
   awayTeamId: string;
   tag?: string;
   createdAt: any;
+  authorId?: string;
+  authorTeamId?: string;
 }
 
 interface Video {
@@ -2058,7 +2061,7 @@ function ManagementView({
                                     });
                                   }
 
-                                  setProgress(100);
+                                  setImportProgress(100);
                                   toast.success(`Sandbox Mode Loaded: ${csvData.length} records pushed to memory.`);
                                 } else {
                                   for (let i = 0; i < gameGroups.length; i += BATCH_SIZE) {
@@ -3202,8 +3205,8 @@ export default function App() {
   const [simulateRole, setSimulateRole] = useState<'voter' | 'author' | 'trusted'>('trusted');
   const [userRoles, setUserRoles] = useState<{authors: string[]; trusted: string[]}>({authors: [], trusted: []});
   // Effective role: admin can simulate any role; otherwise check config assignments
-  const effectiveRole = isAdmin ? simulateRole : userRoles.trusted.includes(user?.email || '') ? 'trusted' : userRoles.authors.includes(user?.email || '') ? 'author' : 'voter';
-  const [statsFilter, setStatsFilter] = useState<'all' | 'verified' | 'legacy'>('all');
+  const effectiveRole = isAdmin ? simulateRole : userRoles.trusted.includes(user?.email || '') ? 'trusted' : user ? 'author' : 'voter';
+  const [statsFilter, setStatsFilter] = useState<'all' | 'verified'>('all');
 
   // Demo data for when Firestore is unavailable
   const [demoData, setDemoData] = useState<{
@@ -3226,6 +3229,11 @@ export default function App() {
   const [statsSeasonId, setStatsSeasonId] = useState<string>('');
   const [statsTeamId, setStatsTeamId] = useState<string>('');
   const [statsSearch, setStatsSearch] = useState<string>('');
+  const [statsMinGames, setStatsMinGames] = useState<number>(1);
+  const [statsControlFilter, setStatsControlFilter] = useState<'all' | 'with' | 'without'>('all');
+  const [statsFlagFilter, setStatsFlagFilter] = useState<'all' | 'on' | 'off'>('all');
+  const [statsOutlierFilter, setStatsOutlierFilter] = useState<'include' | 'exclude'>('include');
+  const [statsPositionFilter, setStatsPositionFilter] = useState<'all' | 'chaser' | 'keeper'>('all');
 
   // Resolve which data to use for stats: demo data takes priority
   const statsPlayers = demoData ? demoData.players : allPlayers;
@@ -3244,19 +3252,59 @@ export default function App() {
   }, [statsSeasons]);
 
   const statsGames = useMemo(() => {
-    let validGames = statsGamesRaw;
-    if (statsFilter !== 'legacy') {
-      validGames = validGames.filter(g => !legacySeasonIds.has(g.seasonId));
-    }
-    return validGames;
-  }, [statsGamesRaw, statsFilter, legacySeasonIds]);
+    const currentSeasonObj = statsSeasons.find(s => (s.name || '').toLowerCase().includes('2025'));
+    const currentSeasonId = currentSeasonObj ? currentSeasonObj.id : '2024-2025';
+    const currentUserTeamId = teams.find(t => t.emails?.includes(user?.email || ''))?.id;
+
+    return statsGamesRaw.filter(g => {
+      // 1. Strip legacy entirely
+      if (legacySeasonIds.has(g.seasonId)) return false;
+
+      // 2. Hide current season games from guests / non-authors
+      if (!user) {
+        if (g.seasonId !== currentSeasonId) return true;
+        return false;
+      } else {
+        const isTrusted = userRoles.trusted?.includes(user.email || '');
+        if (!isTrusted) {
+          if (g.authorId === user.uid) return true;
+          if (currentUserTeamId && g.authorTeamId === currentUserTeamId) return true;
+          if (g.seasonId !== currentSeasonId) return true;
+          return false;
+        }
+      }
+      return true;
+    });
+  }, [statsGamesRaw, legacySeasonIds, user, userRoles, statsSeasons, teams]);
 
   const statsEvents = useMemo(() => {
-     let evs = Array.from(allEvents.values());
+    let evs = Array.from(statsEventsRaw.values());
     if (statsFilter === 'verified') evs = evs.filter(e => e.status === 'verified');
+
+    const currentSeasonObj = statsSeasons.find(s => (s.name || '').toLowerCase().includes('2025'));
+    const currentSeasonId = currentSeasonObj ? currentSeasonObj.id : '2024-2025';
+
+    if (!user) {
+      evs = evs.filter(e => {
+        const game = statsGames.find(g => g.id === e.gameId);
+        if (game && game.seasonId !== currentSeasonId) return true;
+        return false;
+      });
+    } else {
+      const isTrusted = userRoles.trusted?.includes(user.email || '');
+      if (!isTrusted) {
+        evs = evs.filter(e => {
+          const game = statsGames.find(g => g.id === e.gameId);
+          if (e.userId === user.uid) return true;
+          if (game && game.seasonId !== currentSeasonId) return true;
+          return false;
+        });
+      }
+    }
+
     const validGameIds = new Set(statsGames.map(g => g.id));
     return evs.filter(e => validGameIds.has(e.gameId));
-  }, [statsEventsRaw, statsFilter, statsGames]);
+  }, [statsEventsRaw, statsFilter, statsGames, user, userRoles, statsSeasons]);
   const [newVideoData, setNewVideoData] = useState({
     seasonId: '',
     homeTeamId: '',
@@ -4589,33 +4637,32 @@ export default function App() {
             {/* Data source indicator */}
             <div className="flex items-center gap-3 mb-2 text-[10px] font-mono text-gray-400">
               <span className={demoData ? 'text-amber-500' : 'text-green-500'}>● {demoData ? 'Demo CSV' : 'Firestore'}</span>
-              <span>{statsEvents.length.toLocaleString()} events{statsFilter === 'verified' ? ' (verified)' : statsFilter === 'legacy' ? ' (legacy)' : ''}</span>
+              <span>{statsEvents.length.toLocaleString()} events{statsFilter === 'verified' ? ' (verified)' : ''}</span>
               <span>{statsPlayers.length} players</span>
               <span>{statsGames.length} games</span>
               <span>{statsTeams.length} teams</span>
               <span>{statsSeasons.length} seasons</span>
-              {!demoData && (
-                <button
-                  onClick={() => { 
-                    loadGlobalData(); 
-                    if(view === 'stats' || view === 'review') {
-                      setEventsLoaded(false); 
-                      loadAllEvents(); 
-                    }
-                    toast.success('Refreshing data...'); 
-                  }}
-                  className="px-2 py-0.5 bg-gray-100 hover:bg-gray-200 rounded text-gray-500 transition-colors"
-                >
-                  ↻ Refresh
-                </button>
-              )}
+              <button
+                onClick={() => {
+                  loadGlobalData();
+                  if (view === 'stats' || view === 'review') {
+                    setEventsLoaded(false);
+                    loadAllEvents();
+                  }
+                  toast.success('Refreshing data...');
+                }}
+                className="px-2 py-0.5 bg-gray-100 hover:bg-gray-200 rounded text-gray-500 transition-colors"
+                id="refresh-btn"
+              >
+                ↻ Refresh
+              </button>
             </div>
             {/* Stats toolbar */}
             <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
               <div className="flex items-center border border-gray-200 rounded-md overflow-hidden w-fit bg-white text-xs">
                 <button onClick={() => setStatsSubView('quadball')}
                   className={cn('px-3 py-1.5 font-medium transition-colors',
-                    statsSubView === 'quadball' ? 'bg-green-600 text-white' : 'text-gray-500 hover:bg-gray-50')}>
+                    statsSubView === 'quadball' ? 'bg-white text-green-600' : 'text-gray-500 hover:bg-gray-50')}>
                   Quadball
                 </button>
                 <button onClick={() => setStatsSubView('beaters')}
@@ -4630,70 +4677,88 @@ export default function App() {
                 </button>
               </div>
               <div className="flex border rounded-lg bg-gray-50 overflow-hidden text-xs font-bold shadow-sm">
-                {(['all', 'verified', 'legacy'] as const).map(option => (
+                {(['verified', 'all'] as const).map(option => (
                   <button
                     key={option}
                     onClick={() => setStatsFilter(option)}
                     className={cn(
                       'flex items-center gap-1.5 px-3 py-1.5 transition-all outline-none',
-                      statsFilter === option ? (option === 'verified' ? 'bg-amber-500/10 text-amber-600 shadow-sm border border-amber-500/30' : option === 'legacy' ? 'bg-purple-500/10 text-purple-600 shadow-sm border border-purple-500/30' : 'bg-white shadow-sm border border-gray-200 text-gray-800') : 'text-gray-400 hover:text-gray-600 border border-transparent hover:bg-white/50'
+                      statsFilter === option ? (option === 'verified' ? 'bg-amber-500/10 text-amber-600 shadow-sm border border-amber-500/30' : 'bg-white shadow-sm border border-gray-200 text-gray-800') : 'text-gray-400 hover:text-gray-600 border border-transparent hover:bg-white/50'
                     )}
                   >
                     {option === 'verified' && <ShieldCheck className="w-3.5 h-3.5" />}
-                    {option === 'all' ? 'Stats' : option === 'verified' ? 'Verified Only' : 'Legacy'}
+                    {option === 'all' ? 'Pending' : 'Verified Only'}
                   </button>
                 ))}
               </div>
             </div>
 
+            {/* Shared Filters component */}
+            <StatsFilters
+              viewType={statsSubView as 'quadball' | 'beaters' | 'seekers'}
+              seasonId={statsSeasonId} onSeasonChange={setStatsSeasonId}
+              teamId={statsTeamId} onTeamChange={setStatsTeamId}
+              seasons={statsSeasons} teams={statsTeams}
+              search={statsSearch} onSearchChange={setStatsSearch}
+              minGames={statsMinGames} onMinGamesChange={setStatsMinGames}
+              controlFilter={statsControlFilter} onControlFilterChange={setStatsControlFilter}
+              flagFilter={statsFlagFilter} onFlagFilterChange={setStatsFlagFilter}
+              outlierFilter={statsOutlierFilter} onOutlierFilterChange={setStatsOutlierFilter}
+              positionFilter={statsSubView === 'quadball' ? statsPositionFilter : undefined}
+              onPositionFilterChange={statsSubView === 'quadball' ? setStatsPositionFilter : undefined}
+            />
+
             {statsSubView === 'quadball' ? (
-              <QuadballStatsView 
-                players={statsPlayers} 
-                events={statsEvents} 
-                teams={statsTeams} 
-                games={statsGames} 
-                seasons={statsSeasons} 
+              <QuadballStatsView
+                players={statsPlayers}
+                events={statsEvents}
+                teams={statsTeams}
+                games={statsGames}
+                seasons={statsSeasons}
                 statsFilter={statsFilter}
                 seasonId={statsSeasonId}
-                onSeasonChange={setStatsSeasonId}
                 teamId={statsTeamId}
-                onTeamChange={setStatsTeamId}
                 search={statsSearch}
-                onSearchChange={setStatsSearch}
+                minGames={statsMinGames}
+                controlFilter={statsControlFilter}
+                flagFilter={statsFlagFilter}
+                outlierFilter={statsOutlierFilter}
+                positionFilter={statsPositionFilter}
                 onPlayerSelect={handlePlayerProfileClick}
                 onTeamSelect={handleTeamProfileClick}
               />
             ) : statsSubView === 'beaters' ? (
-              <BeaterStatsView 
-                players={statsPlayers} 
-                events={statsEvents} 
-                teams={statsTeams} 
-                games={statsGames} 
-                seasons={statsSeasons} 
+              <BeaterStatsView
+                players={statsPlayers}
+                events={statsEvents}
+                teams={statsTeams}
+                games={statsGames}
+                seasons={statsSeasons}
                 statsFilter={statsFilter}
                 seasonId={statsSeasonId}
-                onSeasonChange={setStatsSeasonId}
                 teamId={statsTeamId}
-                onTeamChange={setStatsTeamId}
                 search={statsSearch}
-                onSearchChange={setStatsSearch}
+                minGames={statsMinGames}
+                controlFilter={statsControlFilter}
+                flagFilter={statsFlagFilter}
+                outlierFilter={statsOutlierFilter}
                 onPlayerSelect={handlePlayerProfileClick}
                 onTeamSelect={handleTeamProfileClick}
               />
             ) : statsSubView === 'seekers' ? (
-              <SeekerStatsView 
-                players={statsPlayers} 
-                events={statsEvents} 
-                teams={statsTeams} 
-                games={statsGames} 
-                seasons={statsSeasons} 
+              <SeekerStatsView
+                players={statsPlayers}
+                events={statsEvents}
+                teams={statsTeams}
+                games={statsGames}
+                seasons={statsSeasons}
                 statsFilter={statsFilter}
                 seasonId={statsSeasonId}
-                onSeasonChange={setStatsSeasonId}
                 teamId={statsTeamId}
-                onTeamChange={setStatsTeamId}
                 search={statsSearch}
-                onSearchChange={setStatsSearch}
+                minGames={statsMinGames}
+                controlFilter={statsControlFilter}
+                flagFilter={statsFlagFilter}
                 onPlayerSelect={handlePlayerProfileClick}
               />
               ) : null}
@@ -4728,9 +4793,9 @@ export default function App() {
               <h2 className="text-4xl font-extrabold text-gray-900 tracking-tight">Watch and Contribute</h2>
             </div>
 
-            <div className={cn("grid grid-cols-1 gap-8 items-start", (effectiveRole === 'admin' || effectiveRole === 'author' || effectiveRole === 'trusted') ? "lg:grid-cols-3 md:grid-cols-2" : "md:grid-cols-2 max-w-4xl mx-auto")}>
+            <div className={cn("grid grid-cols-1 gap-8 items-start", (effectiveRole === 'author' || effectiveRole === 'trusted') ? "lg:grid-cols-3 md:grid-cols-2" : "md:grid-cols-2 max-w-4xl mx-auto")}>
               {/* Start New Video */}
-              {['admin', 'author', 'trusted'].includes(effectiveRole) && (
+              {['author', 'trusted'].includes(effectiveRole) && (
               <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
                 <div className="bg-gray-50/50 border-b border-gray-100 p-5">
                   <h3 className="text-xl font-bold text-gray-900 flex items-center gap-3"><Play className="w-5 h-5 text-red-600" /> Start Tracking New Video</h3>
