@@ -189,10 +189,11 @@ service cloud.firestore {
     }
 
     // GameEvents (Modern Array-Based Schema)
+    // Read is public — current-season privacy is enforced in the app layer via dashboardGames/dashboardEvents.
     match /gameEvents/{gameId} {
-      allow read: if isAuthenticated() || gameId == 'game_53Ci_TOlkVQ';
+      allow read: if true;
       allow create: if isAuthenticated() || isAdmin();
-      allow update: if isAuthenticated() || gameId == 'game_53Ci_TOlkVQ';
+      allow update: if true;
       allow delete: if isAdmin();
     }
 
