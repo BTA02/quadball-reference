@@ -34,7 +34,10 @@ import {
   Trash2,
   UploadCloud,
   SkipForward,
-  Edit2
+  Edit2,
+  TrendingUp,
+  Rewind,
+  FastForward
 } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
 import {
@@ -65,7 +68,7 @@ import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import QuadballStatsView from './components/QuadballStatsView';
 import BeaterStatsView from './components/BeaterStatsView';
 import SeekerStatsView from './components/SeekerStatsView';
-import GameCastView from './components/GameCastView';
+import MatchMomentumView from './components/MatchMomentumView';
 import PlayerProfileView from './components/PlayerProfileView';
 import TeamProfileView from './components/TeamProfileView';
 import GameBoxScoreView from './components/GameBoxScoreView';
@@ -74,7 +77,7 @@ import LandingHero from './components/LandingHero';
 import { enrichEventsWithGameTime, getScoreboardName } from './lib/statsComputations';
 // --- Types ---
 
-type EventType = 'goal' | 'assist' | 'shot' | 'gameStart' | 'gamePause' | 'gameEnd' | 'foul' | 'card' | 'sub_in' | 'sub_out' | 'control_change' | 'turnover' | 'flag_released' | 'flag_catch' | 'control_start' | 'quadball_start';
+type EventType = 'goal' | 'assist' | 'shot' | 'attempt' | 'gameStart' | 'gamePause' | 'gameEnd' | 'foul' | 'card' | 'sub_in' | 'sub_out' | 'control_change' | 'turnover' | 'flag_released' | 'flag_catch' | 'control_start' | 'quadball_start';
 
 type PositionType = 'chaser' | 'keeper' | 'beater' | 'seeker';
 
@@ -178,6 +181,7 @@ const EVENT_CONFIG: Record<EventType, { label: string; icon: React.ReactNode; co
   goal: { label: 'Goal', icon: <Trophy className="w-4 h-4" />, color: 'bg-green-500' },
   assist: { label: 'Assist', icon: <User className="w-4 h-4" />, color: 'bg-blue-500' },
   shot: { label: 'Shot', icon: <Target className="w-4 h-4" />, color: 'bg-orange-500' },
+  attempt: { label: 'Attempt', icon: <Activity className="w-4 h-4" />, color: 'bg-violet-500' },
   gameStart: { label: 'Start Clock', icon: <Play className="w-4 h-4" />, color: 'bg-red-600' },
   gamePause: { label: 'Pause', icon: <Pause className="w-4 h-4" />, color: 'bg-gray-500' },
   foul: { label: 'Foul', icon: <AlertCircle className="w-4 h-4" />, color: 'bg-yellow-500' },
@@ -712,7 +716,7 @@ interface ManagementViewProps {
   onCreateRoster: (teamId: string, seasonId: string) => Promise<string | void | null>;
   onEditTeamEmails: (id: string, emails: string[]) => void;
   onDeleteTeam: (id: string) => void;
-  onDeleteGame: (id: string) => void;
+  onDeleteGame: (id: string, tag?: string | null) => void;
   onDeleteVideo: (id: string) => void;
   onDeleteSeason: (id: string) => void;
   onEditSeason: (id: string, newName: string, newLeague: string, newYear: string, newDescription: string) => Promise<void>;
@@ -723,10 +727,10 @@ interface ManagementViewProps {
   onRunMigration: () => Promise<void>;
   onBackfillAuthorId?: () => Promise<number | undefined>;
   isAdmin?: boolean;
-  onAddRole?: (email: string, tier: 'authors' | 'trusted') => Promise<void>;
-  onRemoveRole?: (email: string, tier: 'authors' | 'trusted') => Promise<void>;
+  onAddRole?: (email: string, tier: 'authors' | 'trusted' | 'moderators') => Promise<void>;
+  onRemoveRole?: (email: string, tier: 'authors' | 'trusted' | 'moderators') => Promise<void>;
   onRefreshData?: () => void;
-  userRoles?: { authors: string[], trusted: string[] };
+  userRoles?: { authors: string[], trusted: string[], moderators: string[] };
 }
 
 function UnifiedRosterEditor({
@@ -903,12 +907,13 @@ function UnifiedRosterEditor({
 }
 
 // === EventsManagementTab ===
-function EventsManagementTab({ games, teams, players }: { games: Game[]; teams: Team[]; players: Player[] }) {
+function EventsManagementTab({ games, teams, players, videos }: { games: Game[]; teams: Team[]; players: Player[]; videos: Video[] }) {
   const [allGameDocs, setAllGameDocs] = useState<{ gameId: string; events: GameEvent[] }[]>([]);
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [filterGameId, setFilterGameId] = useState('');
-  const [filterMissing, setFilterMissing] = useState<'all' | 'no_player' | 'no_team' | 'no_type' | 'no_game'>('all');
+  const [filterTeamId, setFilterTeamId] = useState('');
+  const [filterMissing, setFilterMissing] = useState<'all' | 'no_player' | 'no_team' | 'no_type' | 'no_game' | 'no_video' | 'no_valid_video'>('all');
   const [filterType, setFilterType] = useState('');
   const [sortField, setSortField] = useState<'gameId' | 'videoTime' | 'type'>('gameId');
   const [sortAsc, setSortAsc] = useState(true);
@@ -950,11 +955,20 @@ function EventsManagementTab({ games, teams, players }: { games: Game[]; teams: 
         (e.videoId || '').toLowerCase().includes(q)
       );
     }
+    if (filterTeamId.trim()) {
+      const tq = filterTeamId.trim().toLowerCase();
+      evs = evs.filter(e => (e.teamId || '').toLowerCase().includes(tq));
+    }
     if (filterType) evs = evs.filter(e => e.type === filterType);
     if (filterMissing === 'no_player') evs = evs.filter(e => !e.playerId);
     else if (filterMissing === 'no_team') evs = evs.filter(e => !e.teamId);
     else if (filterMissing === 'no_type') evs = evs.filter(e => !e.type);
     else if (filterMissing === 'no_game') evs = evs.filter(e => !e.gameId || e.gameId.includes('unknown'));
+    else if (filterMissing === 'no_video') evs = evs.filter(e => !e.videoId || e.videoId.includes('unknown'));
+    else if (filterMissing === 'no_valid_video') {
+      const validVideoIds = new Set(videos.map(v => v.videoId || v.id));
+      evs = evs.filter(e => e.videoId && e.gameId && !validVideoIds.has(e.videoId));
+    }
     evs.sort((a, b) => {
       let va: any = a[sortField as keyof GameEvent] ?? '';
       let vb: any = b[sortField as keyof GameEvent] ?? '';
@@ -965,7 +979,7 @@ function EventsManagementTab({ games, teams, players }: { games: Game[]; teams: 
       return 0;
     });
     return evs;
-  }, [flatEvents, filterGameId, filterType, filterMissing, sortField, sortAsc]);
+  }, [flatEvents, filterGameId, filterTeamId, filterType, filterMissing, sortField, sortAsc]);
 
   const toggleSelect = (id: string) => setSelectedIds(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   const selectAll = () => setSelectedIds(new Set(filteredEvents.map(e => e.id)));
@@ -1003,7 +1017,7 @@ function EventsManagementTab({ games, teams, players }: { games: Game[]; teams: 
     }
   };
 
-  const EVENT_TYPES = ['goal', 'assist', 'shot', 'turnover', 'card', 'sub_in', 'sub_out', 'control_change', 'control_start', 'quadball_start', 'flag_released', 'flag_catch', 'gameStart', 'gamePause', 'gameEnd'];
+  const EVENT_TYPES = ['goal', 'assist', 'shot', 'attempt', 'turnover', 'card', 'sub_in', 'sub_out', 'control_change', 'control_start', 'quadball_start', 'flag_released', 'flag_catch', 'gameStart', 'gamePause', 'gameEnd'];
   const getPlayerName = (id?: string) => { if (!id) return ''; const p = players.find(pl => pl.id === id); return p ? `${p.firstName} ${p.lastName}` : id.slice(0, 10) + '…'; };
   const getTeamName = (id?: string) => { if (!id) return ''; const t = teams.find(tm => tm.id === id); return t ? t.name : id.slice(0, 10) + '…'; };
 
@@ -1015,19 +1029,32 @@ function EventsManagementTab({ games, teams, players }: { games: Game[]; teams: 
             <h3 className="text-xl font-bold text-gray-900">Event Manager</h3>
             <p className="text-sm text-gray-500 mt-0.5">Browse, filter, and batch-update events across all games.</p>
           </div>
-          <button onClick={loadEvents} disabled={loading}
-            className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl text-sm transition-all disabled:opacity-50">
-            {loading ? 'Loading…' : loaded ? '↻ Reload' : 'Load All Events'}
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={() => { loadEvents(); setFilterMissing('no_valid_video'); }} disabled={loading}
+              className="flex items-center gap-2 px-4 py-2 bg-yellow-600 hover:bg-yellow-700 text-white font-bold rounded-xl text-sm transition-all disabled:opacity-50"
+              title="Loads events that have a gameId/videoId but lack a corresponding Video document">
+              Find Orphaned Stats
+            </button>
+            <button onClick={loadEvents} disabled={loading}
+              className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl text-sm transition-all disabled:opacity-50">
+              {loading ? 'Loading…' : loaded ? '↻ Reload' : 'Load All Events'}
+            </button>
+          </div>
         </div>
 
         {loaded && <p className="text-xs text-gray-400 mb-4">{flatEvents.length.toLocaleString()} events across {allGameDocs.length} game documents.</p>}
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
           <div>
             <label className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1 block">Game / Video ID</label>
             <input value={filterGameId} onChange={e => setFilterGameId(e.target.value)}
               placeholder="Search ID contains…"
+              className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-red-500" />
+          </div>
+          <div>
+            <label className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1 block">Team ID</label>
+            <input value={filterTeamId} onChange={e => setFilterTeamId(e.target.value)}
+              placeholder="Search Team ID…"
               className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-red-500" />
           </div>
           <div>
@@ -1047,6 +1074,8 @@ function EventsManagementTab({ games, teams, players }: { games: Game[]; teams: 
               <option value="no_team">Missing Team</option>
               <option value="no_type">Missing Type</option>
               <option value="no_game">Missing Game ID</option>
+              <option value="no_video">Missing Video ID</option>
+              <option value="no_valid_video">Orphaned Stats (No DB Video)</option>
             </select>
           </div>
           <div>
@@ -1206,6 +1235,10 @@ function ManagementView({
   const [playerNumber, setPlayerNumber] = useState('');
   const [selectedPlayerId, setSelectedPlayerId] = useState('');
 
+  // Team Email Editor State
+  const [editingTeamId, setEditingTeamId] = useState<string | null>(null);
+  const [editingTeamEmails, setEditingTeamEmails] = useState('');
+
   // Import State
   const [csvData, setCsvData] = useState<any[]>([]);
   const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
@@ -1216,6 +1249,11 @@ function ManagementView({
   const [useLocalSimMode, setUseLocalSimMode] = useState<boolean>(true);
   const [uploadSimToLive, setUploadSimToLive] = useState<boolean>(false);
   const [filterTeamId, setFilterTeamId] = useState('');
+
+  // DB Search State
+  const [dbSearchTerm, setDbSearchTerm] = useState('');
+  const [dbSearchResults, setDbSearchResults] = useState<{collection: string, id: string, data: any}[]>([]);
+  const [isSearchingDB, setIsSearchingDB] = useState(false);
 
   useEffect(() => {
     const q = query(collection(db, 'rosters'));
@@ -1291,7 +1329,7 @@ function ManagementView({
           </button>
         </div>
         <div className="flex bg-gray-50 p-1 rounded-xl border border-gray-200">
-          {(['teams', 'seasons', 'players', 'rosters', 'games', 'roles', 'events', 'import'] as const).map(tab => (
+          {(['search', 'teams', 'seasons', 'players', 'rosters', 'games', 'videos', 'roles', 'events', 'import'] as const).map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -1308,7 +1346,7 @@ function ManagementView({
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {activeTab === 'events' ? (
-          <EventsManagementTab games={games} teams={teams} players={players} />
+          <EventsManagementTab games={games} teams={teams} players={players} videos={videos} />
         ) : activeTab === 'import' ? (
           <div className="lg:col-span-3 space-y-6">
             <div className="bg-gray-50 border border-gray-200 rounded-2xl p-8">
@@ -2899,8 +2937,178 @@ function ManagementView({
                         <Zap className="w-5 h-5" />
                         Nuclear Reset
                       </button>
+                      
+                      <button
+                        onClick={async () => {
+                          if (!confirm("Are you sure you want to deduplicate the aggregated games database?")) return;
+                          try {
+                            const d = await getDoc(doc(db, "aggregated", "games"));
+                            if (d.exists()) {
+                              const data = d.data().data || [];
+                              const map = new Map();
+                              data.forEach((g: any) => map.set(g.id, g));
+                              const deduplicated = Array.from(map.values());
+                              if (data.length > deduplicated.length) {
+                                await updateDoc(doc(db, "aggregated", "games"), { data: deduplicated });
+                                toast.success(`Success! Fixed ${data.length - deduplicated.length} duplicate items.`);
+                                onRefreshData?.();
+                              } else {
+                                toast.info("No duplicates found to resolve.");
+                              }
+                            }
+                          } catch(e) {
+                            console.error(e);
+                            toast.error("Cleanup failed. See console.");
+                          }
+                        }}
+                        className="bg-amber-500 hover:bg-amber-600 text-white font-bold px-6 py-3 rounded-xl transition-all flex items-center gap-2 ml-4"
+                      >
+                        <Database className="w-5 h-5" />
+                        Deduplicate Stats Data
+                      </button>
+
+                      <button
+                        onClick={async () => {
+                          if (!confirm("Are you sure you want to scan for and recover orphaned stats? This recreates missing core game properties based on their underlying videos so they re-appear in the dashboard.")) return;
+                          try {
+                            const gamesSnap = await getDocs(collection(db, "games"));
+                            const validGameIds = new Set();
+                            gamesSnap.docs.forEach((g: any) => validGameIds.add(g.id));
+
+                            const videosSnap = await getDocs(collection(db, "videos"));
+                            const validVideoRefByGameId = new Map();
+                            videosSnap.docs.forEach((v: any) => {
+                                const data = v.data();
+                                if (data.gameId) {
+                                    validVideoRefByGameId.set(data.gameId, data);
+                                }
+                            });
+
+                            const gameEventsSnap = await getDocs(collection(db, "gameEvents"));
+                            
+                            let recreatedCount = 0;
+                            
+                            for (const docSnap of gameEventsSnap.docs) {
+                                const gameId = docSnap.id;
+                                
+                                // Is this game actually missing from the 'games' collection?
+                                if (!validGameIds.has(gameId)) {
+                                    const vData = validVideoRefByGameId.get(gameId);
+                                    
+                                    const newGame = {
+                                        id: gameId,
+                                        seasonId: "unknown",
+                                        homeTeamId: "unknown",
+                                        awayTeamId: "unknown",
+                                        createdAt: serverTimestamp(),
+                                        tag: vData ? vData.title : "Recovered Orphan"
+                                    };
+                                    
+                                    await setDoc(doc(db, "games", gameId), newGame, { merge: true });
+                                    
+                                    // Add it to aggregated layer
+                                    const newAgg = {
+                                        id: gameId,
+                                        seasonId: "unknown",
+                                        homeTeamId: "unknown",
+                                        awayTeamId: "unknown",
+                                        createdAt: new Date().toISOString(),
+                                        tag: newGame.tag
+                                    };
+                                    await updateDoc(doc(db, "aggregated", "games"), {
+                                        data: arrayUnion(newAgg)
+                                    });
+                                    recreatedCount++;
+                                }
+                            }
+                            if (recreatedCount > 0) {
+                              toast.success(`Successfully recovered ${recreatedCount} deleted/orphaned games. Please refresh.`);
+                              onRefreshData?.();
+                            } else {
+                              toast.info("No orphaned games detected.");
+                            }
+                          } catch(e) {
+                            console.error(e);
+                            toast.error("Cleanup failed. See console.");
+                          }
+                        }}
+                        className="bg-green-600 hover:bg-green-700 text-white font-bold px-6 py-3 rounded-xl transition-all flex items-center gap-2 ml-4"
+                      >
+                        <ShieldCheck className="w-5 h-5" />
+                        Recover Orphaned Games
+                      </button>
                     </div>
                   </div>
+                </div>
+              )}
+            </div>
+          </div>
+        ) : activeTab === 'search' ? (
+          <div className="lg:col-span-3 space-y-6">
+            <div className="bg-gray-50 border border-gray-200 rounded-2xl p-8">
+              <h3 className="text-xl font-bold mb-4">Database Explorer</h3>
+              <p className="text-gray-500 mb-6">Deep search across all live Firestore collections to locate orphaned records or verify specific database states.</p>
+              
+              <div className="flex gap-4 mb-8">
+                <input 
+                  type="text" 
+                  value={dbSearchTerm}
+                  onChange={(e) => setDbSearchTerm(e.target.value)}
+                  placeholder="Search by any ID, tag, or field value..."
+                  className="flex-1 bg-white border border-gray-300 rounded-xl px-4 py-3 text-lg outline-none focus:border-red-500 font-mono"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') document.getElementById('run-db-search')?.click();
+                  }}
+                />
+                <button
+                  id="run-db-search"
+                  disabled={isSearchingDB || dbSearchTerm.trim().length === 0}
+                  onClick={async () => {
+                    const term = dbSearchTerm.toLowerCase().trim();
+                    if (!term) return;
+                    setIsSearchingDB(true);
+                    setDbSearchResults([]);
+                    try {
+                      const res: any[] = [];
+                      const collectionsToScan = ['games', 'videos', 'gameEvents', 'rosters'];
+                      for (const collName of collectionsToScan) {
+                        const snap = await getDocs(collection(db, collName));
+                        snap.docs.forEach(d => {
+                          const id = d.id.toLowerCase();
+                          const dataStr = JSON.stringify(d.data()).toLowerCase();
+                          if (id.includes(term) || dataStr.includes(term)) {
+                            res.push({ collection: collName, id: d.id, data: d.data() });
+                          }
+                        });
+                      }
+                      setDbSearchResults(res);
+                      if (res.length === 0) toast.info('No matches found in database.');
+                    } catch (e: any) {
+                      toast.error('Search failed: ' + e.message);
+                    } finally {
+                      setIsSearchingDB(false);
+                    }
+                  }}
+                  className="bg-gray-900 hover:bg-gray-800 disabled:opacity-50 text-white font-bold px-8 py-3 rounded-xl transition-all"
+                >
+                  {isSearchingDB ? 'Scanning...' : 'Search'}
+                </button>
+              </div>
+
+              {dbSearchResults.length > 0 && (
+                <div className="space-y-4">
+                  <h4 className="font-bold text-gray-700">Found {dbSearchResults.length} Results</h4>
+                  {dbSearchResults.map((res, i) => (
+                    <div key={i} className="bg-white border rounded-xl p-4 shadow-sm overflow-hidden text-left flex flex-col gap-2">
+                       <div className="flex items-center gap-3">
+                         <span className="bg-red-100 text-red-800 uppercase text-[10px] font-bold px-2 py-0.5 rounded tracking-wider">/{res.collection}</span>
+                         <span className="font-mono font-bold text-sm text-gray-800">{res.id}</span>
+                       </div>
+                       <pre className="text-[10px] text-gray-500 bg-gray-50 p-3 rounded-lg overflow-x-auto">
+                         {JSON.stringify(res.data, null, 2)}
+                       </pre>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
@@ -2911,13 +3119,17 @@ function ManagementView({
               <h3 className="text-xl font-bold mb-4">Role Management</h3>
               <p className="text-gray-500 mb-8">Add emails to different permission tiers. Trusted users have admin rights. Authors have write access to track events.</p>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
                 {([
-                  { title: 'Trusted Users (Admins)', key: 'trusted' as const, items: userRoles?.trusted || [] },
-                  { title: 'Data Authors', key: 'authors' as const, items: userRoles?.authors || [] }
+                  { title: 'Admins (Full Access)', key: 'trusted' as const, items: userRoles?.trusted || [], color: 'bg-red-600' },
+                  { title: 'Moderators (Create Access)', key: 'moderators' as const, items: userRoles?.moderators || [], color: 'bg-amber-500' },
+                  { title: 'Data Authors', key: 'authors' as const, items: userRoles?.authors || [], color: 'bg-blue-500' }
                 ]).map(block => (
                   <div key={block.title} className="bg-white p-6 border rounded-xl flex flex-col h-96 shadow-sm">
-                    <h4 className="font-bold text-gray-800 text-lg border-b pb-3">{block.title}</h4>
+                    <div className="flex items-center gap-2 border-b pb-3 mb-1">
+                      <span className={`w-2 h-2 rounded-full ${block.color}`} />
+                      <h4 className="font-bold text-gray-800 text-lg">{block.title}</h4>
+                    </div>
                     <form
                       onSubmit={(e) => {
                         e.preventDefault();
@@ -3090,39 +3302,84 @@ function ManagementView({
                     {activeTab === 'seasons' && seasons.length}
                     {activeTab === 'players' && players.length}
                     {activeTab === 'games' && games.length}
+                    {activeTab === 'videos' && videos.length}
                     {' items'}
                   </span>
                 </div>
 
                 <div className="divide-y divide-neutral-800 max-h-[600px] overflow-y-auto custom-scrollbar">
                   {activeTab === 'teams' && teams.map(t => (
-                    <div key={t.id} className="p-4 flex items-center justify-between hover:bg-gray-200/50 transition-colors group">
-                      <div>
-                        <p className="font-bold">{t.name}</p>
-                        <p className="text-[10px] text-gray-400 uppercase">ID: {t.id}</p>
+                    <div key={t.id} className="group border-b border-gray-100 last:border-0 hover:bg-gray-50/50 transition-colors">
+                      <div className="p-4 flex items-center justify-between">
+                        <div>
+                          <p className="font-bold flex items-center gap-2">
+                            {t.name}
+                            {t.emails && t.emails.length > 0 && (
+                              <span className="bg-gray-100 text-gray-500 text-[9px] px-1.5 py-0.5 rounded font-medium">
+                                {t.emails.length} Admin{t.emails.length !== 1 ? 's' : ''}
+                              </span>
+                            )}
+                          </p>
+                          <p className="text-[10px] text-gray-400 uppercase tracking-widest mt-0.5">ID: {t.id}</p>
+                        </div>
+                        <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-all focus-within:opacity-100">
+                          <button
+                            onClick={() => {
+                              if (editingTeamId === t.id) {
+                                setEditingTeamId(null);
+                              } else {
+                                setEditingTeamId(t.id);
+                                setEditingTeamEmails((t.emails || []).join(', '));
+                              }
+                            }}
+                            className="p-2 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded-full transition-colors"
+                            title={editingTeamId === t.id ? 'Cancel Edit' : 'Edit Email Access'}
+                          >
+                            {editingTeamId === t.id ? <XCircle className="w-4 h-4" /> : <Edit2 className="w-4 h-4" />}
+                          </button>
+                          <button
+                            onClick={() => { if (confirm(`Delete team ${t.name}?`)) onDeleteTeam(t.id); }}
+                            className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors"
+                            title="Delete Team"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-all">
-                        <button
-                          onClick={() => {
-                            const currentEmails = (t.emails || []).join(', ');
-                            const newEmailsStr = prompt(`Edit authorized email access for team ${t.name} (comma-separated):`, currentEmails);
-                            if (newEmailsStr === null) return;
-                            const newEmails = newEmailsStr.split(',').map(e => e.trim()).filter(e => e);
-                            onEditTeamEmails(t.id, newEmails);
-                          }}
-                          className="p-2 text-gray-400 hover:text-amber-500 rounded-full hover:bg-white"
-                          title={t.emails?.length ? `Emails: ${t.emails.join(', ')}` : 'Add Emails'}
-                        >
-                          <Edit2 className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => { if (confirm(`Delete team ${t.name}?`)) onDeleteTeam(t.id); }}
-                          className="p-2 text-gray-400 hover:text-red-500 rounded-full hover:bg-white"
-                          title="Delete Team"
-                        >
-                          <XCircle className="w-4 h-4" />
-                        </button>
-                      </div>
+                      
+                      {editingTeamId === t.id && (
+                        <div className="px-4 pb-4 pt-1 animate-in fade-in slide-in-from-top-2">
+                          <div className="bg-white border text-sm border-gray-200 rounded-xl p-4 shadow-sm">
+                            <label className="block text-xs font-bold text-gray-700 mb-2">
+                              Authorized Admins (Comma-separated emails)
+                            </label>
+                            <textarea
+                              value={editingTeamEmails}
+                              onChange={e => setEditingTeamEmails(e.target.value)}
+                              placeholder="e.g. coach@team.com, captain@team.com"
+                              className="w-full bg-gray-50 border border-gray-200 rounded-lg p-3 text-gray-700 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500 min-h-[80px] resize-y"
+                            />
+                            <div className="flex justify-end gap-2 mt-3">
+                              <button
+                                onClick={() => setEditingTeamId(null)}
+                                className="px-4 py-2 text-xs font-medium text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                onClick={() => {
+                                  let newEmails = editingTeamEmails.split(',').map(e => e.trim()).filter(e => e);
+                                  onEditTeamEmails(t.id, newEmails);
+                                  setEditingTeamId(null);
+                                }}
+                                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold transition-colors shadow-sm"
+                              >
+                                Save Changes
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ))}
                   {activeTab === 'seasons' && seasons.map(s => (
@@ -3277,21 +3534,21 @@ function ManagementView({
                           <span className="text-[10px] text-gray-400 bg-gray-50 px-2 py-1 rounded border border-gray-200 hidden md:block">{videos.find(v => v.gameId === g.id)?.youtubeId || 'No URL attached'}</span>
                         </div>
                         <button
-                          onClick={() => onDeleteGame(g.id)}
+                          onClick={() => onDeleteGame(g.id, g.tag)}
                           className="px-2 py-1 bg-white border border-gray-200 text-gray-400 hover:text-red-500 hover:border-red-500 hover:bg-red-50 rounded-md transition-all shadow-sm flex items-center gap-1 text-[10px] uppercase font-bold"
                         >
                           <Trash2 className="w-3 h-3" /> Delete
                         </button>
                       </div>
 
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                         <div className="flex flex-col gap-1">
                           <label className="text-[10px] uppercase font-bold text-gray-400">Season</label>
                           <select
                             value={g.seasonId}
                             onChange={async (e) => {
                               try {
-                                const oldAgg = { id: g.id, seasonId: g.seasonId || '', homeTeamId: g.homeTeamId || '', awayTeamId: g.awayTeamId || '', createdAt: serializeTimestamp(g.createdAt) };
+                                const oldAgg = { id: g.id, seasonId: g.seasonId || '', homeTeamId: g.homeTeamId || '', awayTeamId: g.awayTeamId || '', createdAt: serializeTimestamp(g.createdAt), ...(g.tag ? { tag: g.tag } : {}), ...(g.isVerified ? { isVerified: true } : { isVerified: false }), ...(g.authorId ? { authorId: g.authorId } : {}), ...(g.authorTeamId ? { authorTeamId: g.authorTeamId } : {}) };
                                 const newAgg = { ...oldAgg, seasonId: e.target.value };
                                 await updateDoc(doc(db, 'games', g.id), { seasonId: e.target.value });
                                 await updateDoc(doc(db, 'aggregated', 'games'), { data: arrayRemove(oldAgg) });
@@ -3311,7 +3568,7 @@ function ManagementView({
                             value={g.homeTeamId}
                             onChange={async (e) => {
                               try {
-                                const oldAgg = { id: g.id, seasonId: g.seasonId || '', homeTeamId: g.homeTeamId || '', awayTeamId: g.awayTeamId || '', createdAt: serializeTimestamp(g.createdAt) };
+                                const oldAgg = { id: g.id, seasonId: g.seasonId || '', homeTeamId: g.homeTeamId || '', awayTeamId: g.awayTeamId || '', createdAt: serializeTimestamp(g.createdAt), ...(g.tag ? { tag: g.tag } : {}), ...(g.isVerified ? { isVerified: true } : { isVerified: false }), ...(g.authorId ? { authorId: g.authorId } : {}), ...(g.authorTeamId ? { authorTeamId: g.authorTeamId } : {}) };
                                 const newAgg = { ...oldAgg, homeTeamId: e.target.value };
                                 await updateDoc(doc(db, 'games', g.id), { homeTeamId: e.target.value });
                                 await updateDoc(doc(db, 'aggregated', 'games'), { data: arrayRemove(oldAgg) });
@@ -3331,7 +3588,7 @@ function ManagementView({
                             value={g.awayTeamId}
                             onChange={async (e) => {
                               try {
-                                const oldAgg = { id: g.id, seasonId: g.seasonId || '', homeTeamId: g.homeTeamId || '', awayTeamId: g.awayTeamId || '', createdAt: serializeTimestamp(g.createdAt) };
+                                const oldAgg = { id: g.id, seasonId: g.seasonId || '', homeTeamId: g.homeTeamId || '', awayTeamId: g.awayTeamId || '', createdAt: serializeTimestamp(g.createdAt), ...(g.tag ? { tag: g.tag } : {}), ...(g.isVerified ? { isVerified: true } : { isVerified: false }), ...(g.authorId ? { authorId: g.authorId } : {}), ...(g.authorTeamId ? { authorTeamId: g.authorTeamId } : {}) };
                                 const newAgg = { ...oldAgg, awayTeamId: e.target.value };
                                 await updateDoc(doc(db, 'games', g.id), { awayTeamId: e.target.value });
                                 await updateDoc(doc(db, 'aggregated', 'games'), { data: arrayRemove(oldAgg) });
@@ -3344,6 +3601,58 @@ function ManagementView({
                           >
                             {teams.map(t => <option key={t.id} value={t.id}>{t.name || t.id}</option>)}
                           </select>
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          <label className="text-[10px] uppercase font-bold text-gray-400 pl-1">Description Tag</label>
+                          <input
+                            type="text"
+                            placeholder="e.g. Finals Match 1"
+                            defaultValue={g.tag || ''}
+                            onBlur={async (e) => {
+                              try {
+                                if (e.target.value === (g.tag || '')) return; // No change
+                                const oldAgg = { id: g.id, seasonId: g.seasonId || '', homeTeamId: g.homeTeamId || '', awayTeamId: g.awayTeamId || '', createdAt: serializeTimestamp(g.createdAt), ...(g.tag ? { tag: g.tag } : {}), ...(g.isVerified ? { isVerified: true } : { isVerified: false }), ...(g.authorId ? { authorId: g.authorId } : {}), ...(g.authorTeamId ? { authorTeamId: g.authorTeamId } : {}) };
+                                const newAgg = { ...oldAgg, tag: e.target.value };
+                                await updateDoc(doc(db, 'games', g.id), { tag: e.target.value });
+                                await updateDoc(doc(db, 'aggregated', 'games'), { data: arrayRemove(oldAgg) });
+                                await updateDoc(doc(db, 'aggregated', 'games'), { data: arrayUnion(newAgg) });
+                                toast.success('Game label updated');
+                                onRefreshData();
+                              } catch (err) {}
+                            }}
+                            className="bg-white border border-gray-200 rounded p-1.5 text-xs outline-none focus:border-red-500 font-medium w-full"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+
+                  {activeTab === 'videos' && [...videos].sort((a, b) => new Date(serializeTimestamp(b.createdAt)).getTime() - new Date(serializeTimestamp(a.createdAt)).getTime()).map(v => (
+                    <div key={v.id} className="p-4 flex flex-col gap-3 hover:bg-gray-200/50 transition-colors group border-b border-gray-100 last:border-0">
+                      <div className="flex items-center justify-between border-b border-gray-200/50 pb-2">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-mono text-[10px] bg-gray-100 px-2 py-1 rounded border border-gray-200 text-gray-600">
+                            ID: {v.id}
+                          </span>
+                          <span className="font-mono text-[10px] bg-red-50 text-red-600 font-bold px-2 py-1 rounded border border-red-200">
+                            YT: {v.youtubeId}
+                          </span>
+                        </div>
+                        <button
+                          onClick={() => onDeleteVideo(v.id)}
+                          className="px-2 py-1 bg-white border border-gray-200 text-gray-400 hover:text-red-500 hover:border-red-500 hover:bg-red-50 rounded-md transition-all shadow-sm flex items-center gap-1 text-[10px] uppercase font-bold"
+                        >
+                          <Trash2 className="w-3 h-3" /> Delete
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                        <div className="flex flex-col">
+                           <span className="text-gray-400 uppercase font-bold text-[10px]">Title</span>
+                           <span className="text-gray-900 font-medium">{v.title}</span>
+                        </div>
+                        <div className="flex flex-col">
+                           <span className="text-gray-400 uppercase font-bold text-[10px]">Attached Game ID</span>
+                           <span className="font-mono text-gray-600 break-all">{v.gameId}</span>
                         </div>
                       </div>
                     </div>
@@ -3526,9 +3835,132 @@ const getPlayerShortName = (p: Player | undefined | null, rosterPool: { player?:
   return `${p.firstName.charAt(0)}. ${p.lastName}`;
 };
 
+function CreateView({
+  teams, seasons, players,
+  onAddTeam, onAddPlayer, onAddPlayerToRoster, onRemovePlayerFromRoster,
+  onCreateRoster, onDeleteRoster
+}: any) {
+  const [activeTab, setActiveTab] = useState<'rosters' | 'teams' | 'players'>('rosters');
+  const [selectedRosterId, setSelectedRosterId] = useState('');
+  const [rosters, setRosters] = useState<Roster[]>([]);
+  const [rosterPlayers, setRosterPlayers] = useState<(RosterPlayer & { player?: Player })[]>([]);
+
+  useEffect(() => {
+    const q = query(collection(db, 'rosters'));
+    return onSnapshot(q, (snap) => {
+      setRosters(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Roster[]);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!selectedRosterId) {
+      setRosterPlayers([]);
+      return;
+    }
+    return onSnapshot(collection(db, 'rosters', selectedRosterId, 'players'), (snap) => {
+      setRosterPlayers(snap.docs.map(doc => {
+        const data = doc.data() as RosterPlayer;
+        return { ...data, player: players.find((p: any) => p.id === data.playerId) };
+      }));
+    });
+  }, [selectedRosterId, players]);
+
+  return (
+    <div className="space-y-8 -mx-4 px-4 -mt-8 pt-6 pb-8 min-h-[80vh]">
+      <div className="flex items-center justify-between">
+        <h2 className="text-3xl font-bold">Moderator - Creation Tools</h2>
+        <div className="flex bg-gray-50 p-1 rounded-xl border border-gray-200">
+          {(['rosters', 'teams', 'players'] as const).map(tab => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={cn(
+                "px-4 py-2 rounded-lg text-sm font-bold capitalize transition-all",
+                activeTab === tab ? "bg-red-600 text-white shadow-lg" : "text-gray-500 hover:text-gray-900"
+              )}
+            >
+              {tab}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {activeTab === 'rosters' ? (
+        <UnifiedRosterEditor
+          teams={teams}
+          seasons={seasons}
+          players={players}
+          rosters={rosters}
+          rosterPlayers={rosterPlayers}
+          selectedRosterId={selectedRosterId}
+          setSelectedRosterId={setSelectedRosterId}
+          onAddTeam={onAddTeam}
+          onAddPlayer={onAddPlayer}
+          onAddPlayerToRoster={onAddPlayerToRoster}
+          onRemovePlayerFromRoster={onRemovePlayerFromRoster}
+          onCreateRoster={onCreateRoster}
+          onDeleteRoster={onDeleteRoster}
+        />
+      ) : activeTab === 'teams' ? (
+        <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm max-w-xl">
+          <h3 className="text-xl font-bold mb-4">Create New Team</h3>
+          <p className="text-sm text-gray-500 mb-6">Create a team once, and it will be available to all authors forever.</p>
+          <form onSubmit={async (e) => {
+            e.preventDefault();
+            const data = new FormData(e.target as HTMLFormElement);
+            const teamName = data.get('teamName')?.toString().trim();
+            if (teamName) {
+              await onAddTeam(teamName);
+              (e.target as HTMLFormElement).reset();
+            }
+          }} className="flex gap-4">
+            <input name="teamName" type="text" placeholder="Austin Outlaws..." required className="flex-1 w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3" />
+            <button type="submit" className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold transition-colors hover:bg-red-700">Add Team</button>
+          </form>
+        </div>
+      ) : (
+        <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm max-w-xl">
+          <h3 className="text-xl font-bold mb-4">Create Global Player</h3>
+          <p className="text-sm text-gray-500 mb-6">Add a player to the global database. Ensure they don't already exist first!</p>
+          <form onSubmit={async (e) => {
+            e.preventDefault();
+            const data = new FormData(e.target as HTMLFormElement);
+            const fName = data.get('firstName')?.toString().trim();
+            const lName = data.get('lastName')?.toString().trim();
+            if (fName && lName) {
+              await onAddPlayer(fName, lName);
+              (e.target as HTMLFormElement).reset();
+            }
+          }} className="space-y-4">
+            <input name="firstName" type="text" placeholder="First Name..." required className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3" />
+            <input name="lastName" type="text" placeholder="Last Name..." required className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3" />
+            <button type="submit" className="w-full bg-red-600 text-white px-4 py-3 rounded-xl font-bold transition-colors hover:bg-red-700">Add Player</button>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
-  const [hasSeenLanding, setHasSeenLanding] = useState<boolean>(false);
+  const [hasSeenLanding, setHasSeenLanding] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const hash = window.location.hash;
+      if (hash && hash.length > 2 && hash !== '#/') {
+        return true;
+      }
+      return sessionStorage.getItem('hasSeenLanding') === 'true';
+    }
+    return false;
+  });
+
+  const handleBypassLanding = () => {
+    setHasSeenLanding(true);
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem('hasSeenLanding', 'true');
+    }
+  };
   const [videos, setVideos] = useState<Video[]>([]);
   const [games, setGames] = useState<Game[]>([]);
   const [currentVideo, setCurrentVideo] = useState<Video | null>(null);
@@ -3548,6 +3980,7 @@ export default function App() {
 
   const [player, setPlayer] = useState<any>(null);
   const [currentTime, setCurrentTime] = useState(0);
+  const hasAutoSeekedRef = useRef<boolean>(false);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
   const [popupTimeOffset, setPopupTimeOffset] = useState<number>(0);
@@ -3555,7 +3988,7 @@ export default function App() {
   const [selectedTeamContext, setSelectedTeamContext] = useState<'home' | 'away' | null>('home');
 
   // Management State
-  const [view, setView] = useState<'tracker' | 'video' | 'manage' | 'stats' | 'review' | 'help' | 'playerProfile' | 'teamProfile' | 'gameProfile'>(window.innerWidth < 640 ? 'stats' : 'tracker');
+  const [view, setView] = useState<'tracker' | 'video' | 'manage' | 'create' | 'stats' | 'review' | 'help' | 'playerProfile' | 'teamProfile' | 'gameProfile'>('stats');
   const [activePlayerId, setActivePlayerId] = useState<string | null>(null);
   const [activeTeamId, setActiveTeamId] = useState<string | null>(null);
   const [activeGameId, setActiveGameId] = useState<string | null>(null);
@@ -3583,6 +4016,47 @@ export default function App() {
     });
   };
 
+  // URL Deep Linking / Routing Sync
+  useEffect(() => {
+    const handleHashChange = () => {
+      const hash = window.location.hash;
+      if (hash.startsWith('#/game/')) {
+        setActiveGameId(hash.replace('#/game/', ''));
+        setView('gameProfile');
+      } else if (hash.startsWith('#/team/')) {
+        setActiveTeamId(hash.replace('#/team/', ''));
+        setView('teamProfile');
+      } else if (hash.startsWith('#/player/')) {
+        setActivePlayerId(hash.replace('#/player/', ''));
+        setView('playerProfile');
+      } else if (hash === '#/stats' || hash === '') {
+        setView('stats');
+      } else if (hash.startsWith('#/')) {
+        const route = hash.replace('#/', '') as ViewState;
+        if (['tracker', 'video', 'manage', 'create', 'review', 'help'].includes(route)) {
+          setView(route);
+        }
+      }
+    };
+
+    handleHashChange(); // Run once on startup
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
+
+  useEffect(() => {
+    let newHash = '#/';
+    if (view === 'gameProfile' && activeGameId) newHash = `#/game/${activeGameId}`;
+    else if (view === 'teamProfile' && activeTeamId) newHash = `#/team/${activeTeamId}`;
+    else if (view === 'playerProfile' && activePlayerId) newHash = `#/player/${activePlayerId}`;
+    else if (view === 'stats') newHash = '#/stats';
+    else newHash = `#/${view}`;
+
+    if (window.location.hash !== newHash) {
+      window.history.pushState(null, '', newHash);
+    }
+  }, [view, activeGameId, activeTeamId, activePlayerId]);
+
   const handlePlayerProfileClick = (id: string) => { pushProfile('playerProfile', { p: id }); };
   const handleTeamProfileClick = (id: string) => { pushProfile('teamProfile', { t: id }); };
   const handleGameProfileClick = (id: string) => { pushProfile('gameProfile', { g: id }); };
@@ -3600,10 +4074,13 @@ export default function App() {
     return id;
   });
   const voterId = user?.uid || deviceId;
-  const [simulateRole, setSimulateRole] = useState<'voter' | 'author' | 'trusted'>('trusted');
-  const [userRoles, setUserRoles] = useState<{ authors: string[]; trusted: string[] }>({ authors: [], trusted: [] });
+  const [simulateRole, setSimulateRole] = useState<'voter' | 'author' | 'moderator' | 'trusted'>('trusted');
+  const [userRoles, setUserRoles] = useState<{ authors: string[]; trusted: string[]; moderators: string[] }>({ authors: [], trusted: [], moderators: [] });
   // Effective role: admin can simulate any role; otherwise check config assignments
-  const effectiveRole = isAdmin ? simulateRole : userRoles.trusted.includes(user?.email || '') ? 'trusted' : user ? 'author' : 'voter';
+  const effectiveRole = isAdmin ? simulateRole
+    : userRoles.trusted.includes(user?.email || '') ? 'trusted'
+    : userRoles.moderators.includes(user?.email || '') ? 'moderator'
+    : user ? 'author' : 'voter';
   const [statsFilter, setStatsFilter] = useState<'all' | 'verified'>('all');
 
   // Demo data for when Firestore is unavailable
@@ -3616,7 +4093,10 @@ export default function App() {
     videos: Video[];
     fileName: string;
   } | null>(null);
-  const [rightPanelTab, setRightPanelTab] = useState<'live_events' | 'record' | 'gamecast' | 'rosters'>('live_events');
+  const [rightPanelTab, setRightPanelTab] = useState<'live_events' | 'record' | 'momentum' | 'rosters'>('live_events');
+  const [eventsListFilterMode, setEventsListFilterMode] = useState<'now' | 'all'>('now');
+  const [eventsListTeamFilter, setEventsListTeamFilter] = useState<string>('all');
+  const [eventsListEventFilter, setEventsListEventFilter] = useState<string>('all');
   const [draftEvents, setDraftEvents] = useState<DraftEvent[]>([]);
   const [watchLeagueId, setWatchLeagueId] = useState<string>('all');
   const [trackerYearId, setTrackerYearId] = useState<string>('all');
@@ -3651,7 +4131,7 @@ export default function App() {
   }, [statsSeasons]);
 
   const currentUserTeamId = useMemo(() => teams.find(t => t.emails?.includes(user?.email || ''))?.id, [teams, user]);
-  const currentSeasonId = import.meta.env.VITE_CURRENT_SEASON_ID || '';
+  const currentSeasonId = ''; // All stats public
 
   const statsGames = useMemo(() => {
     return statsGamesRaw.filter(g => !legacySeasonIds.has(g.seasonId));
@@ -3693,6 +4173,22 @@ export default function App() {
     const validGameIds = new Set(dashboardGames.map(g => g.id));
     return statsEvents.filter(e => validGameIds.has(e.gameId));
   }, [statsEvents, dashboardGames]);
+
+  // Contextually filter dropdowns to only show options that contain data
+  const filteredDropdownSeasons = useMemo(() => {
+    const activeSeasonIds = new Set(dashboardGames.map(g => g.seasonId));
+    return statsSeasons.filter(s => activeSeasonIds.has(s.id));
+  }, [statsSeasons, dashboardGames]);
+
+  const filteredDropdownTeams = useMemo(() => {
+    const activeTeamIds = new Set<string>();
+    dashboardGames.forEach(g => {
+      if (g.homeTeamId) activeTeamIds.add(g.homeTeamId);
+      if (g.awayTeamId) activeTeamIds.add(g.awayTeamId);
+    });
+    return statsTeams.filter(t => activeTeamIds.has(t.id));
+  }, [statsTeams, dashboardGames]);
+
   const [newVideoData, setNewVideoData] = useState({
     seasonId: '',
     homeTeamId: '',
@@ -3761,9 +4257,9 @@ export default function App() {
 
       if (rolesSnap.exists()) {
         const d = rolesSnap.data() || {};
-        setUserRoles({ authors: d.authors || [], trusted: d.trusted || [] });
+        setUserRoles({ authors: d.authors || [], trusted: d.trusted || [], moderators: d.moderators || [] });
       } else {
-        setUserRoles({ authors: [], trusted: [] });
+        setUserRoles({ authors: [], trusted: [], moderators: [] });
       }
 
       setDataLoaded(true);
@@ -3872,11 +4368,16 @@ export default function App() {
     if (!player) return;
 
     const interval = setInterval(() => {
-      setCurrentTime(player.getCurrentTime());
+      try {
+        setCurrentTime(player.getCurrentTime());
+      } catch (err) {
+        // Iframe unmounted or disconnected
+      }
     }, 500);
 
     return () => clearInterval(interval);
   }, [player]);
+
 
   const handleAddEvent = async (
     type: EventType,
@@ -3939,6 +4440,8 @@ export default function App() {
     setManualActivePlayerIds(nextActive);
   };
 
+
+
   const handleCreateDraftEvent = (
     type: EventType | null,
     teamId?: string | null,
@@ -3948,12 +4451,14 @@ export default function App() {
     timeOverride?: number
   ) => {
     if (!currentVideo || !user) return;
-    const vTime = timeOverride !== undefined ? timeOverride : (player ? player.getCurrentTime() : 0);
+    const vTime = timeOverride !== undefined ? timeOverride : (player ? (function(){ try { return player.getCurrentTime(); } catch(e){ return 0; }})() : 0);
 
     // Auto-pause video when entering draft mode
-    if (player && player.getPlayerState() === 1) { // 1 = playing
-      player.pauseVideo();
-    }
+    try {
+      if (player && player.getPlayerState() === 1) { // 1 = playing
+        player.pauseVideo();
+      }
+    } catch(e) {}
 
     let inferredTeamId = teamId || null;
     if (!inferredTeamId && currentGame && type) {
@@ -3961,8 +4466,8 @@ export default function App() {
       if (type === 'control_change') {
         const cTeam = getControlTeamAtTime(computeControlPeriods(past), vTime);
         inferredTeamId = cTeam === currentGame.homeTeamId ? currentGame.awayTeamId : currentGame.homeTeamId;
-      } else if (['goal', 'shot', 'turnover', 'assist'].includes(type)) {
-        const lastQ = past.slice().reverse().find(e => ['goal', 'shot', 'turnover', 'quadball_start', 'takeaway'].includes(e.type as string) && e.teamId);
+      } else if (['goal', 'shot', 'attempt', 'turnover', 'assist'].includes(type)) {
+        const lastQ = past.slice().reverse().find(e => ['goal', 'shot', 'attempt', 'turnover', 'quadball_start', 'takeaway'].includes(e.type as string) && e.teamId);
         if (lastQ) {
           if (['goal', 'turnover'].includes(lastQ.type)) {
             inferredTeamId = lastQ.teamId === currentGame.homeTeamId ? currentGame.awayTeamId : currentGame.homeTeamId;
@@ -4079,6 +4584,10 @@ export default function App() {
   };
 
   const handleVerifyGame = async (gameId: string) => {
+    if (effectiveRole === 'voter') {
+      toast.error('You do not have permission to verify games.');
+      return;
+    }
     if (!gameId) return;
     const currentGame = games.find(g => g.id === gameId);
     const newVerified = !(currentGame?.isVerified);
@@ -4104,6 +4613,10 @@ export default function App() {
   };
 
   const handleToggleAllEventsVerified = async (gameId: string) => {
+    if (effectiveRole === 'voter') {
+      toast.error('You do not have permission to verify events.');
+      return;
+    }
     if (!gameId) return;
     try {
       const gameEventsRef = doc(db, 'gameEvents', gameId);
@@ -4183,11 +4696,13 @@ export default function App() {
     }
 
     // Auto-resume video and focus iframe after quaffle / control events
-    const autoResumeTypes = ['goal', 'shot', 'turnover', 'quadball_start', 'control_change', 'control_start'];
+    const autoResumeTypes = ['goal', 'shot', 'attempt', 'turnover', 'quadball_start', 'control_change', 'control_start'];
     if (draft.type && autoResumeTypes.includes(draft.type)) {
-      if (player && player.getPlayerState() !== 1) { // not already playing
-        player.playVideo();
-      }
+      try {
+        if (player && player.getPlayerState() !== 1) { // not already playing
+          player.playVideo();
+        }
+      } catch (e) {}
       // Focus the YouTube iframe so arrow keys work
       setTimeout(() => {
         const iframe = document.querySelector('iframe[src*="youtube"]') as HTMLIFrameElement;
@@ -4391,12 +4906,11 @@ export default function App() {
     } catch (error) { handleFirestoreError(error, OperationType.DELETE, 'teams'); }
   };
 
-  const handleDeleteGame = async (id: string) => {
-    const relatedVideos = videos.filter(v => v.gameId === id);
-    const relatedEventsCount = allEvents.filter(e => e.gameId === id).length;
+  const handleDeleteGame = async (id: string, tagParam?: string | null) => {
     const shortId = id.length > 16 ? id.substring(0, 16) + '…' : id;
+    const isTargetedType = tagParam !== undefined;
     const typed = prompt(
-      `⚠️ DESTRUCTIVE ACTION ⚠️\n\nThis will permanently delete:\n• 1 game (${id})\n• ${relatedVideos.length} connected video(s)\n• ${relatedEventsCount} recorded events\n\nType "${shortId}" to confirm:`
+      `⚠️ DESTRUCTIVE ACTION ⚠️\n\nThis will permanently delete:\n• Game List Entry: ${id}${isTargetedType ? `\n• Specific Tag Version: "${tagParam || '(empty)'}"` : ''}\n\nType "${shortId}" to confirm:`
     );
     if (!typed || typed.trim() !== shortId) {
       toast.info('Deletion cancelled.');
@@ -4404,35 +4918,34 @@ export default function App() {
     }
 
     try {
-      // 1. Remove from aggregated games (read-filter-write to avoid arrayRemove field mismatch)
+      let isLastArrayEntry = true;
       const aggGamesSnap = await getDoc(doc(db, 'aggregated', 'games'));
       if (aggGamesSnap.exists()) {
         const currentData = (aggGamesSnap.data().data || []) as any[];
-        const filtered = currentData.filter((g: any) => g.id !== id);
+        
+        let removedFound = false;
+        const filtered = currentData.filter((g: any) => {
+          if (g.id !== id) return true; // Keep other games
+          
+          if (!removedFound && isTargetedType && g.tag === tagParam) {
+            removedFound = true; // Delete exactly one target from this tag copy
+            return false;
+          } else if (!isTargetedType) {
+            return false; // Wipe the whole ID
+          }
+          return true; // Keep duplicates 
+        });
+
+        isLastArrayEntry = !filtered.some(g => g.id === id);
         await updateDoc(doc(db, 'aggregated', 'games'), { data: filtered });
       }
 
-      // 2. Delete the individual game doc
-      await deleteDoc(doc(db, 'games', id));
-
-      // 3. Cascade to Videos — remove from aggregated and delete docs
-      if (relatedVideos.length > 0) {
-        const aggVideosSnap = await getDoc(doc(db, 'aggregated', 'videos'));
-        if (aggVideosSnap.exists()) {
-          const currentVideoData = (aggVideosSnap.data().data || []) as any[];
-          const videoIds = new Set(relatedVideos.map(v => v.id));
-          const filteredVideos = currentVideoData.filter((v: any) => !videoIds.has(v.id));
-          await updateDoc(doc(db, 'aggregated', 'videos'), { data: filteredVideos });
-        }
-        for (const v of relatedVideos) {
-          await deleteDoc(doc(db, 'videos', v.id));
-        }
+      // If it's the last array entry, or we wanted to wipe the whole ID, nuke the document.
+      if (isLastArrayEntry || !isTargetedType) {
+        await deleteDoc(doc(db, 'games', id));
       }
 
-      // 4. Cascade Destroy entire Game Event Log
-      await deleteDoc(doc(db, 'gameEvents', id));
-
-      toast.success('Game and all connected dependencies wiped');
+      toast.success(isLastArrayEntry || !isTargetedType ? 'Game deleted completely' : 'Duplicate Game list entry deleted successfully');
       loadGlobalData();
     } catch (error) { handleFirestoreError(error, OperationType.DELETE, 'games'); }
   };
@@ -4517,25 +5030,23 @@ export default function App() {
     } catch (error) { handleFirestoreError(error, OperationType.WRITE, 'players'); }
   };
 
-  const handleAddRole = async (email: string, tier: 'authors' | 'trusted') => {
+  const handleAddRole = async (email: string, tier: 'authors' | 'trusted' | 'moderators') => {
     if (effectiveRole !== 'trusted') {
       toast.error("You don't have permission to modify roles.");
       return;
     }
-    const currentList = tier === 'authors' ? userRoles.authors : userRoles.trusted;
+    const currentList = tier === 'authors' ? userRoles.authors : tier === 'trusted' ? userRoles.trusted : userRoles.moderators;
     if (currentList.includes(email)) return;
 
     try {
       const dbRef = doc(db, 'appConfig', 'roles');
       const snap = await getDoc(dbRef);
       if (!snap.exists()) {
-        await setDoc(dbRef, { authors: [], trusted: [] });
+        await setDoc(dbRef, { authors: [], trusted: [], moderators: [] });
       }
 
-      await updateDoc(dbRef, {
-        [tier === 'authors' ? 'authors' : 'trusted']: arrayUnion(email)
-      });
-      setUserRoles(prev => ({ ...prev, [tier === 'authors' ? 'authors' : 'trusted']: [...(tier === 'authors' ? prev.authors : prev.trusted), email] }));
+      await updateDoc(dbRef, { [tier]: arrayUnion(email) });
+      setUserRoles(prev => ({ ...prev, [tier]: [...(prev[tier] as string[]), email] }));
       toast.success(`Role assigned to ${email}`);
     } catch (e) {
       console.error(e);
@@ -4543,17 +5054,15 @@ export default function App() {
     }
   };
 
-  const handleRemoveRole = async (email: string, tier: 'authors' | 'trusted') => {
+  const handleRemoveRole = async (email: string, tier: 'authors' | 'trusted' | 'moderators') => {
     if (effectiveRole !== 'trusted') {
       toast.error("You don't have permission to modify roles.");
       return;
     }
     try {
       const dbRef = doc(db, 'appConfig', 'roles');
-      await updateDoc(dbRef, {
-        [tier === 'authors' ? 'authors' : 'trusted']: arrayRemove(email)
-      });
-      setUserRoles(prev => ({ ...prev, [tier === 'authors' ? 'authors' : 'trusted']: (tier === 'authors' ? prev.authors : prev.trusted).filter(e => e !== email) }));
+      await updateDoc(dbRef, { [tier]: arrayRemove(email) });
+      setUserRoles(prev => ({ ...prev, [tier]: (prev[tier] as string[]).filter(e => e !== email) }));
       toast.success(`Role removed for ${email}`);
     } catch (e) {
       console.error(e);
@@ -4765,11 +5274,11 @@ export default function App() {
 
   const trackingYears = useMemo(() => {
     const ySet = new Set<string>();
-    statsSeasons.forEach(s => {
-      if (s.name) ySet.add(s.name);
-      else if (s.id) ySet.add(s.id);
-    });
+    const gamesWithVideos = new Set(statsVideos.map(v => v.gameId));
+
     statsGames.forEach(g => {
+      if (!gamesWithVideos.has(g.id)) return; // Exclude games without videos
+
       if (watchLeagueId !== 'all') {
         const s = statsSeasons.find(sea => sea.id === g.seasonId);
         if (!s || s.league !== watchLeagueId) return;
@@ -4779,7 +5288,7 @@ export default function App() {
       else if (g.seasonId) ySet.add(g.seasonId);
     });
     return Array.from(ySet).sort((a, b) => b.localeCompare(a));
-  }, [statsGames, statsSeasons, watchLeagueId]);
+  }, [statsGames, statsSeasons, statsVideos, watchLeagueId]);
 
   const watchLeagues = useMemo(() => {
     const lSet = new Set<string>();
@@ -4916,6 +5425,31 @@ export default function App() {
     return enrichEventsWithGameTime(filtered);
   }, [statsEvents, events, currentVideo]);
 
+  // Reset auto-seek when video changes
+  useEffect(() => {
+    hasAutoSeekedRef.current = false;
+  }, [currentVideo?.id]);
+
+  // Auto-seek to first event
+  useEffect(() => {
+    if (!player || activeTrackingEvents.length === 0 || hasAutoSeekedRef.current) return;
+    
+    let firstEventTime = Infinity;
+    for (const event of activeTrackingEvents) {
+      if (event.videoTime < firstEventTime) {
+         firstEventTime = event.videoTime;
+      }
+    }
+
+    if (firstEventTime !== Infinity && firstEventTime > 0) {
+       // Seek 3 seconds before the first event to give context buffer (min 0)
+       try { player.seekTo(Math.max(0, firstEventTime - 3), true); } catch(e) { }
+       hasAutoSeekedRef.current = true;
+    } else if (firstEventTime === 0) {
+       hasAutoSeekedRef.current = true;
+    }
+  }, [player, activeTrackingEvents]);
+
   // Dynamically resolve on-field players and their active positions based on manual overrides AND chronological substitution events
   const activePlayerPositions = useMemo(() => {
     const active = new Map<string, PositionType>();
@@ -4937,7 +5471,7 @@ export default function App() {
   }, [manualActivePlayerIds, activeTrackingEvents, currentTime]);
 
   if (!isAuthReady) return <div className="min-h-screen bg-white flex items-center justify-center text-gray-900">Loading...</div>;
-  if (!user && !hasSeenLanding) return <LandingHero onProceed={() => setHasSeenLanding(true)} />;
+  if (!user && !hasSeenLanding) return <LandingHero onProceed={() => { handleBypassLanding(); setView('stats'); }} onSignIn={() => handleBypassLanding()} />;
 
   return (
     <div className={cn("bg-white text-gray-900 font-sans selection:bg-red-200/50", view === 'tracker' ? "h-screen overflow-hidden flex flex-col" : "min-h-screen")}>
@@ -4964,7 +5498,7 @@ export default function App() {
             <button
               onClick={() => setView('tracker')}
               className={cn(
-                "px-4 py-2 rounded-lg font-medium transition-all hidden sm:flex items-center gap-2",
+                "px-4 py-2 rounded-lg font-medium transition-all hidden md:flex items-center gap-2",
                 view === 'tracker' ? "bg-red-600 text-white" : "bg-gray-50 text-gray-500 hover:text-gray-900 border border-gray-200"
               )}
             >
@@ -4990,15 +5524,29 @@ export default function App() {
               >
                 <option value="voter">View As: Voter</option>
                 <option value="author">View As: Author</option>
-                <option value="trusted">View As: Trusted</option>
+                <option value="moderator">View As: Moderator</option>
+                <option value="trusted">View As: Trusted (Admin)</option>
               </select>
+            )}
+
+            {(effectiveRole === 'moderator' || effectiveRole === 'trusted') && (
+              <button
+                onClick={() => setView(view === 'create' ? 'stats' : 'create')}
+                className={cn(
+                  "px-4 py-2 rounded-lg font-medium transition-all hidden md:flex items-center gap-2",
+                  view === 'create' ? "bg-red-600 text-white" : "bg-gray-50 text-gray-500 hover:text-gray-900 border border-gray-200"
+                )}
+              >
+                <Plus className="w-4 h-4" />
+                Create
+              </button>
             )}
 
             {(effectiveRole === 'trusted') && (
               <button
-                onClick={() => setView(view === 'manage' ? 'tracker' : 'manage')}
+                onClick={() => setView(view === 'manage' ? 'stats' : 'manage')}
                 className={cn(
-                  "px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-2",
+                  "px-4 py-2 rounded-lg font-medium transition-all hidden md:flex items-center gap-2",
                   view === 'manage' ? "bg-red-600 text-white" : "bg-gray-50 text-gray-500 hover:text-gray-900 border border-gray-200"
                 )}
               >
@@ -5181,6 +5729,18 @@ export default function App() {
               setView('stats');
             }}
           />
+        ) : view === 'create' ? (
+          <CreateView
+            teams={teams}
+            seasons={seasons}
+            players={allPlayers}
+            onAddTeam={handleAddTeam}
+            onAddPlayer={handleAddGlobalPlayer}
+            onAddPlayerToRoster={handleAddPlayerToRoster}
+            onRemovePlayerFromRoster={handleRemovePlayerFromRoster}
+            onCreateRoster={handleCreateRoster}
+            onDeleteRoster={handleDeleteRoster}
+          />
         ) : view === 'review' ? (
           <div className="-mx-4 px-4 -mt-8 pt-6 pb-8 min-h-[80vh]">
             <GameCastView players={statsPlayers} events={statsEvents} teams={statsTeams} games={statsGames} />
@@ -5251,7 +5811,7 @@ export default function App() {
               viewType={statsSubView as 'quadball' | 'beaters' | 'seekers'}
               seasonId={statsSeasonId} onSeasonChange={setStatsSeasonId}
               teamId={statsTeamId} onTeamChange={setStatsTeamId}
-              seasons={statsSeasons} teams={statsTeams}
+              seasons={filteredDropdownSeasons} teams={filteredDropdownTeams}
               search={statsSearch} onSearchChange={setStatsSearch}
               minGames={statsMinGames} onMinGamesChange={setStatsMinGames}
               controlFilter={statsControlFilter} onControlFilterChange={setStatsControlFilter}
@@ -5421,6 +5981,7 @@ export default function App() {
                         <div className="flex-1 min-w-0 flex items-center justify-between">
                           <div className="min-w-0 pr-4">
                             <p className={cn("font-bold text-sm leading-tight truncate transition-colors", isVerified ? "text-gray-900" : "text-gray-800")}>{g.displayName}</p>
+                            {g.tag && <p className={cn("text-[10px] font-normal truncate mt-0.5", isVerified ? "text-amber-700/60" : "text-gray-500")}>{g.tag}</p>}
                             <div className="flex items-center gap-2 mt-0.5">
                               <p className={cn("text-[11px] flex items-center gap-1 font-medium", isVerified ? "text-amber-600/80" : "text-gray-500")}>
                                 <Clock className="w-3 h-3" />
@@ -5553,73 +6114,74 @@ export default function App() {
                 })()}
               </div>
 
-              {/* Horizontal Recent Events Ticker */}
-              <div className="bg-gray-50 border border-gray-200 rounded-xl p-2 shrink-0 flex items-center gap-3 overflow-x-auto custom-scrollbar">
-                <div className="flex items-center gap-2 sticky left-0 bg-gray-50 pr-4 z-10 shrink-0 border-r border-gray-200 py-1">
-                  <span className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Recent</span>
-                  <span className="relative flex h-2 w-2">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  {activeTrackingEvents.filter(e => e.videoTime <= currentTime).sort((a, b) => b.videoTime - a.videoTime).slice(0, 15).map((event) => {
-                    const config = EVENT_CONFIG[event.type as EventType] || { label: event.type, color: 'bg-gray-100 text-gray-600', icon: <History className="w-3 h-3" /> };
-                    const dynamicLabel = (event.type === 'sub_in' && event.position) ? `${event.position} In` : (event.type === 'sub_out' && event.position) ? `${event.position} Out` : config.label;
-                    const p = allPlayers.find(plr => plr.id === event.playerId);
-                    const t = teams.find(tm => tm.id === event.teamId);
+              {/* Controls and Scoreboard Row */}
+              <div className="flex flex-row items-center justify-between gap-3 w-full mt-2 mb-3">
+                {/* Scoreboard Persistent Header */}
+                <div className="flex-1 min-w-0">
+                  {(() => {
+                    if (!currentGame) return null;
+                    const pastEvents = activeTrackingEvents.filter(e => e.videoTime <= currentTime);
+                    const liveScores = computeScores(pastEvents, currentGame.homeTeamId, currentGame.awayTeamId);
+                    const winCond = computeWinCondition(pastEvents, currentGame.homeTeamId, currentGame.awayTeamId);
+                    const homeName = teams.find(t => t.id === currentGame.homeTeamId)?.name || 'Home';
+                    const awayName = teams.find(t => t.id === currentGame.awayTeamId)?.name || 'Away';
+                    const currentDodgeballTeamId = getControlTeamAtTime(computeControlPeriods(pastEvents), currentTime);
+
                     return (
-                      <div
-                        key={event.id}
-                        onClick={() => {
-                          if (!player) return;
-                          const seekTime = event.type === 'goal' ? Math.max(0, event.videoTime - 10) : event.videoTime;
-                          player.seekTo(seekTime, true);
-                        }}
-                        className={cn("flex flex-col text-[10px] p-1.5 rounded-lg shadow-sm border shrink-0 min-w-[120px] transition-all relative group cursor-pointer hover:scale-[1.02]",
-                          event.teamId === currentGame?.homeTeamId ? "bg-red-50/50 border-red-100 hover:border-red-300" :
-                            event.teamId === currentGame?.awayTeamId ? "bg-blue-50/50 border-blue-100 hover:border-blue-300" : "bg-white border-gray-200 hover:border-gray-400"
-                        )}>
-                        <div className="flex items-center justify-between mb-1 opacity-80">
-                          <span className="font-bold flex items-center gap-1"><span className={cn(config.color.replace('bg-', 'text-').replace('text-white', 'text-gray-500'))}>{React.cloneElement(config.icon as React.ReactElement<any>, { className: 'w-3 h-3' })}</span> <span className="capitalize">{dynamicLabel}</span></span>
-                          <span className="font-mono text-gray-400 text-[10px]">{formatTime(event.gameTime ?? event.videoTime)}</span>
+                      <div className={cn("bg-white border rounded py-1.5 px-3 shrink-0 shadow-sm flex items-center justify-between w-full mx-auto gap-4 relative", winCond.flagOnPitch && !winCond.winner ? "bg-yellow-50 border-yellow-300" : "border-gray-200")}>
+                        {/* Left: Home */}
+                        <div className="flex items-center justify-end flex-1 w-0 gap-2">
+                          <p className="text-[10px] md:text-xs uppercase font-bold text-red-500 truncate text-right w-full">{homeName}</p>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <p className="text-xl font-mono font-bold text-red-600">{liveScores.home}</p>
+                            {currentDodgeballTeamId === currentGame.homeTeamId && <div title="Dodgeball Control" className="w-1.5 h-1.5 bg-black rounded-sm shadow-sm" />}
+                          </div>
                         </div>
-                        <div className="font-medium truncate opacity-90 text-[11px]">
-                          {p ? getPlayerShortName(p, event.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers) : t ? t.name : 'System Event'}
+
+                        {/* Center: Clock & Win Cond */}
+                        <div className="flex flex-col items-center justify-center shrink-0 border-x border-gray-100 px-4 min-w-[100px]">
+                          <p className="text-xs font-mono font-bold text-gray-800 bg-gray-100 px-2 py-0.5 rounded shadow-inner leading-none">{formatTime(gameTime)}</p>
+                          {winCond.winner ? (
+                            <p className="text-[8px] font-bold text-yellow-600 uppercase tracking-widest mt-1 truncate">
+                              Winner: {teams.find(t => t.id === winCond.winner)?.name || winCond.winner}
+                            </p>
+                          ) : winCond.targetSet ? (
+                            <div className="flex items-center gap-1 mt-1 text-[8px] font-bold uppercase tracking-widest text-yellow-600">
+                              {winCond.flagOnPitch && <Flag className="w-2.5 h-2.5" />} Target: {winCond.threshold}
+                            </div>
+                          ) : null}
                         </div>
-                        {(effectiveRole === 'trusted' || event.userId === user?.uid) && (
-                          <button
-                            onClick={(e) => { e.stopPropagation(); if (window.confirm('Delete this event permanently?')) handleDeleteRecordedEvent(event.id) }}
-                            className="absolute right-1 bottom-1 text-gray-300 hover:text-red-500 transition-colors p-0.5 hover:bg-red-50 rounded opacity-0 group-hover:opacity-100"
-                            title="Delete Event"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
+
+                        {/* Right: Away */}
+                        <div className="flex items-center justify-start flex-1 w-0 gap-2">
+                          <div className="flex items-center gap-1 shrink-0">
+                            {currentDodgeballTeamId === currentGame.awayTeamId && <div title="Dodgeball Control" className="w-1.5 h-1.5 bg-black rounded-sm shadow-sm" />}
+                            <p className="text-xl font-mono font-bold text-blue-600">{liveScores.away}</p>
+                          </div>
+                          <p className="text-[10px] md:text-xs uppercase font-bold text-blue-500 truncate text-left w-full">{awayName}</p>
+                        </div>
+
+                        {isAdmin && rightPanelTab === 'record' && (
+                          <div className="flex gap-1 absolute -right-2 top-0 bottom-0 translate-x-full">
+                            <button onClick={() => handleVerifyGame(currentGame.id)} className={cn("flex flex-col items-center justify-center p-1 rounded-r border transition-colors", currentGame.isVerified ? "text-emerald-600 bg-emerald-50 border-emerald-200" : "text-gray-400 bg-gray-50 border-gray-200 hover:text-emerald-600 hover:bg-emerald-50")} title={currentGame.isVerified ? "Unverify Game" : "Verify Game"}>
+                              <ShieldCheck className="w-3 h-3" />
+                            </button>
+                          </div>
                         )}
                       </div>
                     );
-                  })}
-                  {activeTrackingEvents.filter(e => e.videoTime <= currentTime).length === 0 && (
-                    <span className="text-[10px] text-gray-400 italic px-4 whitespace-nowrap">No events logged before this timestamp.</span>
-                  )}
+                  })()}
                 </div>
-                <div className="flex items-center gap-2 sticky right-0 bg-gray-50 pl-4 z-10 shrink-0 border-l border-gray-200 py-1 ml-auto">
-                  {/* -5 / +5 Seek Buttons */}
-                  <button
-                    onClick={() => { if (player) { const t = player.getCurrentTime(); player.seekTo(Math.max(0, t - 5), true); } }}
-                    title="Seek back 5 seconds"
-                    className="flex items-center justify-center h-7 px-2 rounded bg-gray-800 hover:bg-gray-700 active:scale-95 text-white text-[10px] font-bold tracking-tight transition-all select-none"
-                  >
-                    −5s
-                  </button>
-                  <button
-                    onClick={() => { if (player) { const t = player.getCurrentTime(); player.seekTo(t + 5, true); } }}
-                    title="Seek forward 5 seconds"
-                    className="flex items-center justify-center h-7 px-2 rounded bg-gray-800 hover:bg-gray-700 active:scale-95 text-white text-[10px] font-bold tracking-tight transition-all select-none"
-                  >
-                    +5s
-                  </button>
-                </div>
+
+                {/* Video Scrub Controls */}
+                {player && (
+                  <div className="flex gap-1 items-center shrink-0">
+                    <button onClick={() => player.seekTo(Math.max(0, currentTime - 15))} className="p-1.5 md:px-2 md:py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-[9px] md:text-[10px] uppercase tracking-wider font-bold rounded shadow-sm flex items-center justify-center gap-0.5 md:gap-1 transition-all" title="Rewind 15s"><Rewind className="w-3 h-3"/> <span className="hidden md:block">15s</span></button>
+                    <button onClick={() => player.seekTo(Math.max(0, currentTime - 5))} className="p-1.5 md:px-2 md:py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-[9px] md:text-[10px] uppercase tracking-wider font-bold rounded shadow-sm flex items-center justify-center gap-0.5 md:gap-1 transition-all" title="Rewind 5s"><Rewind className="w-3 h-3"/> <span className="hidden md:block">5s</span></button>
+                    <button onClick={() => player.seekTo(currentTime + 5)} className="p-1.5 md:px-2 md:py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-[9px] md:text-[10px] uppercase tracking-wider font-bold rounded shadow-sm flex items-center justify-center gap-0.5 md:gap-1 transition-all" title="Forward 5s"><span className="hidden md:block">5s</span> <FastForward className="w-3 h-3"/></button>
+                    <button onClick={() => player.seekTo(currentTime + 15)} className="p-1.5 md:px-2 md:py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-[9px] md:text-[10px] uppercase tracking-wider font-bold rounded shadow-sm flex items-center justify-center gap-0.5 md:gap-1 transition-all" title="Forward 15s"><span className="hidden md:block">15s</span> <FastForward className="w-3 h-3"/></button>
+                  </div>
+                )}
               </div>
 
               {!user && (
@@ -5632,74 +6194,6 @@ export default function App() {
 
             {/* Right Column: Event Feed & Roster */}
             <div className="lg:col-span-3 flex flex-col gap-4 overflow-hidden h-full">
-              {/* Scoreboard Persistent Header */}
-              {(() => {
-                if (!currentGame) return null;
-                const pastEvents = activeTrackingEvents.filter(e => e.videoTime <= currentTime);
-                const liveScores = computeScores(pastEvents, currentGame.homeTeamId, currentGame.awayTeamId);
-                const winCond = computeWinCondition(pastEvents, currentGame.homeTeamId, currentGame.awayTeamId);
-                const homeName = teams.find(t => t.id === currentGame.homeTeamId)?.name || 'Home';
-                const awayName = teams.find(t => t.id === currentGame.awayTeamId)?.name || 'Away';
-                const currentDodgeballTeamId = getControlTeamAtTime(computeControlPeriods(pastEvents), currentTime);
-
-                return (
-                  <div className={cn("bg-white border rounded-lg p-2 shrink-0 shadow-sm flex gap-2 items-center", winCond.flagOnPitch && !winCond.winner ? "bg-yellow-50 border-yellow-300" : "border-gray-200")}>
-                    <div className="flex-1 w-0">
-                      <div className="flex items-center justify-between relative mb-1">
-                        <div className="text-center flex-1 w-0">
-                          <p className="text-[9px] uppercase tracking-widest text-red-500 font-bold mb-0.5 truncate px-1" title={homeName}>{homeName}</p>
-                          <div className="flex items-center justify-center gap-1.5">
-                            <p className="text-2xl font-mono font-bold text-red-400 leading-none shadow-sm">{liveScores.home}</p>
-                            <div className="flex flex-col gap-1 justify-center">
-                              {currentDodgeballTeamId === currentGame.homeTeamId && <div title="Dodgeball Control" className="w-1.5 h-1.5 bg-black rounded-sm shadow-sm" />}
-                            </div>
-                          </div>
-                        </div>
-                        <div className="text-center px-1 flex flex-col items-center shrink-0 border-x border-gray-100 opacity-80">
-                          <p className="text-[10px] text-gray-600 font-mono bg-gray-100 px-1 py-0.5 rounded shadow-inner leading-none whitespace-nowrap">{formatTime(gameTime)}</p>
-                          <p className="text-[7px] font-bold text-gray-400 mt-0.5 mb-0.5">VS</p>
-                        </div>
-                        <div className="text-center flex-1 w-0">
-                          <p className="text-[9px] uppercase tracking-widest text-blue-500 font-bold mb-0.5 truncate px-1" title={awayName}>{awayName}</p>
-                          <div className="flex items-center justify-center gap-1.5 flex-row-reverse">
-                            <p className="text-2xl font-mono font-bold text-blue-400 leading-none shadow-sm">{liveScores.away}</p>
-                            <div className="flex flex-col gap-1 justify-center">
-                              {currentDodgeballTeamId === currentGame.awayTeamId && <div title="Dodgeball Control" className="w-1.5 h-1.5 bg-black rounded-sm shadow-sm" />}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      {winCond.winner ? (
-                        <div className="flex items-center justify-center gap-2 bg-yellow-500/10 border border-yellow-500/30 rounded-lg px-2 py-1.5 mt-2">
-                          <Trophy className="w-4 h-4 text-yellow-500 shrink-0" />
-                          <p className="text-[10px] font-bold text-yellow-600 leading-tight">
-                            {teams.find(t => t.id === winCond.winner)?.name || winCond.winner} wins!<br />Flag caught.
-                          </p>
-                        </div>
-                      ) : winCond.targetSet ? (
-                        <div className={cn("flex flex-col items-center justify-center gap-1 border rounded-lg px-2 py-1.5 mt-2 text-center", winCond.flagOnPitch ? "bg-yellow-400/20 border-yellow-500/30 text-yellow-700" : "bg-gray-100 text-gray-500 border-gray-200")}>
-                          {winCond.flagOnPitch && <div className="flex items-center justify-center gap-1.5"><Flag className="w-3 h-3 break-keep shrink-0" /><span className="text-[10px] font-bold uppercase tracking-wider">Flag On Field</span></div>}
-                          <span className="text-[10px] uppercase font-bold tracking-wider">Target Score: {winCond.threshold}</span>
-                        </div>
-                      ) : null}
-                    </div>
-
-                    {isAdmin && rightPanelTab === 'record' && (
-                      <div className="flex flex-col gap-1 border-l border-gray-100 pl-2 shrink-0 justify-center h-full my-auto text-center border-t-0 pt-0 mt-0">
-                        <button onClick={() => handleVerifyGame(currentGame.id)} className={cn("flex items-center justify-center gap-1 text-[8px] font-bold uppercase tracking-wider px-1 py-1 rounded border transition-colors w-full", currentGame.isVerified ? "text-emerald-600 bg-emerald-50 border-emerald-200 hover:text-red-600 hover:bg-red-50 hover:border-red-200" : "text-gray-400 hover:text-emerald-600 bg-gray-50 hover:bg-emerald-50 border-gray-200 hover:border-emerald-200")} title={currentGame.isVerified ? "Click to Unverify Game" : "Click to Verify Game"}>
-                          <ShieldCheck className={cn("w-3 h-3", currentGame.isVerified ? "text-emerald-500" : "")} />
-                          {currentGame.isVerified ? 'Verified' : 'Verify'}
-                        </button>
-                        <button onClick={() => handleToggleAllEventsVerified(currentGame.id)} className="flex items-center justify-center gap-1 text-[8px] font-bold uppercase tracking-wider text-gray-400 hover:text-amber-600 px-1 py-1 rounded bg-gray-50 hover:bg-amber-50 border border-gray-200 hover:border-amber-200 transition-colors w-full" title="Toggle verification status of all events">
-                          <ShieldCheck className="w-3 h-3" />
-                          All Events
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
               <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden flex flex-col h-full relative">
                 <div className="p-0 border-b border-gray-200 flex items-center justify-between bg-gray-50/50 z-10 shrink-0">
                   <div className="flex w-full">
@@ -5723,10 +6217,10 @@ export default function App() {
                       </button>
                     )}
                     <button
-                      onClick={() => setRightPanelTab('gamecast')}
-                      className={cn("flex-1 px-4 py-3 text-sm font-bold flex items-center justify-center gap-2 transition-colors", rightPanelTab === 'gamecast' ? "bg-white text-red-600 border-b-2 border-red-600" : "text-gray-500 hover:text-gray-700 hover:bg-gray-100")}
+                      onClick={() => setRightPanelTab('momentum')}
+                      className={cn("flex-1 px-4 py-3 text-sm font-bold flex items-center justify-center gap-2 transition-colors", rightPanelTab === 'momentum' ? "bg-white text-red-600 border-b-2 border-red-600" : "text-gray-500 hover:text-gray-700 hover:bg-gray-100")}
                     >
-                      <Activity className="w-4 h-4" /> GameCast
+                      <TrendingUp className="w-4 h-4" /> Momentum
                     </button>
                     <button
                       onClick={() => setRightPanelTab('rosters')}
@@ -5745,7 +6239,7 @@ export default function App() {
                     {/* Event Type Grid ALWAYS visible because Player Actions are now local popups */}
                     <div className="flex flex-col gap-3 mb-2">
                       {(() => {
-                        const chaserTypes = ['goal', 'shot', 'turnover'];
+                        const chaserTypes = ['goal', 'shot', 'attempt', 'turnover'];
                         const clockTypes = ['gameStart', 'gamePause', 'gameEnd'];
 
                         return (
@@ -5839,37 +6333,23 @@ export default function App() {
                       </div>
 
                       {/* Sub UI */}
-                      <div className="flex flex-col gap-1.5 mt-1">
-                        <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Substitutions</span>
-                        <div className="flex gap-2">
-                          <select
-                            onChange={(e) => {
-                              // Local non-reactor
-                            }}
-                            id="sub-type-selector"
-                            className="bg-gray-100 text-xs font-bold text-gray-700 rounded-lg outline-none border border-gray-200 px-3 cursor-pointer"
-                          >
-                            <option value="sub_in">SUB IN</option>
-                            <option value="sub_out">SUB OUT</option>
-                          </select>
-                          <button
-                            onClick={() => {
-                              const selectEl = document.getElementById('sub-type-selector') as HTMLSelectElement;
-                              const t = selectEl ? (selectEl.value as EventType) : 'sub_in';
-                              const allSubEvents = [...activeTrackingEvents, ...draftEvents].filter(e => ['sub_in', 'sub_out'].includes(e.type)).sort((a, b) => a.videoTime - b.videoTime);
-                              const lastTeamId = allSubEvents.length > 0 ? allSubEvents[allSubEvents.length - 1].teamId : currentGame?.homeTeamId;
-                              handleCreateDraftEvent(t, lastTeamId || null, null, null, null);
-                            }}
-                            className="flex-1 flex flex-col items-center justify-center py-2 px-4 rounded-lg border transition-all active:scale-95 group text-center shadow-sm bg-gray-800 hover:bg-gray-900 border-gray-900"
-                          >
-                            <span className="text-[10px] uppercase font-bold tracking-widest text-white leading-tight">
-                              Start Sub: {getScoreboardName(teams.find(t => {
-                                const allSubEvents = [...activeTrackingEvents, ...draftEvents].filter(e => ['sub_in', 'sub_out'].includes(e.type)).sort((a, b) => a.videoTime - b.videoTime);
-                                const lastTeamId = allSubEvents.length > 0 ? allSubEvents[allSubEvents.length - 1].teamId : currentGame?.homeTeamId;
-                                return t.id === lastTeamId;
-                              }))}
-                            </span>
-                          </button>
+                      <div className="flex flex-col gap-1.5 mt-1 border border-gray-200 bg-gray-50 p-2 rounded-lg">
+                        <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest">Substitutions</span>
+                        <div className="flex gap-4">
+                          <div className="flex-1 flex flex-col gap-1">
+                            <span className="text-[9px] text-gray-500 font-bold uppercase truncate">{getScoreboardName(teams.find(t => t.id === currentGame?.homeTeamId))}</span>
+                            <div className="flex gap-1">
+                              <button onClick={() => handleCreateDraftEvent('sub_in', currentGame?.homeTeamId || null, null, null, null)} className="flex-1 py-1.5 bg-gray-800 hover:bg-gray-900 rounded text-white text-[9px] font-bold shadow-sm transition-all active:scale-95">IN</button>
+                              <button onClick={() => handleCreateDraftEvent('sub_out', currentGame?.homeTeamId || null, null, null, null)} className="flex-1 py-1.5 bg-gray-800 hover:bg-gray-900 rounded text-white text-[9px] font-bold shadow-sm transition-all active:scale-95">OUT</button>
+                            </div>
+                          </div>
+                          <div className="flex-1 flex flex-col gap-1">
+                            <span className="text-[9px] text-gray-500 font-bold uppercase truncate">{getScoreboardName(teams.find(t => t.id === currentGame?.awayTeamId))}</span>
+                            <div className="flex gap-1">
+                              <button onClick={() => handleCreateDraftEvent('sub_in', currentGame?.awayTeamId || null, null, null, null)} className="flex-1 py-1.5 bg-gray-800 hover:bg-gray-900 rounded text-white text-[9px] font-bold shadow-sm transition-all active:scale-95">IN</button>
+                              <button onClick={() => handleCreateDraftEvent('sub_out', currentGame?.awayTeamId || null, null, null, null)} className="flex-1 py-1.5 bg-gray-800 hover:bg-gray-900 rounded text-white text-[9px] font-bold shadow-sm transition-all active:scale-95">OUT</button>
+                            </div>
+                          </div>
                         </div>
                       </div>
 
@@ -6228,7 +6708,7 @@ export default function App() {
                         seekerTime.set(pid, totalSec);
                       }
 
-                      const isAuthToRecord = !!(user && (effectiveRole === 'trusted' || currentVideo?.authorId === user.uid));
+                      const isAuthToRecord = !!(user && (effectiveRole === 'trusted' || (currentVideo as any)?.authorId === user.uid));
                       return (
                         <div className="flex flex-col gap-6 w-full max-w-full">
                           <div className="grid grid-cols-2 gap-4 border-b border-gray-200 pb-2">
@@ -6266,7 +6746,7 @@ export default function App() {
                                       const data = JSON.parse(e.dataTransfer.getData('text/plain'));
                                       if (data.playerId && data.teamId) {
                                         const eType = 'sub_in';
-                                        handleCreateDraftEvent(eType, data.teamId, data.playerId, null, pos);
+                                        handleCreateDraftEvent(eType, data.teamId, data.playerId, null, pos as PositionType);
                                       }
                                     } catch (err) { }
                                   }}
@@ -6357,16 +6837,17 @@ export default function App() {
                                                 </span>
                                                 <button onClick={(e) => { e.stopPropagation(); setPopupTimeOffset(p => p + 1); }} className="w-5 h-5 flex items-center justify-center bg-slate-700 hover:bg-slate-600 rounded text-slate-300 text-xs font-bold transition-all active:scale-95">+1</button>
                                               </div>
-                                              <div className="grid grid-cols-2 gap-1.5">
+                                              <div className="flex flex-col gap-1">
                                                 {(!isBeater && !isSeeker) && (
-                                                  <>
-                                                    <button onClick={(e) => { e.stopPropagation(); handleCreateDraftEvent('goal', rp.teamId, rp.playerId, null, null, Math.max(0, (player ? player.getCurrentTime() : 0) + popupTimeOffset)); setSelectedPlayerId(null); }} className="col-span-2 py-2 bg-emerald-500 hover:bg-emerald-400 text-white rounded-lg font-black tracking-widest text-[10px] shadow-[0_2px_0_theme(colors.emerald.700)] active:shadow-none active:translate-y-[2px] transition-all">GOAL</button>
-                                                    <button onClick={(e) => { e.stopPropagation(); handleCreateDraftEvent('shot', rp.teamId, rp.playerId, null, null, Math.max(0, (player ? player.getCurrentTime() : 0) + popupTimeOffset)); setSelectedPlayerId(null); }} className="col-span-2 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg font-bold text-[9px] border border-slate-700 transition-colors">SHOT</button>
-                                                  </>
+                                                  <div className="flex gap-1 items-stretch">
+                                                    <button onClick={(e) => { e.stopPropagation(); handleCreateDraftEvent('goal', rp.teamId, rp.playerId, null, null, Math.max(0, (player ? (function(){try{return player.getCurrentTime()}catch(e){return 0}})() : 0) + popupTimeOffset)); setSelectedPlayerId(null); }} className="flex-[1.5] py-1 bg-emerald-500 hover:bg-emerald-400 text-white rounded-lg font-black tracking-widest text-[10px] shadow-[0_2px_0_theme(colors.emerald.700)] active:shadow-none active:translate-y-[2px] transition-all">GOAL</button>
+                                                    <button onClick={(e) => { e.stopPropagation(); handleCreateDraftEvent('shot', rp.teamId, rp.playerId, null, null, Math.max(0, (player ? (function(){try{return player.getCurrentTime()}catch(e){return 0}})() : 0) + popupTimeOffset)); setSelectedPlayerId(null); }} className="flex-1 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg font-bold text-[9px] border border-slate-700 transition-colors">SHOT</button>
+                                                    <button onClick={(e) => { e.stopPropagation(); handleCreateDraftEvent('attempt', rp.teamId, rp.playerId, null, null, Math.max(0, (player ? (function(){try{return player.getCurrentTime()}catch(e){return 0}})() : 0) + popupTimeOffset)); setSelectedPlayerId(null); }} className="flex-1 py-1 bg-slate-800 hover:bg-violet-900/40 text-violet-400 rounded-lg font-bold text-[8px] border border-slate-700 transition-colors">ATTEMPT</button>
+                                                  </div>
                                                 )}
-                                                <div className="col-span-2 flex gap-1.5 mt-1 border-t border-slate-700/50 pt-1.5">
-                                                  <button onClick={(e) => { e.stopPropagation(); handleCreateDraftEvent('sub_out', rp.teamId, rp.playerId, null, null, Math.max(0, (player ? player.getCurrentTime() : 0) + popupTimeOffset)); setSelectedPlayerId(null); }} className="flex-1 py-1.5 bg-slate-800 hover:bg-red-900/40 text-red-400 rounded-lg font-bold text-[8px] border border-slate-700 transition-colors">SUB OUT</button>
-                                                  <button onClick={(e) => { e.stopPropagation(); handleCreateDraftEvent('sub_in', rp.teamId, rp.playerId, null, null, Math.max(0, (player ? player.getCurrentTime() : 0) + popupTimeOffset)); setSelectedPlayerId(null); }} className="flex-1 py-1.5 bg-slate-800 hover:bg-blue-900/40 text-blue-400 rounded-lg font-bold text-[8px] border border-slate-700 transition-colors">SUB IN</button>
+                                                <div className="flex gap-1 border-t border-slate-700/50 pt-1">
+                                                  <button onClick={(e) => { e.stopPropagation(); handleCreateDraftEvent('sub_out', rp.teamId, rp.playerId, null, null, Math.max(0, (player ? (function(){try{return player.getCurrentTime()}catch(e){return 0}})() : 0) + popupTimeOffset)); setSelectedPlayerId(null); }} className="flex-1 py-1.5 bg-slate-800 hover:bg-red-900/40 text-red-400 rounded-lg font-bold text-[8px] border border-slate-700 transition-colors">SUB OUT</button>
+                                                  <button onClick={(e) => { e.stopPropagation(); handleCreateDraftEvent('sub_in', rp.teamId, rp.playerId, null, null, Math.max(0, (player ? (function(){try{return player.getCurrentTime()}catch(e){return 0}})() : 0) + popupTimeOffset)); setSelectedPlayerId(null); }} className="flex-1 py-1.5 bg-slate-800 hover:bg-blue-900/40 text-blue-400 rounded-lg font-bold text-[8px] border border-slate-700 transition-colors">SUB IN</button>
                                                 </div>
                                               </div>
                                             </div>
@@ -6463,12 +6944,9 @@ export default function App() {
                     })()}
                   </div>
 
-                  <div className={cn("absolute inset-0 overflow-y-auto p-4 space-y-4 custom-scrollbar bg-gray-50", rightPanelTab === 'live_events' ? "block" : "hidden")} id="events-scroll-container">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">
-                        {statsFilter === 'verified' ? `${activeTrackingEvents.filter(e => e.status === 'verified').length} verified` : `${activeTrackingEvents.length} events`}
-                      </span>
-                      <div className="flex items-center gap-1">
+                  <div className={cn("absolute inset-0 overflow-y-auto p-4 custom-scrollbar bg-gray-50", rightPanelTab === 'live_events' ? "block" : "hidden")} id="events-scroll-container">
+                    <div className="sticky top-0 z-10 bg-gray-50/95 backdrop-blur-md pb-3 pt-1 mb-4 border-b border-gray-200/60 flex flex-col gap-2.5">
+                      <div className="flex items-center justify-between">
                         <button
                           onClick={() => {
                             const container = document.getElementById('events-scroll-container');
@@ -6483,30 +6961,58 @@ export default function App() {
                             });
                             if (nearest) (nearest as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
                           }}
-                          className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold transition-all border bg-white text-gray-500 border-gray-200 hover:text-red-500 hover:border-red-300"
+                          className="flex items-center gap-1 px-3 py-1 rounded text-[10px] font-bold transition-all border bg-white text-gray-500 border-gray-200 hover:text-red-500 hover:border-red-300 shadow-sm"
                           title="Scroll to event nearest current time"
                         >
                           <SkipForward className="w-3 h-3" />
                           Now
                         </button>
-                        <button
-                          onClick={() => setStatsFilter(statsFilter === 'verified' ? 'all' : 'verified')}
-                          className={cn(
-                            'flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold transition-all border',
-                            statsFilter === 'verified'
-                              ? 'bg-amber-500/10 text-amber-600 border-amber-500/30'
-                              : 'bg-white text-gray-400 border-gray-200 hover:text-amber-500'
-                          )}
-                        >
-                          <ShieldCheck className="w-3 h-3" />
-                          {statsFilter === 'verified' ? 'Verified' : 'All'}
-                        </button>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mr-1">
+                            {statsFilter === 'verified' ? `${activeTrackingEvents.filter(e => e.status === 'verified').length} verified` : `${activeTrackingEvents.length} events`}
+                          </span>
+                          <button
+                            onClick={() => setStatsFilter(statsFilter === 'verified' ? 'all' : 'verified')}
+                            className={cn('flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold transition-all border', statsFilter === 'verified' ? 'bg-amber-500/10 text-amber-600 border-amber-500/30' : 'bg-white text-gray-400 border-gray-200 hover:text-amber-500')}
+                          >
+                            <ShieldCheck className="w-3 h-3" /> {statsFilter === 'verified' ? 'Verified' : 'All'}
+                          </button>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <select value={eventsListTeamFilter} onChange={e => setEventsListTeamFilter(e.target.value)} className="flex-1 text-[10px] font-bold text-gray-600 bg-white border border-gray-200 rounded-md py-1.5 px-2 outline-none focus:border-red-300 focus:ring-1 focus:ring-red-200 shadow-sm text-center appearance-none">
+                          <option value="all">All Teams</option>
+                          {currentGame?.homeTeamId && <option value={currentGame.homeTeamId}>Home</option>}
+                          {currentGame?.awayTeamId && <option value={currentGame.awayTeamId}>Away</option>}
+                        </select>
+                        <select value={eventsListEventFilter} onChange={e => setEventsListEventFilter(e.target.value)} className="flex-1 text-[10px] font-bold text-gray-600 bg-white border border-gray-200 rounded-md py-1.5 px-2 outline-none focus:border-red-300 focus:ring-1 focus:ring-red-200 shadow-sm text-center appearance-none">
+                          <option value="all">All Types</option>
+                          <option value="goal">Goals</option>
+                          <option value="assist">Assists</option>
+                          <option value="shot">Shots / Attempts</option>
+                          <option value="turnover">Turnovers</option>
+                          <option value="control_change">Control Change</option>
+                          <option value="card">Cards / Fouls</option>
+                          <option value="sub_in">Substitutions</option>
+                        </select>
                       </div>
                     </div>
+                    <div className="space-y-4">
                     {(() => {
-                      const displayEvents = statsFilter === 'verified'
-                        ? activeTrackingEvents.filter(e => e.status === 'verified')
-                        : activeTrackingEvents;
+                      let displayEvents = [...activeTrackingEvents].sort((a,b) => a.videoTime - b.videoTime);
+                      
+                      if (statsFilter === 'verified') displayEvents = displayEvents.filter(e => e.status === 'verified');
+                      if (eventsListTeamFilter !== 'all') displayEvents = displayEvents.filter(e => e.teamId === eventsListTeamFilter);
+                      if (eventsListEventFilter !== 'all') {
+                        if (eventsListEventFilter === 'sub_in') displayEvents = displayEvents.filter(e => e.type === 'sub_in' || e.type === 'sub_out');
+                        else if (eventsListEventFilter === 'card') displayEvents = displayEvents.filter(e => e.type === 'foul' || e.type === 'card');
+                        else if (eventsListEventFilter === 'shot') displayEvents = displayEvents.filter(e => e.type === 'shot' || e.type === 'attempt');
+                        else if (eventsListEventFilter === 'control_change') displayEvents = displayEvents.filter(e => e.type === 'control_change' || e.type === 'control_start');
+                        else displayEvents = displayEvents.filter(e => e.type === eventsListEventFilter);
+                      }
+
+
+
                       return displayEvents.length === 0 ? (
                         <div className="h-full flex flex-col items-center justify-center text-gray-400 text-center p-8">
                           <Clock className="w-12 h-12 mb-4 opacity-20" />
@@ -6712,10 +7218,11 @@ export default function App() {
                         })
                       );
                     })()}
+                    </div>
                   </div>
 
-                  <div className={cn("absolute inset-0 overflow-y-auto custom-scrollbar bg-white", rightPanelTab === 'gamecast' ? "block" : "hidden")}>
-                    {rightPanelTab === 'gamecast' && <GameCastView players={allPlayers} events={enrichedEvents} teams={teams} games={games} overrideGameId={currentGame?.id} />}
+                  <div className={cn("absolute inset-0 overflow-y-auto custom-scrollbar bg-white", rightPanelTab === 'momentum' ? "block" : "hidden")}>
+                    {rightPanelTab === 'momentum' && <MatchMomentumView events={enrichedEvents} teams={teams} homeTeamId={currentGame?.homeTeamId || ''} awayTeamId={currentGame?.awayTeamId || ''} currentTime={player?.getCurrentTime() || 0} onSeek={(t) => player?.seekTo(t, true)} />}
                   </div>
                 </div>
 
