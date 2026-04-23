@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut } from 'firebase/auth';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, signOut } from 'firebase/auth';
 import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { toast } from 'sonner';
@@ -11,7 +11,14 @@ export const db = initializeFirestore(app, {
 }, firebaseConfig.firestoreDatabaseId ? firebaseConfig.firestoreDatabaseId : undefined);
 export const googleProvider = new GoogleAuthProvider();
 
-export const signIn = () => signInWithPopup(auth, googleProvider);
+export const signIn = async () => {
+  const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+  if (isMobile) {
+    await signInWithRedirect(auth, googleProvider);
+  } else {
+    await signInWithPopup(auth, googleProvider);
+  }
+};
 export const logOut = () => signOut(auth);
 
 export enum OperationType {

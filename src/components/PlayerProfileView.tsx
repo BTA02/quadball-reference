@@ -28,7 +28,7 @@ function sortData<T extends Record<string, any>>(data: T[], key: string, dir: So
 function SortHeader({ label, sortKey, currentSort, currentDir, onSort, tooltip }: any) {
   const active = currentSort === sortKey;
   return (
-    <th className={cn('px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider cursor-pointer select-none whitespace-nowrap text-center', active ? 'text-blue-600' : 'text-gray-400 hover:text-gray-600')} onClick={() => onSort(sortKey)} title={tooltip}>
+    <th className={cn('px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider cursor-pointer select-none whitespace-nowrap text-center', active ? 'text-blue-700' : 'text-slate-600 hover:text-slate-900')} onClick={() => onSort(sortKey)} title={tooltip}>
       <span className="inline-flex items-center gap-0.5">{label}</span>
       {active && <span className="text-[10px] ml-1">{currentDir === 'asc' ? '↑' : '↓'}</span>}
     </th>
@@ -37,7 +37,7 @@ function SortHeader({ label, sortKey, currentSort, currentDir, onSort, tooltip }
 
 function Cell({ value, highlight, bold }: any) {
   return (
-    <td className={cn('px-2 py-1.5 text-center text-xs tabular-nums font-mono', highlight === 'pos' && 'text-green-600', highlight === 'neg' && 'text-red-500', !highlight && 'text-[#e2e8f0]', bold && 'font-bold')}>
+    <td className={cn('px-2 py-1.5 text-center text-xs tabular-nums font-mono', highlight === 'pos' && 'text-emerald-700 font-bold', highlight === 'neg' && 'text-red-600 font-bold', !highlight && 'text-slate-800', bold && 'font-black')}>
       {typeof value === 'number' && value === Infinity ? '∞' : value}
     </td>
   );
@@ -81,7 +81,8 @@ export default function PlayerProfileView({
            return {
              ...pStat,
              gameId: g.id,
-             opponent: oppName
+             opponent: oppName,
+             description: g.tag
            };
          }
          return null;
@@ -226,8 +227,9 @@ export default function PlayerProfileView({
                 <thead>{renderTableHeader()}</thead>
                 <tbody>
                   {sortedPerGame.map(r => renderRow(r, (
-                    <button onClick={() => onGameSelect?.(r.gameId)} className="text-blue-600 hover:underline inline-flex text-left max-w-[150px] truncate">
-                      vs {r.opponent || 'Opponent'}
+                    <button onClick={() => onGameSelect?.(r.gameId)} className="text-blue-600 hover:underline flex flex-col items-start max-w-[220px] overflow-hidden">
+                      <span className="font-bold truncate w-full text-left">vs {r.opponent || 'Opponent'}</span>
+                      {r.description && <span className="text-[10px] text-gray-500 font-normal truncate w-full text-left leading-tight mt-0.5">{r.description}</span>}
                     </button>
                   ), r.gameId))}
                 </tbody>

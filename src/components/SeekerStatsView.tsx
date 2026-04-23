@@ -24,6 +24,13 @@ function sortBy<T>(arr: T[], key: keyof T, dir: SortDir): T[] {
   return [...arr].sort((a, b) => {
     const va = a[key] ?? 0;
     const vb = b[key] ?? 0;
+    
+    const aInd = va === 'N/A' || va === '∞' || va === Infinity || (typeof va === 'number' && isNaN(va)) || va === 'NaN';
+    const bInd = vb === 'N/A' || vb === '∞' || vb === Infinity || (typeof vb === 'number' && isNaN(vb)) || vb === 'NaN';
+    if (aInd && !bInd) return 1;
+    if (!aInd && bInd) return -1;
+    if (aInd && bInd) return 0;
+
     if (
       (typeof va === 'number' || typeof va === 'string') &&
       (typeof vb === 'number' || typeof vb === 'string') &&
@@ -45,7 +52,7 @@ function SortHeader({ label, sortKey, currentSort, currentDir, onSort, tooltip }
   const active = currentSort === sortKey;
   return (
     <th className={cn('px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider cursor-pointer select-none whitespace-nowrap text-center',
-        active ? 'text-amber-600' : 'text-gray-400 hover:text-gray-600')}
+        active ? 'text-amber-700' : 'text-slate-600 hover:text-slate-900')}
       onClick={() => onSort(sortKey)} title={tooltip}>
       <span className="inline-flex items-center gap-0.5">
         {label}
@@ -59,11 +66,7 @@ function SortHeader({ label, sortKey, currentSort, currentDir, onSort, tooltip }
 
 function Cell({ value, highlight, bold }: { value: string | number; highlight?: 'pos' | 'neg' | 'gold'; bold?: boolean }) {
   return (
-    <td className={cn('px-2 py-1.5 text-center text-xs tabular-nums font-mono',
-        highlight === 'pos' && 'text-green-600',
-        highlight === 'neg' && 'text-red-500',
-        highlight === 'gold' && 'text-amber-600',
-        !highlight && 'text-[#e2e8f0]',
+    <td className={cn('px-2 py-1.5 text-center text-xs tabular-nums font-mono text-slate-800',
         bold && 'font-bold')}>
       {value}
     </td>
@@ -93,7 +96,7 @@ interface SeekerStatsViewProps {
   teamId?: string;
   search?: string;
   minGames?: number;
-  controlFilter?: 'all' | 'with' | 'without';
+  bludgerControlMode?: 'all' | 'separate';
   flagFilter?: 'all' | 'on' | 'off';
   outlierFilter?: 'include' | 'exclude';
   onPlayerSelect?: (playerId: string) => void;
@@ -102,7 +105,7 @@ interface SeekerStatsViewProps {
 export default function SeekerStatsView({ 
   players, events, teams, games, seasons, statsFilter = 'all',
   seasonId: seasonFilter = '', teamId: teamFilter = '', search = '',
-  minGames = 1, controlFilter = 'all', flagFilter = 'all', outlierFilter = 'include',
+  minGames = 1, bludgerControlMode = 'all', flagFilter = 'all', outlierFilter = 'include',
   onPlayerSelect
 }: SeekerStatsViewProps) {
   const [page, setPage] = useState(1);
@@ -110,7 +113,7 @@ export default function SeekerStatsView({
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const perPage = 25;
 
-  useEffect(() => { setPage(1); }, [seasonFilter, teamFilter, minGames, controlFilter, flagFilter, outlierFilter]);
+  useEffect(() => { setPage(1); }, [seasonFilter, teamFilter, minGames, bludgerControlMode, flagFilter, outlierFilter]);
 
   const handleSort = (key: string) => {
     if (key === sortKey) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -146,10 +149,10 @@ export default function SeekerStatsView({
   const filters = useMemo(() => ({
     seasonId: seasonFilter || undefined,
     teamId: teamFilter || undefined,
-    controlFilter: controlFilter === 'all' ? undefined : controlFilter,
+    controlFilter: bludgerControlMode === 'all' ? undefined : undefined,
     flagFilter: flagFilter === 'all' ? undefined : flagFilter,
     outlierFilter
-  }), [seasonFilter, teamFilter, controlFilter, flagFilter, outlierFilter]);
+  }), [seasonFilter, teamFilter, bludgerControlMode, flagFilter, outlierFilter]);
 
   const seekerStats = useMemo(
     () => computeSeekerStats(events, players, games, filters),
@@ -193,7 +196,8 @@ export default function SeekerStatsView({
                 <SortHeader label="OpCTH" sortKey="opponentCatches" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Opponent Catches While On Pitch" />
                 <SortHeader label="C%" sortKey="catchPct" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Catch %" />
                 <SortHeader label="MIN/G" sortKey="avgMinPerGame" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Avg Minutes Per Game as Seeker" />
-                <SortHeader label="AVG CTH" sortKey="avgTimeToCatch" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Avg Time to Catch (from flag release)" />
+                <SortHeader label="AVG CTH" sortKey="avgTimeToCatch" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Avg Time to Catch (time on field)" />
+                <SortHeader label="FROM REL" sortKey="avgTimeFromRelease" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Avg Time from Flag Release" />
                 <SortHeader label="CTRL%" sortKey="controlPct" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Team Bludger Control % While Seeking" />
                 <SortHeader label="DIFF" sortKey="avgPointDiff" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Avg Point Diff at Catch" />
                 <SortHeader label="GWC" sortKey="gameWinningCatches" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Game Winning Catches" />
@@ -220,6 +224,7 @@ export default function SeekerStatsView({
                     <Cell value={`${row.catchPct}%`} highlight={row.catchPct >= 60 ? 'pos' : row.catchPct <= 30 ? 'neg' : undefined} bold />
                     <Cell value={formatMinutes(row.avgMinPerGame)} />
                     <Cell value={formatTime(row.avgTimeToCatch)} />
+                    <Cell value={formatTime(row.avgTimeFromRelease)} />
                     <Cell value={`${row.controlPct}%`} highlight={row.controlPct >= 60 ? 'pos' : row.controlPct <= 30 ? 'neg' : undefined} />
                     <Cell value={row.avgPointDiff > 0 ? `+${row.avgPointDiff}` : row.avgPointDiff || '—'} highlight={row.avgPointDiff > 0 ? 'pos' : row.avgPointDiff < 0 ? 'neg' : undefined} />
                     <Cell value={row.gameWinningCatches} highlight={row.gameWinningCatches > 0 ? 'gold' : undefined} />
@@ -232,7 +237,7 @@ export default function SeekerStatsView({
       </div>
 
       <div className="flex items-center justify-between text-[10px] text-gray-400">
-        <span>{filtered.length} seekers • CTH = catches • OpCTH = opp. catches while on pitch • AVG CTH = avg time to catch • CTRL% = bludger control while seeking</span>
+        <span>{filtered.length} seekers • CTH = catches • OpCTH = opp. catches while on pitch • AVG CTH = avg time to catch • FROM REL = avg time from release • CTRL% = bludger control while seeking</span>
         <div className="flex items-center gap-1">
           <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
             className="p-1 rounded disabled:opacity-30 hover:bg-gray-100"><ChevronLeft className="w-3 h-3" /></button>

@@ -28,7 +28,7 @@ function sortData<T extends Record<string, any>>(data: T[], key: string, dir: So
 function SortHeader({ label, sortKey, currentSort, currentDir, onSort, tooltip }: any) {
   const active = currentSort === sortKey;
   return (
-    <th className={cn('px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider cursor-pointer select-none whitespace-nowrap text-center', active ? 'text-red-500' : 'text-gray-400 hover:text-gray-600')} onClick={() => onSort(sortKey)} title={tooltip}>
+    <th className={cn('px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider cursor-pointer select-none whitespace-nowrap text-center', active ? 'text-red-700' : 'text-slate-600 hover:text-slate-900')} onClick={() => onSort(sortKey)} title={tooltip}>
       <span className="inline-flex items-center gap-0.5">{label}</span>
       {active && <span className="text-[10px] ml-1">{currentDir === 'asc' ? '↑' : '↓'}</span>}
     </th>
@@ -39,7 +39,7 @@ function Cell({ value, highlight, bold, align = 'center' }: any) {
   return (
     <td className={cn('px-2 py-1.5 text-xs tabular-nums font-mono', 
       align === 'center' ? 'text-center' : align === 'left' ? 'text-left' : 'text-right',
-      highlight === 'pos' && 'text-green-600', highlight === 'neg' && 'text-red-500', !highlight && 'text-[#e2e8f0]', bold && 'font-bold'
+      highlight === 'pos' && 'text-emerald-700 font-bold', highlight === 'neg' && 'text-red-600 font-bold', !highlight && 'text-slate-800', bold && 'font-black'
     )}>
       {typeof value === 'number' && value === Infinity ? '∞' : value}
     </td>
@@ -207,8 +207,15 @@ export default function GameBoxScoreView({
       </div>
 
       <div className="bg-white border text-center border-gray-200 rounded-2xl shadow-sm p-8 flex flex-col items-center justify-center relative overflow-hidden">
-        <div className="absolute top-4 left-4 text-[10px] text-gray-400 tracking-widest uppercase font-bold px-3 py-1 bg-gray-100 rounded-full">
-          {season?.description || season?.name}
+        <div className="absolute top-4 left-4 flex flex-col gap-1.5 items-start max-w-[50%]">
+          <div className="text-[10px] text-gray-400 tracking-widest uppercase font-bold px-3 py-1 bg-gray-100 rounded-full truncate max-w-full">
+            {season?.description || season?.name}
+          </div>
+          {game?.tag && (
+            <div className="text-[10px] text-gray-500 font-bold px-3 py-1 bg-gray-50 uppercase tracking-widest rounded-full border border-gray-100 shadow-sm truncate max-w-full">
+              {game.tag}
+            </div>
+          )}
         </div>
         
         <div className="flex flex-col md:flex-row items-center gap-8 md:gap-16 my-4 w-full justify-center">

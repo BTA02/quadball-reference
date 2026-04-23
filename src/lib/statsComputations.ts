@@ -90,11 +90,12 @@ export interface BasicPlayerStats {
   goals: number;
   assists: number;
   shots: number;
+  attempts: number;
   turnovers: number;
   fouls: number;
   cards: number;
   points: number;      // goals × 10
-  shotPct: number;     // goals / shots × 100
+  shotPct: number;     // goals / (shots+attempts) × 100
 }
 
 export function computeBasicStats(
@@ -141,6 +142,7 @@ export function computeBasicStats(
       goals: 0,
       assists: 0,
       shots: 0,
+      attempts: 0,
       turnovers: 0,
       fouls: 0,
       cards: 0,
@@ -168,6 +170,7 @@ export function computeBasicStats(
     if (t === 'goal') stats.goals++;
     else if (t === 'assist') stats.assists++;
     else if (t === 'shot') stats.shots++;
+    else if (t === 'attempt') stats.attempts++;
     else if (t === 'turnover') stats.turnovers++;
     else if (t === 'foul') stats.fouls++;
     else if (t === 'card') stats.cards++;
@@ -177,7 +180,7 @@ export function computeBasicStats(
   for (const [nid, stats] of statsMap) {
     stats.gamesPlayed = playerGameSets.get(nid)?.size || 0;
     stats.points = stats.goals + stats.assists;
-    stats.shotPct = (stats.goals + stats.shots) > 0 ? Math.round((stats.goals / (stats.goals + stats.shots)) * 1000) / 10 : 0;
+    stats.shotPct = (stats.goals + stats.shots + stats.attempts) > 0 ? Math.round((stats.goals / (stats.goals + stats.shots + stats.attempts)) * 1000) / 10 : 0;
   }
 
   return Array.from(statsMap.values());
@@ -290,16 +293,24 @@ export interface AdvancedPlayerStats {
   onOffDt: number;
   relPlusMinusRatio: number;
   minutesPlayed: number;
+  controlSeconds: number;
   teamPossessions: number;
   oppPossessions: number;
+  oppShotsOn: number;
+  oppAttemptsOn: number;
   teamTurnoversOn: number;
   oppTurnoversOn: number;
+  teamEmptyTurnoversOn: number;
+  oppEmptyTurnoversOn: number;
   goalsPerTwenty: number;
   assistsPerTwenty: number;
   pointsPerTwenty: number;
   goalsPerGame: number;
   assistsPerGame: number;
   pointsPerGame: number;
+  goalsPer100Possessions: number;
+  assistsPer100Possessions: number;
+  pointsPer100Possessions: number;
   shotPct: number;
   assistToTurnover: number;
   controlPctOnField: number;
@@ -307,7 +318,9 @@ export interface AdvancedPlayerStats {
   goals: number;
   assists: number;
   shots: number;
+  attempts: number;
   turnovers: number;
+  fouls: number;
   points: number;
 }
 
@@ -555,11 +568,17 @@ export function computeAdvancedStats(
     goals: number;
     assists: number;
     shots: number;
+    attempts: number;
     turnovers: number;
+    fouls: number;
     teamPossessions: number;
     oppPossessions: number;
+    oppShotsOn: number;
+    oppAttemptsOn: number;
     teamTurnoversOn: number;
     oppTurnoversOn: number;
+    teamEmptyTurnoversOn: number;
+    oppEmptyTurnoversOn: number;
     teamGoalsInGames: number;
     oppGoalsInGames: number;
     gameIds: Set<string>;
@@ -576,13 +595,20 @@ export function computeAdvancedStats(
         goals: 0,
         assists: 0,
         shots: 0,
+        attempts: 0,
         turnovers: 0,
+        fouls: 0,
         teamPossessions: 0,
         oppPossessions: 0,
+        oppShotsOn: 0,
+        oppAttemptsOn: 0,
         teamTurnoversOn: 0,
         oppTurnoversOn: 0,
+        teamEmptyTurnoversOn: 0,
+        oppEmptyTurnoversOn: 0,
         teamGoalsInGames: 0,
         oppGoalsInGames: 0,
+        controlSeconds: 0,
         gameIds: new Set(),
       });
     }
@@ -645,25 +671,38 @@ export function computeAdvancedStats(
     let homeStints: StintRecord[] = [];
     let awayStints: StintRecord[] = [];
 
-    const calculateActiveMinutes = (stint: StintRecord, teamId: string) => {
+    const calculateActiveStats = (stint: StintRecord, teamId: string) => {
       if (!filters.flagFilter && !filters.controlFilter) {
-         return getGameMinutesInWindow(clockIntervals, stint.startTime, stint.endTime);
+         return {
+           activeMinutes: getGameMinutesInWindow(clockIntervals, stint.startTime, stint.endTime),
+           controlSeconds: getControlSecondsInWindow(controlPeriods, teamId, stint.startTime, stint.endTime, clockIntervals)
+         };
       }
-      return getFilteredSecondsInWindow(teamId, stint.startTime, stint.endTime, clockIntervals, controlPeriods, flagReleaseTime, filters).activeSeconds / 60;
+      const filtered = getFilteredSecondsInWindow(teamId, stint.startTime, stint.endTime, clockIntervals, controlPeriods, flagReleaseTime, filters);
+      return {
+        activeMinutes: filtered.activeSeconds / 60,
+        controlSeconds: filtered.activeControlSeconds
+      };
     };
 
     if (processHome) {
-      homeStints = computePlayerStints(sorted, resolvedHomeId, homePlayerIds, gameEndTime);
+      homeStints = computePlayerStints(sorted, resolvedHomeId, homePlayerIds, gameEndTime).filter(s => s.position !== 'beater' && s.position !== 'seeker');
       for (const stint of homeStints) {
+        if (filters.position && stint.position !== filters.position && stint.position !== undefined) continue;
         const accum = getAccum(stint.playerId, game.homeTeamId);
-        accum.minutesPlayed += calculateActiveMinutes(stint, resolvedHomeId);
+        const activeData = calculateActiveStats(stint, resolvedHomeId);
+        accum.minutesPlayed += activeData.activeMinutes;
+        accum.controlSeconds += activeData.controlSeconds;
       }
     }
     if (processAway) {
-      awayStints = computePlayerStints(sorted, resolvedAwayId, awayPlayerIds, gameEndTime);
+      awayStints = computePlayerStints(sorted, resolvedAwayId, awayPlayerIds, gameEndTime).filter(s => s.position !== 'beater' && s.position !== 'seeker');
       for (const stint of awayStints) {
+        if (filters.position && stint.position !== filters.position && stint.position !== undefined) continue;
         const accum = getAccum(stint.playerId, game.awayTeamId);
-        accum.minutesPlayed += calculateActiveMinutes(stint, resolvedAwayId);
+        const activeData = calculateActiveStats(stint, resolvedAwayId);
+        accum.minutesPlayed += activeData.activeMinutes;
+        accum.controlSeconds += activeData.controlSeconds;
       }
     }
 
@@ -680,12 +719,13 @@ export function computeAdvancedStats(
       const t = (e.type || '').toUpperCase();
       const isGoal = t === 'GOAL';
       const isShot = t === 'SHOT';
+      const isAttempt = t === 'ATTEMPT';
       const isTurnover = t === 'TURNOVER';
       const isExplicitOffense = t === 'OFFENSE';
       const isExplicitDefense = t === 'DEFENSE';
       const isStartEvent = t === 'CONTROL_START' || t === 'QUADBALL_START';
 
-      if (!isGoal && !isShot && !isTurnover && !isExplicitOffense && !isExplicitDefense && !isStartEvent) continue;
+      if (!isGoal && !isShot && !isAttempt && !isTurnover && !isExplicitOffense && !isExplicitDefense && !isStartEvent) continue;
 
       let eventTeamId = e.teamId || playerTeamMap.get(e.playerId);
       if (!eventTeamId && (playerTeamMap.size === 0 || (discHome === null && discAway))) {
@@ -694,12 +734,19 @@ export function computeAdvancedStats(
       if (!eventTeamId) continue;
 
       let isNewPossessionForEventTeam = false;
+      let isEmptyTurnover = false;
 
       if (!hasExplicitPossessions) {
-        if (isGoal || isShot || isTurnover) {
+        if (isGoal || isShot || isAttempt || isTurnover) {
            isNewPossessionForEventTeam = (currentInferredPossTeam !== eventTeamId);
-           currentInferredPossTeam = eventTeamId;
-           didCurrentPossShoot = isShot;
+           if (isNewPossessionForEventTeam) {
+             currentInferredPossTeam = eventTeamId;
+             didCurrentPossShoot = (isShot || isAttempt);
+             isEmptyTurnover = isTurnover && !didCurrentPossShoot;
+           } else {
+             isEmptyTurnover = isTurnover && !didCurrentPossShoot;
+             if (isShot || isAttempt) didCurrentPossShoot = true;
+           }
         } else if (isStartEvent) {
            isNewPossessionForEventTeam = false;
            currentInferredPossTeam = eventTeamId;
@@ -719,9 +766,21 @@ export function computeAdvancedStats(
           if (eventTeamId === resolvedHomeId) { accum.plus++; accum.plusMinus++; }
           else if (eventTeamId === resolvedAwayId) { accum.minus++; accum.plusMinus--; }
         }
+        if (isShot) {
+          if (eventTeamId === resolvedAwayId) { accum.oppShotsOn++; }
+        }
+        if (isAttempt) {
+          if (eventTeamId === resolvedAwayId) { accum.oppAttemptsOn++; }
+        }
         if (isTurnover) {
-          if (eventTeamId === resolvedHomeId) { accum.teamTurnoversOn++; }
-          else if (eventTeamId === resolvedAwayId) { accum.oppTurnoversOn++; }
+          if (eventTeamId === resolvedHomeId) { 
+            accum.teamTurnoversOn++; 
+            if (isEmptyTurnover) accum.teamEmptyTurnoversOn++;
+          }
+          else if (eventTeamId === resolvedAwayId) { 
+            accum.oppTurnoversOn++; 
+            if (isEmptyTurnover) accum.oppEmptyTurnoversOn++;
+          }
         }
         if (hasExplicitPossessions) {
           if ((isExplicitOffense && eventTeamId === resolvedHomeId) || (isExplicitDefense && eventTeamId === resolvedAwayId)) {
@@ -743,9 +802,21 @@ export function computeAdvancedStats(
           if (eventTeamId === resolvedAwayId) { accum.plus++; accum.plusMinus++; }
           else if (eventTeamId === resolvedHomeId) { accum.minus++; accum.plusMinus--; }
         }
+        if (isShot) {
+          if (eventTeamId === resolvedHomeId) { accum.oppShotsOn++; }
+        }
+        if (isAttempt) {
+          if (eventTeamId === resolvedHomeId) { accum.oppAttemptsOn++; }
+        }
         if (isTurnover) {
-          if (eventTeamId === resolvedAwayId) { accum.teamTurnoversOn++; }
-          else if (eventTeamId === resolvedHomeId) { accum.oppTurnoversOn++; }
+          if (eventTeamId === resolvedAwayId) { 
+            accum.teamTurnoversOn++; 
+            if (isEmptyTurnover) accum.teamEmptyTurnoversOn++;
+          }
+          else if (eventTeamId === resolvedHomeId) { 
+            accum.oppTurnoversOn++;
+            if (isEmptyTurnover) accum.oppEmptyTurnoversOn++;
+          }
         }
         if (hasExplicitPossessions) {
           if ((isExplicitOffense && eventTeamId === resolvedAwayId) || (isExplicitDefense && eventTeamId === resolvedHomeId)) {
@@ -796,23 +867,17 @@ export function computeAdvancedStats(
       if (!isValidPlayerId(e.playerId)) continue;
       const pid = e.playerId!;
       
-      if (filters.position) {
-         if (e.position && e.position !== filters.position) continue;
-         if (!e.position) {
-            const isHome = homePlayerIds.has(pid);
-            const activeFilterPlayers = getActivePlayersAtTime(isHome ? homeStints : awayStints, e.videoTime, filters.position);
-            if (!activeFilterPlayers.has(pid)) continue;
-         }
-      }
+      const isP_Home = homePlayerIds.has(pid);
+      if (isP_Home && !isStateActiveForTeam(resolvedHomeId, e.videoTime, controlPeriods, flagReleaseTime, filters)) continue;
+      if (!isP_Home && !isStateActiveForTeam(resolvedAwayId, e.videoTime, controlPeriods, flagReleaseTime, filters)) continue;
+
+      const activeFilterPlayers = getActivePlayersAtTime(isP_Home ? homeStints : awayStints, e.videoTime, filters.position);
+      if (!activeFilterPlayers.has(pid)) continue;
 
       let eTeam = e.teamId;
       if (!eTeam && e.playerId) eTeam = playerTeamMap.get(e.playerId);
       if (!eTeam && (playerTeamMap.size === 0 || (discHome === null && discAway))) eTeam = resolvedHomeId;
       if (filters.teamId && eTeam !== filters.teamId && filters.teamId !== game.homeTeamId && filters.teamId !== game.awayTeamId) continue;
-
-      const isP_Home = homePlayerIds.has(pid);
-      if (isP_Home && !isStateActiveForTeam(resolvedHomeId, e.videoTime, controlPeriods, flagReleaseTime, filters)) continue;
-      if (!isP_Home && !isStateActiveForTeam(resolvedAwayId, e.videoTime, controlPeriods, flagReleaseTime, filters)) continue;
 
       if (isP_Home && processHome) homePlayersInGame.add(pid);
       if (!isP_Home && processAway) awayPlayersInGame.add(pid);
@@ -822,7 +887,9 @@ export function computeAdvancedStats(
       if (t === 'goal') accum.goals++;
       else if (t === 'assist') accum.assists++;
       else if (t === 'shot') accum.shots++;
+      else if (t === 'attempt') accum.attempts++;
       else if (t === 'turnover') accum.turnovers++;
+      else if (t === 'foul') accum.fouls++;
     }
 
     // Apply Games Played & Off-Pitch Goals correctly exactly once per game
@@ -875,27 +942,37 @@ export function computeAdvancedStats(
       onOffDt,
       relPlusMinusRatio: Math.round(((accum.minus > 0 ? accum.plus / accum.minus : accum.plus > 0 ? 5 : 0) - (offMinus > 0 ? offPlus / offMinus : offPlus > 0 ? 5 : 0)) * 100) / 100,
       minutesPlayed: Math.round(minutes * 10) / 10,
+      controlSeconds: accum.controlSeconds,
       teamPossessions: accum.teamPossessions,
       oppPossessions: accum.oppPossessions,
+      oppShotsOn: accum.oppShotsOn,
+      oppAttemptsOn: accum.oppAttemptsOn,
       goalsPerTwenty: minutes > 0 ? Math.round((accum.goals / minutes) * 20 * 100) / 100 : ('N/A' as any),
       assistsPerTwenty: minutes > 0 ? Math.round((accum.assists / minutes) * 20 * 100) / 100 : ('N/A' as any),
       pointsPerTwenty: minutes > 0 ? Math.round((points / minutes) * 20 * 100) / 100 : ('N/A' as any),
       goalsPerGame: accum.gameIds.size > 0 ? Math.round((accum.goals / accum.gameIds.size) * 100) / 100 : ('N/A' as any),
       assistsPerGame: accum.gameIds.size > 0 ? Math.round((accum.assists / accum.gameIds.size) * 100) / 100 : ('N/A' as any),
       pointsPerGame: accum.gameIds.size > 0 ? Math.round((points / accum.gameIds.size) * 100) / 100 : ('N/A' as any),
-      shotPct: (accum.goals + accum.shots) > 0 ? Math.round((accum.goals / (accum.goals + accum.shots)) * 1000) / 10 : 0,
+      goalsPer100Possessions: accum.teamPossessions > 0 ? Math.round((accum.goals / accum.teamPossessions) * 100 * 100) / 100 : ('N/A' as any),
+      assistsPer100Possessions: accum.teamPossessions > 0 ? Math.round((accum.assists / accum.teamPossessions) * 100 * 100) / 100 : ('N/A' as any),
+      pointsPer100Possessions: accum.teamPossessions > 0 ? Math.round((points / accum.teamPossessions) * 100 * 100) / 100 : ('N/A' as any),
+      shotPct: (accum.goals + accum.shots + accum.attempts) > 0 ? Math.round((accum.goals / (accum.goals + accum.shots + accum.attempts)) * 1000) / 10 : 0,
       assistToTurnover: accum.turnovers > 0
         ? Math.round((accum.assists / accum.turnovers) * 100) / 100
         : accum.assists > 0 ? Infinity : 0,
-      controlPctOnField: (accum.teamPossessions + accum.oppPossessions) > 0
-        ? Math.round((accum.teamPossessions / (accum.teamPossessions + accum.oppPossessions)) * 1000) / 10
+      controlPctOnField: minutes > 0
+        ? Math.round((accum.controlSeconds / (minutes * 60)) * 1000) / 10
         : 0,
       goals: accum.goals,
       assists: accum.assists,
-      shots: accum.shots + accum.goals, // Total Attempts
+      shots: accum.shots, // Explicit thrown shots
+      attempts: accum.attempts, // Physical drives
       turnovers: accum.turnovers,
+      fouls: accum.fouls,
       teamTurnoversOn: accum.teamTurnoversOn,
       oppTurnoversOn: accum.oppTurnoversOn,
+      teamEmptyTurnoversOn: accum.teamEmptyTurnoversOn,
+      oppEmptyTurnoversOn: accum.oppEmptyTurnoversOn,
       points,
     });
   }
@@ -924,6 +1001,8 @@ export interface ExtendedPlayerStats {
   // Basketball-inspired
   usgPct: number;        // Usage Rate — % of team events player is involved in while on-field
   eFGPct: number;        // Effective Goal % — weighted shooting efficiency
+  eOff: number;          // Expected Offense — possession score based on goals + shot generation
+  eDef: number;          // Expected Defense — isolated expected opponent possession score
   gameScore: number;     // Game Score — Normalized Performance Rating per 20 min (includes +/- and individual stats)
   oRtg: number;          // Offensive Rating — Team goals scored per 100 possessions while on pitch
   dRtg: number;          // Defensive Rating — Opponent goals conceded per 100 possessions while on pitch
@@ -931,19 +1010,32 @@ export interface ExtendedPlayerStats {
   iORTG: number;         // Individual ORTG (Weighted plus)
   iDRTG: number;         // Individual DRTG (Weighted minus)
   iNet: number;          // Individual Net Rating
-  tovPct: number;        // Turnover Rate — team turnovers per team possession while on field
-  fTovPct: number;       // Forced Turnover Rate — opponent turnovers per opponent possession while on field
+  epr: number;           // Empty Possession Rate (Empty Turnovers / Possessions)
+  fEpr: number;          // Forced Empty Possession Rate
   // Per-20 rates
   turnoversPer20: number;
   shotsPer20: number;
   foulsPer20: number;
-  // Totals
   goals: number;
   assists: number;
   shots: number;
+  attempts: number;
   turnovers: number;
   fouls: number;
   points: number;
+  // Merged basic metrics
+  controlPctOnField: number;
+  shotPct: number;
+  assistToTurnover: number;
+  goalsPerGame: number;
+  assistsPerGame: number;
+  pointsPerGame: number;
+  goalsPerTwenty: number;
+  assistsPerTwenty: number;
+  pointsPerTwenty: number;
+  goalsPer100Possessions: number;
+  assistsPer100Possessions: number;
+  pointsPer100Possessions: number;
 }
 
 export function computeExtendedStats(
@@ -957,38 +1049,7 @@ export function computeExtendedStats(
   const playerMap = new Map<string, Player>();
   players.forEach(p => playerMap.set(p.id, p));
 
-  // Count additional stats (fouls) not in advanced
-  const extraCounts = new Map<string, { fouls: number; totalTeamEvents: number }>();
-  
-  // Count total team events per game for usage rate
-  const filtered = filters.seasonId
-    ? events.filter(e => {
-        const game = games.find(g => g.id === e.gameId);
-        return game && game.seasonId === filters.seasonId;
-      })
-    : events;
-
-  for (const e of filtered) {
-    if (!isValidPlayerId(e.playerId)) continue;
-    const pid = e.playerId!;
-    if (!playerMap.has(pid)) continue;
-    const eTeam = e.teamId || '';
-    if (filters.teamId && eTeam && eTeam !== filters.teamId) continue;
-
-    if (!extraCounts.has(pid)) {
-      extraCounts.set(pid, { fouls: 0, totalTeamEvents: 0 });
-    }
-    const ec = extraCounts.get(pid)!;
-    const t = (e.type || '').toLowerCase();
-    if (t === 'foul') ec.fouls++;
-    // Count play involvements (goals, assists, shots, turnovers)
-    if (['goal', 'assist', 'shot', 'turnover'].includes(t)) {
-      ec.totalTeamEvents++;
-    }
-  }
-
   return advanced.map(a => {
-    const ec = extraCounts.get(a.playerId) || { fouls: 0, totalTeamEvents: 0 };
     const mins = a.minutesPlayed;
     const per20 = mins > 0 ? 20 / mins : 0;
     const teamPoss = a.teamPossessions;
@@ -1029,19 +1090,35 @@ export function computeExtendedStats(
       (a.assists * 0.4) +       // Individual assist weight
       ((a.goals - a.shots) * 0.2) + // Penalty for missed shots (a.shots is total, goals are made)
       (- a.turnovers * 0.7) +   // Turnover penalty
-      (- ec.fouls * 0.5)        // Foul penalty
+      (- a.fouls * 0.5)        // Foul penalty
     );
     const gameScore = mins > 0 ? Math.round((rawGameScore / mins) * 20 * 10) / 10 : 0;
-
-    // Turnover Rate: Team Turnovers per Team Possession while on pitch
-    const tovPct = teamPoss > 0
-      ? Math.round((a.teamTurnoversOn / teamPoss) * 1000) / 10
-      : 0;
-
-    // Forced Turnover Rate: Opponent Turnovers per Opponent Possession while on pitch
-    const fTovPct = oppPoss > 0
-      ? Math.round((a.oppTurnoversOn / oppPoss) * 1000) / 10
-      : 0;
+    
+    // Expected Offense (eOff): Score per possession (100 for goals, scaled partial score for non-goals based on missed shots)
+    const missedChances = a.shots + a.attempts;
+    const nonGoalPoss = Math.max(0, teamPoss - a.goals);
+    let nonGoalScore = 0;
+    if (nonGoalPoss > 0) {
+      const avgMissedChances = missedChances / nonGoalPoss;
+      nonGoalScore = (1 - Math.pow(0.7, avgMissedChances)) * 100;
+    }
+    const totalEoPoints = (a.goals * 100) + (nonGoalPoss * nonGoalScore);
+    const eOff = teamPoss > 0 ? Math.round((totalEoPoints / teamPoss) * 10) / 10 : 0;
+    
+    // Expected Defense (eDef): Score allowed per opponent possession 
+    const oppMissedChances = a.oppShotsOn + a.oppAttemptsOn;
+    const oppNonGoalPoss = Math.max(0, oppPoss - a.minus);
+    let nonGoalScore_opp = 0;
+    if (oppNonGoalPoss > 0) {
+      const avgMissedChances_opp = oppMissedChances / oppNonGoalPoss;
+      nonGoalScore_opp = (1 - Math.pow(0.7, avgMissedChances_opp)) * 100;
+    }
+    const totalEdefPoints = (a.minus * 100) + (oppNonGoalPoss * nonGoalScore_opp);
+    const eDef = oppPoss > 0 ? Math.round((totalEdefPoints / oppPoss) * 10) / 10 : 0;
+    
+    // Turnover Rates
+    const epr = teamPoss > 0 ? Math.round((a.teamEmptyTurnoversOn / teamPoss) * 1000) / 10 : 0;
+    const fEpr = oppPoss > 0 ? Math.round((a.oppEmptyTurnoversOn / oppPoss) * 1000) / 10 : 0;
 
     return {
       playerId: a.playerId,
@@ -1068,20 +1145,41 @@ export function computeExtendedStats(
       oRtg,
       dRtg,
       netRtg,
+      eOff,
+      eDef,
       iORTG,
       iDRTG,
       iNet,
-      tovPct,
-      fTovPct,
+      epr,
+      fEpr,
       turnoversPer20: Math.round(a.turnovers * per20 * 100) / 100,
-      shotsPer20: Math.round(a.shots * per20 * 100) / 100, // already total
-      foulsPer20: Math.round(ec.fouls * per20 * 100) / 100,
+      shotsPer20: Math.round(a.shots * per20 * 100) / 100,
+      attemptsPer20: Math.round(a.attempts * per20 * 100) / 100,
+      foulsPer20: Math.round(a.fouls * per20 * 100) / 100,
       goals: a.goals,
       assists: a.assists,
       shots: a.shots,
+      attempts: a.attempts,
       turnovers: a.turnovers,
-      fouls: ec.fouls,
+      fouls: a.fouls,
       points,
+      // Merged basic metrics
+      controlPctOnField: a.controlPctOnField,
+      shotPct: (a.goals + a.shots + a.attempts) > 0 
+        ? Math.round((a.goals / (a.goals + a.shots + a.attempts)) * 1000) / 10 
+        : 0,
+      assistToTurnover: a.turnovers > 0
+        ? Math.round((a.assists / a.turnovers) * 100) / 100
+        : a.assists > 0 ? Infinity : 0,
+      goalsPerGame: a.gamesPlayed > 0 ? Math.round((a.goals / a.gamesPlayed) * 100) / 100 : 0,
+      assistsPerGame: a.gamesPlayed > 0 ? Math.round((a.assists / a.gamesPlayed) * 100) / 100 : 0,
+      pointsPerGame: a.gamesPlayed > 0 ? Math.round((points / a.gamesPlayed) * 100) / 100 : 0,
+      goalsPerTwenty: a.goalsPerTwenty,
+      assistsPerTwenty: a.assistsPerTwenty,
+      pointsPerTwenty: a.pointsPerTwenty,
+      goalsPer100Possessions: a.goalsPer100Possessions,
+      assistsPer100Possessions: a.assistsPer100Possessions,
+      pointsPer100Possessions: a.pointsPer100Possessions,
     };
   });
 }
@@ -1095,6 +1193,7 @@ export interface TeamQuadballStats {
   goals: number;
   assists: number;
   shots: number;
+  attempts: number;
   turnovers: number;
   goalsAgainst: number;
   plusMinus: number;
@@ -1105,8 +1204,10 @@ export interface TeamQuadballStats {
   oRtg: number;
   dRtg: number;
   netRtg: number;
-  tovPct: number;
-  fTovPct: number;
+  eOff: number;
+  eDef: number;
+  epr: number;
+  fEpr: number;
 }
 
 export function computeTeamQuadballStats(
@@ -1122,7 +1223,7 @@ export function computeTeamQuadballStats(
 
   // Group player stats by their primary team
   const teamAccum = new Map<string, {
-    goals: number; assists: number; shots: number; turnovers: number;
+    goals: number; assists: number; shots: number; attempts: number; turnovers: number;
     teamPoss: number; oppPoss: number;
     teamTurnoversOn: number; oppTurnoversOn: number;
     gameIds: Set<string>;
@@ -1151,15 +1252,17 @@ export function computeTeamQuadballStats(
 
   // Aggregate: for team-level stats, we count raw events per team (not per player)
   const teamEventAccum = new Map<string, {
-    goals: number; assists: number; shots: number; turnovers: number;
-    goalsAgainst: number; turnoversForced: number;
+    goals: number; assists: number; shots: number; attempts: number; turnovers: number;
+    emptyTurnovers: number;
+    goalsAgainst: number; turnoversForced: number; oppEmptyTurnovers: number;
+    shotsAgainst: number; attemptsAgainst: number;
     teamPoss: number; oppPoss: number;
     gameIds: Set<string>;
   }>();
 
   const getTA = (tid: string) => {
     if (!teamEventAccum.has(tid)) {
-      teamEventAccum.set(tid, { goals: 0, assists: 0, shots: 0, turnovers: 0, goalsAgainst: 0, turnoversForced: 0, teamPoss: 0, oppPoss: 0, gameIds: new Set() });
+      teamEventAccum.set(tid, { goals: 0, assists: 0, shots: 0, attempts: 0, turnovers: 0, emptyTurnovers: 0, goalsAgainst: 0, turnoversForced: 0, oppEmptyTurnovers: 0, shotsAgainst: 0, attemptsAgainst: 0, teamPoss: 0, oppPoss: 0, gameIds: new Set() });
     }
     return teamEventAccum.get(tid)!;
   };
@@ -1175,17 +1278,29 @@ export function computeTeamQuadballStats(
     const flagReleaseTime = gameEvents.find(x => x.type === 'flag_released')?.videoTime ?? Infinity;
     
     let currentInferredPossTeam: string | null = null;
+    let didCurrentPossShoot = false;
     
     for (const e of sorted) {
       if (!e.teamId) continue;
       const t = e.type?.toLowerCase() || '';
       const oppId = e.teamId === g.homeTeamId ? g.awayTeamId : g.homeTeamId;
 
-      if (['goal', 'shot', 'turnover'].includes(t)) {
-        if (currentInferredPossTeam !== e.teamId) {
+      let isNewPossForEventTeam = false;
+      let isEmptyTurnover = false;
+
+      if (['goal', 'shot', 'attempt', 'turnover'].includes(t)) {
+        isNewPossForEventTeam = (currentInferredPossTeam !== e.teamId);
+        if (isNewPossForEventTeam) {
           getTA(e.teamId).teamPoss++;
           getTA(oppId).oppPoss++;
           currentInferredPossTeam = e.teamId;
+          const isShotOrAttempt = (t === 'shot' || t === 'attempt');
+          didCurrentPossShoot = isShotOrAttempt;
+          isEmptyTurnover = t === 'turnover' && !didCurrentPossShoot;
+        } else {
+          const isShotOrAttempt = (t === 'shot' || t === 'attempt');
+          isEmptyTurnover = t === 'turnover' && !didCurrentPossShoot;
+          if (isShotOrAttempt) didCurrentPossShoot = true;
         }
       }
 
@@ -1199,7 +1314,11 @@ export function computeTeamQuadballStats(
         if (t === 'goal') acc.goals++;
         if (t === 'assist') acc.assists++;
         if (t === 'shot') acc.shots++;
-        if (t === 'turnover') acc.turnovers++;
+        if (t === 'attempt') acc.attempts++;
+        if (t === 'turnover') {
+          acc.turnovers++;
+          if (isEmptyTurnover) acc.emptyTurnovers++;
+        }
       }
 
       if (isValidForOpp) {
@@ -1207,7 +1326,12 @@ export function computeTeamQuadballStats(
         oppAcc.gameIds.add(g.id);
 
         if (t === 'goal') oppAcc.goalsAgainst++;
-        if (t === 'turnover') oppAcc.turnoversForced++;
+        if (t === 'shot') oppAcc.shotsAgainst++;
+        if (t === 'attempt') oppAcc.attemptsAgainst++;
+        if (t === 'turnover') {
+          oppAcc.turnoversForced++;
+          if (isEmptyTurnover) oppAcc.oppEmptyTurnovers++;
+        }
       }
     }
   }
@@ -1219,10 +1343,30 @@ export function computeTeamQuadballStats(
     if (filters.teamId && tid !== filters.teamId) continue;
     
     const gp = acc.gameIds.size;
-    const totalShots = acc.shots + acc.goals; // total attempts
-    // Dynamic true alternating possessions tracking
+    const totalMissT = acc.shots + acc.attempts; // Total shots + drives
     const teamPoss = acc.teamPoss;
     const oppPoss = acc.oppPoss;
+    
+    // Expected Offense calculation for Team
+    const nonGoalPossT = Math.max(0, teamPoss - acc.goals);
+    let nonGoalScoreT = 0;
+    if (nonGoalPossT > 0) {
+      const avgMissedChances = totalMissT / nonGoalPossT;
+      nonGoalScoreT = (1 - Math.pow(0.7, avgMissedChances)) * 100;
+    }
+    const totalEoPointsT = (acc.goals * 100) + (nonGoalPossT * nonGoalScoreT);
+    const eOff = teamPoss > 0 ? Math.round((totalEoPointsT / teamPoss) * 10) / 10 : 0;
+    
+    // Expected Defense calculation for Team
+    const totalMissAgainstT = acc.shotsAgainst + acc.attemptsAgainst;
+    const oppNonGoalPossT = Math.max(0, oppPoss - acc.goalsAgainst);
+    let nonGoalScoreAgainstT = 0;
+    if (oppNonGoalPossT > 0) {
+      const avgMissedChancesAgainst = totalMissAgainstT / oppNonGoalPossT;
+      nonGoalScoreAgainstT = (1 - Math.pow(0.7, avgMissedChancesAgainst)) * 100;
+    }
+    const totalEdefPointsT = (acc.goalsAgainst * 100) + (oppNonGoalPossT * nonGoalScoreAgainstT);
+    const eDef = oppPoss > 0 ? Math.round((totalEdefPointsT / oppPoss) * 10) / 10 : 0;
     
     results.push({
       teamId: tid,
@@ -1232,9 +1376,10 @@ export function computeTeamQuadballStats(
       goalsAgainst: acc.goalsAgainst,
       plusMinus: acc.goals - acc.goalsAgainst,
       assists: acc.assists,
-      shots: totalShots,
+      shots: acc.shots,
+      attempts: acc.attempts,
       turnovers: acc.turnovers,
-      shotPct: totalShots > 0 ? Math.round((acc.goals / totalShots) * 1000) / 10 : 0,
+      shotPct: (acc.goals + acc.shots + acc.attempts) > 0 ? Math.round((acc.goals / (acc.goals + acc.shots + acc.attempts)) * 1000) / 10 : 0,
       goalsPerGame: gp > 0 ? Math.round((acc.goals / gp) * 100) / 100 : 0,
       assistsPerGame: gp > 0 ? Math.round((acc.assists / gp) * 100) / 100 : 0,
       pointsPerGame: gp > 0 ? Math.round(((acc.goals + acc.assists) / gp) * 100) / 100 : 0,
@@ -1245,8 +1390,10 @@ export function computeTeamQuadballStats(
         const d = oppPoss > 0 ? (acc.goalsAgainst / oppPoss) * 100 : 0;
         return Math.round((o - d) * 10) / 10;
       })(),
-      tovPct: teamPoss > 0 ? Math.round((acc.turnovers / teamPoss) * 1000) / 10 : 0,
-      fTovPct: oppPoss > 0 ? Math.round((acc.turnoversForced / oppPoss) * 1000) / 10 : 0,
+      eOff,
+      eDef,
+      epr: teamPoss > 0 ? Math.round((acc.emptyTurnovers / teamPoss) * 1000) / 10 : 0,
+      fEpr: oppPoss > 0 ? Math.round((acc.oppEmptyTurnovers / oppPoss) * 1000) / 10 : 0,
     });
   }
 
@@ -1482,7 +1629,7 @@ function computeBeaterStints(
 /**
  * Compute control periods for a game. Returns array of { teamId, startTime, endTime }.
  */
-function computeControlPeriodsFromEvents(
+export function computeControlPeriodsFromEvents(
   gameEvents: GameEvent[]
 ): { teamId: string; startTime: number; endTime: number }[] {
   const periods: { teamId: string; startTime: number; endTime: number }[] = [];
@@ -1571,6 +1718,10 @@ export interface BeaterSoloStats {
   controlMinutes: number;      // minutes their team had control while on field
   totalMinutes: number;        // total game-clock minutes on field
   controlPct: number;          // controlMinutes / totalMinutes × 100
+  eOff: number;
+  eDef: number;
+  epr: number;
+  fEpr: number;
 }
 
 export function computeBeaterSoloStats(
@@ -1586,12 +1737,15 @@ export function computeBeaterSoloStats(
     plus: number; minus: number;
     teamGoalsTotal: number; oppGoalsTotal: number;
     controlSeconds: number; totalSeconds: number;
+    teamPoss: number; oppPoss: number;
+    shots: number; attempts: number; oppShotsOn: number; oppAttemptsOn: number;
+    emptyTurnovers: number; oppEmptyTurnovers: number; turnovers: number;
     gameIds: Set<string>;
   }>();
 
   const getAcc = (pid: string) => {
     if (!accum.has(pid)) {
-      accum.set(pid, { plus: 0, minus: 0, teamGoalsTotal: 0, oppGoalsTotal: 0, controlSeconds: 0, totalSeconds: 0, gameIds: new Set() });
+      accum.set(pid, { plus: 0, minus: 0, teamGoalsTotal: 0, oppGoalsTotal: 0, controlSeconds: 0, totalSeconds: 0, teamPoss: 0, oppPoss: 0, shots: 0, attempts: 0, oppShotsOn: 0, oppAttemptsOn: 0, emptyTurnovers: 0, oppEmptyTurnovers: 0, turnovers: 0, gameIds: new Set() });
     }
     return accum.get(pid)!;
   };
@@ -1638,24 +1792,99 @@ export function computeBeaterSoloStats(
     let homeGoalsThisGame = 0;
     let awayGoalsThisGame = 0;
 
-    // +/- for beaters during their stints
+    // Tracking possessions, goals, and attempts for beaters during their stints
+    let currentInferredPossTeam: string | null = null;
+    let didCurrentPossShoot = false;
+    const hasExplicitPossessions = sorted.some(e => {
+      const t = (e.type || '').toUpperCase();
+      return t === 'OFFENSE' || t === 'DEFENSE';
+    });
+
     for (const e of sorted) {
-      if (e.type !== 'goal') continue;
-      
       let eventTeamId = e.teamId;
       if (!eventTeamId && e.playerId) eventTeamId = playerTeamMap.get(e.playerId);
       if (!eventTeamId && (playerTeamMap.size === 0 || (discHome === null && discAway))) eventTeamId = resolvedHomeId;
+      if (!eventTeamId) continue;
 
-      if (eventTeamId === resolvedHomeId && isStateActiveForTeam(resolvedHomeId, e.videoTime, controlPeriods, flagReleaseTime, filters)) homeGoalsThisGame++;
-      else if (eventTeamId === resolvedAwayId && isStateActiveForTeam(resolvedAwayId, e.videoTime, controlPeriods, flagReleaseTime, filters)) awayGoalsThisGame++;
+      const t = (e.type || '').toUpperCase();
+      const isGoal = t === 'GOAL';
+      const isShot = t === 'SHOT';
+      const isAttempt = t === 'ATTEMPT';
+      const isTurnover = t === 'TURNOVER';
+      const isStartEvent = t === 'CONTROL_START' || t === 'QUADBALL_START';
+      const isExplicitOffense = t === 'OFFENSE';
+      const isExplicitDefense = t === 'DEFENSE';
+
+      if (!isGoal && !isShot && !isAttempt && !isTurnover && !isExplicitOffense && !isExplicitDefense && !isStartEvent) continue;
+
+      let isNewPossessionForEventTeam = false;
+      let isEmptyTurnover = false;
+
+      if (!hasExplicitPossessions) {
+        if (isGoal || isShot || isAttempt || isTurnover) {
+           isNewPossessionForEventTeam = (currentInferredPossTeam !== eventTeamId);
+           if (isNewPossessionForEventTeam) {
+             currentInferredPossTeam = eventTeamId;
+             didCurrentPossShoot = (isShot || isAttempt);
+             isEmptyTurnover = isTurnover && !didCurrentPossShoot;
+           } else {
+             isEmptyTurnover = isTurnover && !didCurrentPossShoot;
+             if (isShot || isAttempt) didCurrentPossShoot = true;
+           }
+        } else if (isStartEvent) {
+           isNewPossessionForEventTeam = false;
+           currentInferredPossTeam = eventTeamId;
+           didCurrentPossShoot = false;
+        }
+      }
+
+      if (isGoal) {
+        if (eventTeamId === resolvedHomeId && isStateActiveForTeam(resolvedHomeId, e.videoTime, controlPeriods, flagReleaseTime, filters)) homeGoalsThisGame++;
+        else if (eventTeamId === resolvedAwayId && isStateActiveForTeam(resolvedAwayId, e.videoTime, controlPeriods, flagReleaseTime, filters)) awayGoalsThisGame++;
+      }
 
       for (const stint of beaterStints) {
         if (filters.teamId && stint.teamId !== filters.teamId && stint.teamId !== game.homeTeamId && stint.teamId !== game.awayTeamId) continue;
         if (e.videoTime >= stint.startTime && e.videoTime <= stint.endTime) {
           if (!isStateActiveForTeam(stint.teamId, e.videoTime, controlPeriods, flagReleaseTime, filters)) continue;
+          
           const acc = getAcc(stint.playerId);
-          if (stint.teamId === eventTeamId) acc.plus++;
-          else acc.minus++;
+          const isTeamEv = stint.teamId === eventTeamId;
+
+          if (isGoal) {
+            if (isTeamEv) acc.plus++;
+            else acc.minus++;
+          }
+          if (isShot) {
+            if (isTeamEv) acc.shots++;
+            else acc.oppShotsOn++;
+          }
+          if (isAttempt) {
+            if (isTeamEv) acc.attempts++;
+            else acc.oppAttemptsOn++;
+          }
+          if (isTurnover) {
+            if (isTeamEv) {
+              acc.turnovers++;
+              if (isEmptyTurnover) acc.emptyTurnovers++;
+            } else {
+              if (isEmptyTurnover) acc.oppEmptyTurnovers++;
+            }
+          }
+          if (hasExplicitPossessions) {
+            if (isExplicitOffense) {
+              if (isTeamEv) acc.teamPoss++;
+              else acc.oppPoss++;
+            } else if (isExplicitDefense) {
+              if (isTeamEv) acc.oppPoss++;
+              else acc.teamPoss++;
+            }
+          } else {
+            if (isNewPossessionForEventTeam) {
+              if (isTeamEv) acc.teamPoss++;
+              else acc.oppPoss++;
+            }
+          }
         }
       }
     }
@@ -1694,6 +1923,24 @@ export function computeBeaterSoloStats(
     const offPlusMinusRatio = offMinus > 0 ? Math.round((offPlus / offMinus) * 100) / 100 : (offPlus > 0 ? Infinity : 0);
     const relPlusMinusRatio = Math.round(((a.minus > 0 ? a.plus / a.minus : a.plus > 0 ? 5 : 0) - (offMinus > 0 ? offPlus / offMinus : offPlus > 0 ? 5 : 0)) * 100) / 100;
 
+    const eOff = (() => {
+      const teamPoss = a.teamPoss;
+      const missedChances = a.shots + a.attempts;
+      const nonGoalPoss = Math.max(0, teamPoss - a.plus);
+      let nonGoalScore = 0;
+      if (nonGoalPoss > 0) nonGoalScore = (1 - Math.pow(0.7, missedChances / nonGoalPoss)) * 100;
+      return teamPoss > 0 ? Math.round((((a.plus * 100) + (nonGoalPoss * nonGoalScore)) / teamPoss) * 10) / 10 : 0;
+    })();
+
+    const eDef = (() => {
+      const oppPoss = a.oppPoss;
+      const oppMissedChances = a.oppShotsOn + a.oppAttemptsOn;
+      const oppNonGoalPoss = Math.max(0, oppPoss - a.minus);
+      let oppNonGoalScore = 0;
+      if (oppNonGoalPoss > 0) oppNonGoalScore = (1 - Math.pow(0.7, oppMissedChances / oppNonGoalPoss)) * 100;
+      return oppPoss > 0 ? Math.round((((a.minus * 100) + (oppNonGoalPoss * oppNonGoalScore)) / oppPoss) * 10) / 10 : 0;
+    })();
+
     results.push({
       playerId: pid,
       playerName: p ? `${p.firstName} ${p.lastName}`.trim() : pid,
@@ -1711,6 +1958,10 @@ export function computeBeaterSoloStats(
       controlMinutes: Math.round(controlMin * 10) / 10,
       totalMinutes: Math.round(totalMin * 10) / 10,
       controlPct: totalMin > 0 ? Math.round((controlMin / totalMin) * 1000) / 10 : 0,
+      eOff,
+      eDef,
+      epr: a.teamPoss > 0 ? Math.round((a.emptyTurnovers / a.teamPoss) * 1000) / 10 : 0,
+      fEpr: a.oppPoss > 0 ? Math.round((a.oppEmptyTurnovers / a.oppPoss) * 1000) / 10 : 0,
     });
   }
 
@@ -1738,6 +1989,10 @@ export interface BeaterPairStats {
   controlMinutes: number;
   totalMinutes: number;
   controlPct: number;
+  eOff: number;
+  eDef: number;
+  epr: number;
+  fEpr: number;
 }
 
 /**
@@ -1790,6 +2045,9 @@ export function computeBeaterPairStats(
     plus: number; minus: number;
     teamGoalsTotal: number; oppGoalsTotal: number;
     controlSeconds: number; totalSeconds: number;
+    teamPoss: number; oppPoss: number;
+    shots: number; attempts: number; oppShotsOn: number; oppAttemptsOn: number;
+    emptyTurnovers: number; oppEmptyTurnovers: number; turnovers: number;
     gameIds: Set<string>;
   }>();
 
@@ -1803,6 +2061,7 @@ export function computeBeaterPairStats(
         plus: 0, minus: 0,
         teamGoalsTotal: 0, oppGoalsTotal: 0,
         controlSeconds: 0, totalSeconds: 0,
+        teamPoss: 0, oppPoss: 0, shots: 0, attempts: 0, oppShotsOn: 0, oppAttemptsOn: 0, emptyTurnovers: 0, oppEmptyTurnovers: 0, turnovers: 0,
         gameIds: new Set(),
       });
     }
@@ -1852,16 +2111,56 @@ export function computeBeaterPairStats(
     let homeGoalsThisGame = 0;
     let awayGoalsThisGame = 0;
 
-    // +/- during pair overlaps
+    // Tracking possessions, goals, and attempts during pair overlaps
+    let currentInferredPossTeam: string | null = null;
+    let didCurrentPossShoot = false;
+    const hasExplicitPossessions = sorted.some(e => {
+      const t = (e.type || '').toUpperCase();
+      return t === 'OFFENSE' || t === 'DEFENSE';
+    });
+
     for (const e of sorted) {
-      if (e.type !== 'goal') continue;
-      
       let eventTeamId = e.teamId;
       if (!eventTeamId && e.playerId) eventTeamId = playerTeamMap.get(e.playerId);
       if (!eventTeamId && (playerTeamMap.size === 0 || (discHome === null && discAway))) eventTeamId = resolvedHomeId;
+      if (!eventTeamId) continue;
 
-      if (eventTeamId === resolvedHomeId) homeGoalsThisGame++;
-      else if (eventTeamId === resolvedAwayId) awayGoalsThisGame++;
+      const t = (e.type || '').toUpperCase();
+      const isGoal = t === 'GOAL';
+      const isShot = t === 'SHOT';
+      const isAttempt = t === 'ATTEMPT';
+      const isTurnover = t === 'TURNOVER';
+      const isStartEvent = t === 'CONTROL_START' || t === 'QUADBALL_START';
+      const isExplicitOffense = t === 'OFFENSE';
+      const isExplicitDefense = t === 'DEFENSE';
+
+      if (!isGoal && !isShot && !isAttempt && !isTurnover && !isExplicitOffense && !isExplicitDefense && !isStartEvent) continue;
+
+      let isNewPossessionForEventTeam = false;
+      let isEmptyTurnover = false;
+
+      if (!hasExplicitPossessions) {
+        if (isGoal || isShot || isAttempt || isTurnover) {
+           isNewPossessionForEventTeam = (currentInferredPossTeam !== eventTeamId);
+           if (isNewPossessionForEventTeam) {
+             currentInferredPossTeam = eventTeamId;
+             didCurrentPossShoot = (isShot || isAttempt);
+             isEmptyTurnover = isTurnover && !didCurrentPossShoot;
+           } else {
+             isEmptyTurnover = isTurnover && !didCurrentPossShoot;
+             if (isShot || isAttempt) didCurrentPossShoot = true;
+           }
+        } else if (isStartEvent) {
+           isNewPossessionForEventTeam = false;
+           currentInferredPossTeam = eventTeamId;
+           didCurrentPossShoot = false;
+        }
+      }
+
+      if (isGoal) {
+        if (eventTeamId === resolvedHomeId) homeGoalsThisGame++;
+        else if (eventTeamId === resolvedAwayId) awayGoalsThisGame++;
+      }
 
       for (const overlap of pairOverlaps) {
         let overlapTeamRaw = overlap.teamId;
@@ -1870,9 +2169,42 @@ export function computeBeaterPairStats(
 
         if (e.videoTime >= overlap.start && e.videoTime <= overlap.end) {
           const acc = getPairAcc(overlap.player1, overlap.player2, overlapTeamRaw);
-          acc.gameIds.add(gameId);
-          if (eventTeamId === overlap.teamId) { acc.plus++; }
-          else if (eventTeamId) { acc.minus++; }
+          const isTeamEv = overlap.teamId === eventTeamId;
+
+          if (isGoal) {
+            if (isTeamEv) { acc.plus++; }
+            else { acc.minus++; }
+          }
+          if (isShot) {
+            if (isTeamEv) acc.shots++;
+            else acc.oppShotsOn++;
+          }
+          if (isAttempt) {
+            if (isTeamEv) acc.attempts++;
+            else acc.oppAttemptsOn++;
+          }
+          if (isTurnover) {
+            if (isTeamEv) {
+              acc.turnovers++;
+              if (isEmptyTurnover) acc.emptyTurnovers++;
+            } else {
+              if (isEmptyTurnover) acc.oppEmptyTurnovers++;
+            }
+          }
+          if (hasExplicitPossessions) {
+            if (isExplicitOffense) {
+              if (isTeamEv) acc.teamPoss++;
+              else acc.oppPoss++;
+            } else if (isExplicitDefense) {
+              if (isTeamEv) acc.oppPoss++;
+              else acc.teamPoss++;
+            }
+          } else {
+            if (isNewPossessionForEventTeam) {
+              if (isTeamEv) acc.teamPoss++;
+              else acc.oppPoss++;
+            }
+          }
         }
       }
     }
@@ -1918,6 +2250,24 @@ export function computeBeaterPairStats(
     const offPlusMinusRatio = offMinus > 0 ? Math.round((offPlus / offMinus) * 100) / 100 : (offPlus > 0 ? Infinity : 0);
     const relPlusMinusRatio = Math.round(((a.minus > 0 ? a.plus / a.minus : a.plus > 0 ? 5 : 0) - (offMinus > 0 ? offPlus / offMinus : offPlus > 0 ? 5 : 0)) * 100) / 100;
 
+    const eOff = (() => {
+      const teamPoss = a.teamPoss;
+      const missedChances = a.shots + a.attempts;
+      const nonGoalPoss = Math.max(0, teamPoss - a.plus);
+      let nonGoalScore = 0;
+      if (nonGoalPoss > 0) nonGoalScore = (1 - Math.pow(0.7, missedChances / nonGoalPoss)) * 100;
+      return teamPoss > 0 ? Math.round((((a.plus * 100) + (nonGoalPoss * nonGoalScore)) / teamPoss) * 10) / 10 : 0;
+    })();
+
+    const eDef = (() => {
+      const oppPoss = a.oppPoss;
+      const oppMissedChances = a.oppShotsOn + a.oppAttemptsOn;
+      const oppNonGoalPoss = Math.max(0, oppPoss - a.minus);
+      let oppNonGoalScore = 0;
+      if (oppNonGoalPoss > 0) oppNonGoalScore = (1 - Math.pow(0.7, oppMissedChances / oppNonGoalPoss)) * 100;
+      return oppPoss > 0 ? Math.round((((a.minus * 100) + (oppNonGoalPoss * oppNonGoalScore)) / oppPoss) * 10) / 10 : 0;
+    })();
+
     results.push({
       pairKey: key,
       teamId: a.teamId,
@@ -1937,6 +2287,10 @@ export function computeBeaterPairStats(
       controlMinutes: Math.round(controlMin * 10) / 10,
       totalMinutes: Math.round(totalMin * 10) / 10,
       controlPct: totalMin > 0 ? Math.round((controlMin / totalMin) * 1000) / 10 : 0,
+      eOff,
+      eDef,
+      epr: a.teamPoss > 0 ? Math.round((a.emptyTurnovers / a.teamPoss) * 1000) / 10 : 0,
+      fEpr: a.oppPoss > 0 ? Math.round((a.oppEmptyTurnovers / a.oppPoss) * 1000) / 10 : 0,
     });
   }
 
@@ -2045,7 +2399,8 @@ export interface SeekerStats {
   minutesPlayed: number;      // total game-clock minutes on pitch as seeker
   avgMinPerGame: number;       // avg game-clock minutes per game as seeker
   controlPct: number;         // team's bludger control % while this seeker is on pitch
-  avgTimeToCatch: number;     // avg seconds from flag_released to flag_catch (only catching games)
+  avgTimeToCatch: number;     // avg seconds on field from sub-in to catch
+  avgTimeFromRelease: number; // avg seconds from flag_released to flag_catch
   avgPointDiff: number;       // avg point differential (own team - opponent) at moment of catch
   gameWinningCatches: number; // catches that put team over the score cap
   catchPctWhileWinning: number;
@@ -2063,6 +2418,7 @@ interface SeekerGameResult {
   caught: boolean;
   opponentCaught: boolean;
   timeToCatch: number | null;
+  timeFromRelease: number | null;
   pointDiffAtCatch: number | null;
   gameWinning: boolean;
   teamLeadingAtRelease: 'winning' | 'losing' | 'tied';
@@ -2217,23 +2573,31 @@ export function computeSeekerStats(
           else if (e.teamId === game.awayTeamId) awayAtCatch += GOAL_PTS;
         }
       }
-      if (catchEvent.teamId === game.homeTeamId) homeAtCatch += FLAG_CATCH_PTS;
-      else if (catchEvent.teamId === game.awayTeamId) awayAtCatch += FLAG_CATCH_PTS;
-
       const nid = catchEvent.playerId!.trim();
       const isHome = catchEvent.teamId === game.homeTeamId;
       const ownScore = isHome ? homeAtCatch : awayAtCatch;
       const oppScore = isHome ? awayAtCatch : homeAtCatch;
       const pointDiff = ownScore - oppScore;
-      const gameWinning = scoreCap !== null && ownScore >= scoreCap;
+
+      if (catchEvent.teamId === game.homeTeamId) homeAtCatch += FLAG_CATCH_PTS;
+      else if (catchEvent.teamId === game.awayTeamId) awayAtCatch += FLAG_CATCH_PTS;
+
+      const ownScoreAfter = isHome ? homeAtCatch : awayAtCatch;
+      const gameWinning = scoreCap !== null && ownScoreAfter >= scoreCap;
       
-      let timeToCatch = null;
+      let timeFromRelease = null;
       if (flagReleasedTime !== null) {
         if (catchEvent.gameTime !== undefined && flagReleasedGameTime !== null) {
-          timeToCatch = catchEvent.gameTime - flagReleasedGameTime;
+          timeFromRelease = catchEvent.gameTime - flagReleasedGameTime;
         } else {
-          timeToCatch = catchEvent.videoTime - flagReleasedTime;
+          timeFromRelease = catchEvent.videoTime - flagReleasedTime;
         }
+      }
+
+      let timeToCatch = null;
+      const catchingStint = seekerStints.find(s => s.playerId === nid && catchEvent.videoTime >= s.startTime - 15 && catchEvent.videoTime <= s.endTime + 15);
+      if (catchingStint) {
+        timeToCatch = Math.round(getGameMinutesInWindow(clockIntervals, catchingStint.startTime, catchEvent.videoTime) * 60);
       }
 
       const ownAtRelease = isHome ? homeAtRelease : awayAtRelease;
@@ -2249,6 +2613,7 @@ export function computeSeekerStats(
         caught: true,
         opponentCaught: false,
         timeToCatch,
+        timeFromRelease,
         pointDiffAtCatch: pointDiff,
         gameWinning,
         teamLeadingAtRelease: teamStatus,
@@ -2274,6 +2639,7 @@ export function computeSeekerStats(
             caught: false,
             opponentCaught: true,
             timeToCatch: null,
+            timeFromRelease: null,
             pointDiffAtCatch: null,
             gameWinning: false,
             teamLeadingAtRelease: sTeamStatus,
@@ -2299,6 +2665,7 @@ export function computeSeekerStats(
             caught: false,
             opponentCaught: true,
             timeToCatch: null,
+            timeFromRelease: null,
             pointDiffAtCatch: null,
             gameWinning: false,
             teamLeadingAtRelease: sTeamStatus,
@@ -2326,6 +2693,7 @@ export function computeSeekerStats(
         caught: false,
         opponentCaught: false,
         timeToCatch: null,
+        timeFromRelease: null,
         pointDiffAtCatch: null,
         gameWinning: false,
         teamLeadingAtRelease: teamStatus,
@@ -2358,6 +2726,9 @@ export function computeSeekerStats(
     const avgTime = catchesNum > 0
       ? Math.round(catches.reduce((s, r) => s + (r.timeToCatch ?? 0), 0) / catchesNum)
       : 0;
+    const avgFromRelease = catchesNum > 0
+      ? Math.round(catches.reduce((s, r) => s + (r.timeFromRelease ?? 0), 0) / catchesNum)
+      : 0;
     const avgDiff = catchesNum > 0
       ? Math.round(catches.reduce((s, r) => s + (r.pointDiffAtCatch ?? 0), 0) / catchesNum * 10) / 10
       : 0;
@@ -2388,6 +2759,7 @@ export function computeSeekerStats(
       avgMinPerGame: uniqueGames > 0 ? Math.round((minutesPlayed / uniqueGames) * 10) / 10 : 0,
       controlPct,
       avgTimeToCatch: avgTime,
+      avgTimeFromRelease: avgFromRelease,
       avgPointDiff: avgDiff,
       gameWinningCatches: gwCatches,
       catchPctWhileWinning: whileWinning.length > 0

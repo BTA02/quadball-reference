@@ -31,6 +31,12 @@ function sortBy<T>(arr: T[], key: keyof T, dir: SortDir): T[] {
   return [...arr].sort((a, b) => {
     const va = a[key] ?? 0;
     const vb = b[key] ?? 0;
+
+    const aInd = va === 'N/A' || va === '∞' || va === Infinity || (typeof va === 'number' && isNaN(va)) || va === 'NaN';
+    const bInd = vb === 'N/A' || vb === '∞' || vb === Infinity || (typeof vb === 'number' && isNaN(vb)) || vb === 'NaN';
+    if (aInd && !bInd) return 1;
+    if (!aInd && bInd) return -1;
+    if (aInd && bInd) return 0;
     
     if (
       (typeof va === 'number' || typeof va === 'string') &&
@@ -56,7 +62,7 @@ function SortHeader({ label, sortKey, currentSort, currentDir, onSort, tooltip }
   const active = currentSort === sortKey;
   return (
     <th className={cn('px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider cursor-pointer select-none whitespace-nowrap text-center',
-        active ? 'text-purple-600' : 'text-gray-400 hover:text-gray-600')}
+        active ? 'text-purple-700' : 'text-slate-600 hover:text-slate-900')}
       onClick={() => onSort(sortKey)} title={tooltip}>
       <span className="inline-flex items-center gap-0.5">
         {label}
@@ -70,10 +76,7 @@ function SortHeader({ label, sortKey, currentSort, currentDir, onSort, tooltip }
 
 function Cell({ value, highlight, bold }: { value: string | number; highlight?: 'pos' | 'neg'; bold?: boolean }) {
   return (
-    <td className={cn('px-2 py-1.5 text-center text-xs tabular-nums font-mono',
-        highlight === 'pos' && 'text-green-600',
-        highlight === 'neg' && 'text-red-500',
-        !highlight && 'text-[#e2e8f0]',
+    <td className={cn('px-2 py-1.5 text-center text-xs tabular-nums font-mono text-slate-800',
         bold && 'font-bold')}>
       {value}
     </td>
@@ -91,7 +94,7 @@ interface BeaterStatsViewProps {
   teamId?: string;
   search?: string;
   minGames?: number;
-  controlFilter?: 'all' | 'with' | 'without';
+  bludgerControlMode?: 'all' | 'separate';
   flagFilter?: 'all' | 'on' | 'off';
   outlierFilter?: 'include' | 'exclude';
   onPlayerSelect?: (playerId: string) => void;
@@ -101,7 +104,7 @@ interface BeaterStatsViewProps {
 export default function BeaterStatsView({ 
   players, events, teams, games, seasons, statsFilter = 'all',
   seasonId: seasonFilter = '', teamId: teamFilter = '', search = '',
-  minGames = 1, controlFilter = 'all', flagFilter = 'all', outlierFilter = 'include',
+  minGames = 1, bludgerControlMode = 'all', flagFilter = 'all', outlierFilter = 'include',
   onPlayerSelect, onTeamSelect
 }: BeaterStatsViewProps) {
   const [tab, setTab] = useState<'pairs' | 'solo' | 'team'>('pairs');
@@ -110,7 +113,7 @@ export default function BeaterStatsView({
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const perPage = 25;
 
-  useEffect(() => { setPage(1); }, [search, seasonFilter, teamFilter, minGames, controlFilter, flagFilter, outlierFilter]);
+  useEffect(() => { setPage(1); }, [search, seasonFilter, teamFilter, minGames, bludgerControlMode, flagFilter, outlierFilter]);
 
   const handleSort = (key: string) => {
     if (key === sortKey) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -146,10 +149,10 @@ export default function BeaterStatsView({
   const filters = useMemo(() => ({
     seasonId: seasonFilter || undefined,
     teamId: teamFilter || undefined,
-    controlFilter: controlFilter === 'all' ? undefined : controlFilter,
+    controlFilter: bludgerControlMode === 'all' ? undefined : undefined,
     flagFilter: flagFilter === 'all' ? undefined : flagFilter,
     outlierFilter
-  }), [seasonFilter, teamFilter, controlFilter, flagFilter, outlierFilter]);
+  }), [seasonFilter, teamFilter, bludgerControlMode, flagFilter, outlierFilter]);
 
   const soloStats = useMemo(() => computeBeaterSoloStats(events, players, games, filters), [events, players, games, filters]);
   const pairStats = useMemo(() => computeBeaterPairStats(events, players, games, filters), [events, players, games, filters]);
@@ -244,6 +247,10 @@ export default function BeaterStatsView({
                   <SortHeader label="+:−" sortKey="plusMinusRatio" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Ratio of Plus to Minus" />
                   <SortHeader label="Off+:−" sortKey="offPlusMinusRatio" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Ratio of Plus to Minus while off the field" />
                   <SortHeader label="REL +:−" sortKey="relPlusMinusRatio" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Relative Value (Your +:− Ratio vs. your team's when you are off)" />
+                  <SortHeader label="eOff" sortKey="eOff" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Expected Offense" />
+                  <SortHeader label="eDef" sortKey="eDef" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Expected Defense" />
+                  <SortHeader label="EPR" sortKey="epr" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Empty Possession Rate (while on field)" />
+                  <SortHeader label="fEPR" sortKey="fEpr" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Forced Empty Possession Rate (while on field)" />
                 </>)}
               </tr>
             </thead>
@@ -286,6 +293,10 @@ export default function BeaterStatsView({
                       <Cell value={row.plusMinusRatio === Infinity ? '∞' : row.plusMinusRatio} />
                       <Cell value={row.offPlusMinusRatio === Infinity ? '∞' : row.offPlusMinusRatio} />
                       <Cell value={row.relPlusMinusRatio > 0 ? `+${row.relPlusMinusRatio}` : row.relPlusMinusRatio || 'E'} highlight={row.relPlusMinusRatio > 0 ? 'pos' : row.relPlusMinusRatio < 0 ? 'neg' : undefined} />
+                      <Cell value={row.eOff} highlight={row.eOff > 45 ? 'pos' : undefined} />
+                      <Cell value={row.eDef} highlight={row.eDef < 30 ? 'pos' : row.eDef > 50 ? 'neg' : undefined} />
+                      <Cell value={`${row.epr}%`} highlight={row.epr < 40 ? 'pos' : row.epr > 55 ? 'neg' : undefined} />
+                      <Cell value={`${row.fEpr}%`} highlight={row.fEpr > 55 ? 'pos' : undefined} />
                     </>)}
                   </tr>
                 );

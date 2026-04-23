@@ -9,8 +9,8 @@ import {
   Info
 } from 'lucide-react';
 import { 
-  computeAdvancedStats, computeExtendedStats, computeTeamQuadballStats,
-  AdvancedPlayerStats, ExtendedPlayerStats, TeamQuadballStats 
+  computeExtendedStats, computeTeamQuadballStats,
+  ExtendedPlayerStats, TeamQuadballStats 
 } from '../lib/statsComputations';
 
 interface Player { id: string; firstName: string; lastName: string; preferredName?: string; nickname?: string; [k: string]: any; }
@@ -25,10 +25,30 @@ function cn(...classes: (string | false | null | undefined)[]) {
 
 type SortDir = 'asc' | 'desc';
 
-function sortBy<T>(arr: T[], key: keyof T, dir: SortDir): T[] {
-  return [...arr].sort((a, b) => {
-    const va = a[key] ?? 0;
-    const vb = b[key] ?? 0;
+function sortBy<T>(arr: T[], key: any, dir: SortDir): T[] {
+  return [...arr].sort((a: any, b: any) => {
+    let targetA = a;
+    let targetB = b;
+    let k = String(key);
+    
+    if (k.endsWith(':with')) {
+      k = k.replace(':with', '');
+      targetA = a._with || {};
+      targetB = b._with || {};
+    } else if (k.endsWith(':without')) {
+      k = k.replace(':without', '');
+      targetA = a._without || {};
+      targetB = b._without || {};
+    }
+
+    const va = targetA[k] ?? 0;
+    const vb = targetB[k] ?? 0;
+
+    const aInd = va === 'N/A' || va === '∞' || va === Infinity || (typeof va === 'number' && isNaN(va)) || va === 'NaN';
+    const bInd = vb === 'N/A' || vb === '∞' || vb === Infinity || (typeof vb === 'number' && isNaN(vb)) || vb === 'NaN';
+    if (aInd && !bInd) return 1;
+    if (!aInd && bInd) return -1;
+    if (aInd && bInd) return 0;
     
     // Numeric sorting fallback if both values are numbers or successfully parse to numbers (and isn't empty string)
     if (
@@ -55,7 +75,7 @@ function SortHeader({ label, sortKey, currentSort, currentDir, onSort, tooltip }
   const active = currentSort === sortKey;
   return (
     <th className={cn('px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider cursor-pointer select-none whitespace-nowrap text-center',
-        active ? 'text-red-600' : 'text-gray-400 hover:text-gray-600')}
+        active ? 'text-red-600' : 'text-slate-600 hover:text-slate-800')}
       onClick={() => onSort(sortKey)} title={tooltip}>
       <span className="inline-flex items-center gap-0.5">
         {label}
@@ -69,14 +89,57 @@ function SortHeader({ label, sortKey, currentSort, currentDir, onSort, tooltip }
 
 function Cell({ value, highlight, bold, align = 'center' }: { value: string | number; highlight?: 'pos' | 'neg'; bold?: boolean, align?: 'left'|'center'|'right' }) {
   return (
-    <td className={cn('px-2 py-1.5 text-xs tabular-nums font-mono',
+      <td className={cn('px-2 py-1.5 text-xs tabular-nums font-mono text-slate-900',
         align === 'center' ? 'text-center' : align === 'left' ? 'text-left' : 'text-right',
-        highlight === 'pos' && 'text-emerald-700 font-medium',
-        highlight === 'neg' && 'text-rose-600 font-medium',
-        !highlight && 'text-gray-700',
         bold && 'font-bold'
     )}>
       {typeof value === 'number' && value === Infinity ? '∞' : value}
+    </td>
+  );
+}
+
+
+function SplitHeader({ label, sortKey, currentSort, currentDir, onSort, tooltip }: {
+  label: string; sortKey: string; currentSort: string; currentDir: SortDir;
+  onSort: (k: string) => void; tooltip?: string;
+}) {
+  const activeMain = currentSort === sortKey;
+  const activeWith = currentSort === `${sortKey}:with`;
+  const activeWithout = currentSort === `${sortKey}:without`;
+
+  return (
+    <th className="p-0 border-r border-gray-100 align-bottom min-w-[90px]">
+      <div className={cn('px-2 py-1 text-[10px] font-semibold uppercase tracking-wider cursor-pointer select-none text-center border-b border-gray-100 transition-colors', activeMain ? 'text-red-600 bg-red-50/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50')} onClick={() => onSort(sortKey)} title={tooltip}>
+        <span className="inline-flex flex-col items-center justify-center w-full">
+          <span className="inline-flex items-center gap-0.5">
+            {label}
+            {activeMain && (currentDir === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
+          </span>
+        </span>
+      </div>
+      <div className="flex text-[9px] uppercase tracking-wider font-semibold cursor-pointer">
+        <div className={cn('w-1/2 flex justify-center items-center py-0.5 border-r border-gray-100/50 transition-colors', activeWith ? 'text-red-700 bg-red-50/40' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50')} onClick={() => onSort(`${sortKey}:with`)}>
+          With {activeWith && (currentDir === 'asc' ? '↑' : '↓')}
+        </div>
+        <div className={cn('w-1/2 flex justify-center items-center py-0.5 transition-colors bg-slate-50/50', activeWithout ? 'text-red-700 bg-red-50/40' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-100')} onClick={() => onSort(`${sortKey}:without`)}>
+          W/O {activeWithout && (currentDir === 'asc' ? '↑' : '↓')}
+        </div>
+      </div>
+    </th>
+  );
+}
+
+function SplitCell({ valWith, valWithout, bold }: { valWith: string | number, valWithout: string | number, bold?: boolean }) {
+  return (
+    <td className="p-0 border-r border-gray-100">
+      <div className="flex h-full min-h-[30px]">
+        <div className="w-1/2 px-1 py-1.5 flex items-center justify-center text-xs tabular-nums font-mono text-slate-800 bg-white border-r border-gray-100/50">
+          <span className={bold ? 'font-bold' : ''}>{typeof valWith === 'number' && valWith === Infinity ? '∞' : valWith}</span>
+        </div>
+        <div className="w-1/2 px-1 py-1.5 flex items-center justify-center text-xs tabular-nums font-mono text-slate-800 bg-slate-50">
+          <span className={bold ? 'font-bold' : ''}>{typeof valWithout === 'number' && valWithout === Infinity ? '∞' : valWithout}</span>
+        </div>
+      </div>
     </td>
   );
 }
@@ -92,7 +155,7 @@ interface QuadballStatsViewProps {
   teamId?: string;
   search?: string;
   minGames?: number;
-  controlFilter?: 'all' | 'with' | 'without';
+  bludgerControlMode?: 'all' | 'separate';
   flagFilter?: 'all' | 'on' | 'off';
   positionFilter?: 'all' | 'chaser' | 'keeper';
   outlierFilter?: 'include' | 'exclude';
@@ -103,17 +166,17 @@ interface QuadballStatsViewProps {
 export default function QuadballStatsView({ 
   players, events, teams, games, seasons, statsFilter = 'all',
   seasonId: seasonFilter = '', teamId: teamFilter = '', search = '',
-  minGames = 1, controlFilter = 'all', flagFilter = 'all', positionFilter = 'all', outlierFilter = 'include',
+  minGames = 1, bludgerControlMode = 'all', flagFilter = 'all', positionFilter = 'all', outlierFilter = 'include',
   onPlayerSelect, onTeamSelect
 }: QuadballStatsViewProps) {
-  const [tab, setTab] = useState<'basic' | 'advanced' | 'teamPlayers' | 'team'>('basic');
+  const [tab, setTab] = useState<'boxscore' | 'rates' | 'advanced' | 'plusminus' | 'team'>('boxscore');
   const [page, setPage] = useState(1);
   const [sortKey, setSortKey] = useState('points');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [showHelp, setShowHelp] = useState(false);
   const perPage = 25;
 
-  useEffect(() => { setPage(1); }, [search, seasonFilter, teamFilter, positionFilter, minGames, controlFilter, flagFilter]);
+  useEffect(() => { setPage(1); }, [search, seasonFilter, teamFilter, positionFilter, minGames, bludgerControlMode, flagFilter]);
 
   const handleSort = (key: string) => {
     if (key === sortKey) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -146,78 +209,107 @@ export default function QuadballStatsView({
       .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   }, [teams, games, filteredSeasons, statsFilter]);
 
-  const filters = useMemo(() => ({
+  const filtersAll = useMemo(() => ({
     seasonId: seasonFilter || undefined,
     teamId: teamFilter || undefined,
     position: positionFilter === 'all' ? undefined : positionFilter,
-    controlFilter: controlFilter === 'all' ? undefined : controlFilter,
+    controlFilter: undefined,
     flagFilter: flagFilter === 'all' ? undefined : flagFilter,
     outlierFilter
-  }), [seasonFilter, teamFilter, positionFilter, controlFilter, flagFilter, outlierFilter]);
+  }), [seasonFilter, teamFilter, positionFilter, flagFilter, outlierFilter]);
 
-  const advancedStats = useMemo(() => computeAdvancedStats(events, players, games, filters), [events, players, games, filters]);
-  const extendedStats = useMemo(() => computeExtendedStats(events, players, games, filters), [events, players, games, filters]);
-  const teamStats = useMemo(() => computeTeamQuadballStats(events, players, teams, games, filters), [events, players, teams, games, filters]);
+  const filtersWith = useMemo(() => ({ ...filtersAll, controlFilter: 'with' as const }), [filtersAll]);
+  const filtersWithout = useMemo(() => ({ ...filtersAll, controlFilter: 'without' as const }), [filtersAll]);
+
+  const extendedStatsAll = useMemo(() => computeExtendedStats(events, players, games, filtersAll), [events, players, games, filtersAll]);
+  const extendedStatsWith = useMemo(() => bludgerControlMode === 'separate' ? computeExtendedStats(events, players, games, filtersWith) : [], [bludgerControlMode, events, players, games, filtersWith]);
+  const extendedStatsWithout = useMemo(() => bludgerControlMode === 'separate' ? computeExtendedStats(events, players, games, filtersWithout) : [], [bludgerControlMode, events, players, games, filtersWithout]);
+
+  const teamStatsAll = useMemo(() => computeTeamQuadballStats(events, players, teams, games, filtersAll), [events, players, teams, games, filtersAll]);
+  const teamStatsWith = useMemo(() => bludgerControlMode === 'separate' ? computeTeamQuadballStats(events, players, teams, games, filtersWith) : [], [bludgerControlMode, events, players, teams, games, filtersWith]);
+  const teamStatsWithout = useMemo(() => bludgerControlMode === 'separate' ? computeTeamQuadballStats(events, players, teams, games, filtersWithout) : [], [bludgerControlMode, events, players, teams, games, filtersWithout]);
+
+  const useSplit = bludgerControlMode === 'separate';
+
+  const mergedPlayers = useMemo(() => {
+    if (!useSplit) return extendedStatsAll;
+    const withMap = new Map(extendedStatsWith.map(s => [s.playerId, s]));
+    const withoutMap = new Map(extendedStatsWithout.map(s => [s.playerId, s]));
+    return extendedStatsAll.map(sAll => ({ ...sAll, _with: withMap.get(sAll.playerId) || null, _without: withoutMap.get(sAll.playerId) || null }));
+  }, [useSplit, extendedStatsAll, extendedStatsWith, extendedStatsWithout]);
+
+  const mergedTeams = useMemo(() => {
+    if (!useSplit) return teamStatsAll;
+    const withMap = new Map(teamStatsWith.map(s => [s.teamId, s]));
+    const withoutMap = new Map(teamStatsWithout.map(s => [s.teamId, s]));
+    return teamStatsAll.map(sAll => ({ ...sAll, _with: withMap.get(sAll.teamId) || null, _without: withoutMap.get(sAll.teamId) || null }));
+  }, [useSplit, teamStatsAll, teamStatsWith, teamStatsWithout]);
 
   const validQuadballPlayerIds = useMemo(() => {
     const explicitPositions = new Map<string, Set<string>>();
     for (const e of events) {
-      if (e.playerId && e.position) {
-        if (!explicitPositions.has(e.playerId)) explicitPositions.set(e.playerId, new Set());
-        explicitPositions.get(e.playerId)!.add(e.position);
+      if (!e.playerId) continue;
+      if (!explicitPositions.has(e.playerId)) explicitPositions.set(e.playerId, new Set());
+      const pSet = explicitPositions.get(e.playerId)!;
+      
+      if (e.position) {
+        pSet.add(e.position);
       }
-      if (e.type === 'goal' || e.type === 'assist' || e.type === 'shot') {
-        if (e.playerId) {
-          if (!explicitPositions.has(e.playerId)) explicitPositions.set(e.playerId, new Set());
-          explicitPositions.get(e.playerId)!.add('chaser');
-        }
+      const t = (e.type || '').toLowerCase();
+      if (t === 'goal' || t === 'assist' || t === 'shot' || t === 'attempt') {
+        pSet.add('chaser');
+      }
+      if (t.includes('beater') || t.includes('dodgeball')) {
+        pSet.add('beater');
+      }
+      if (t === 'flag_catch') {
+        pSet.add('seeker');
       }
     }
     const validIds = new Set<string>();
     players.forEach(p => {
       const poss = explicitPositions.get(p.id);
-      if (!poss) validIds.add(p.id);
+      if (!poss || poss.size === 0) validIds.add(p.id);
       else if (poss.has('chaser') || poss.has('keeper')) validIds.add(p.id);
+      else if (!poss.has('beater') && !poss.has('seeker')) validIds.add(p.id);
     });
     return validIds;
   }, [events, players]);
 
-  const filteredAdvanced = useMemo(() => {
-    let d = advancedStats.filter(s => s.gamesPlayed >= minGames && validQuadballPlayerIds.has(s.playerId));
-    if (search) { const q = search.toLowerCase(); d = d.filter(s => s.playerName.toLowerCase().includes(q)); }
-    return sortBy(d, sortKey as keyof AdvancedPlayerStats, sortDir);
-  }, [advancedStats, search, minGames, sortKey, sortDir, validQuadballPlayerIds]);
-
-  const filteredTeamPlayers = useMemo(() => {
-    let d = extendedStats.filter(s => s.gamesPlayed >= minGames && validQuadballPlayerIds.has(s.playerId));
+  const filteredPlayers = useMemo(() => {
+    let d = mergedPlayers.filter(s => s.gamesPlayed >= minGames && validQuadballPlayerIds.has(s.playerId));
     if (search) { const q = search.toLowerCase(); d = d.filter(s => s.playerName.toLowerCase().includes(q)); }
     return sortBy(d, sortKey as keyof ExtendedPlayerStats, sortDir);
-  }, [extendedStats, search, minGames, sortKey, sortDir, validQuadballPlayerIds]);
+  }, [mergedPlayers, search, minGames, sortKey, sortDir, validQuadballPlayerIds]);
 
   const filteredTeam = useMemo(() => {
-    let d = teamStats.filter(s => s.gamesPlayed >= minGames);
+    let d = mergedTeams.filter(s => s.gamesPlayed >= minGames);
     if (search) { const q = search.toLowerCase(); d = d.filter(s => s.teamName.toLowerCase().includes(q)); }
     return sortBy(d, sortKey as keyof TeamQuadballStats, sortDir);
-  }, [teamStats, search, minGames, sortKey, sortDir]);
+  }, [mergedTeams, search, minGames, sortKey, sortDir]);
 
-  const data = tab === 'team' ? filteredTeam : tab === 'teamPlayers' ? filteredTeamPlayers : filteredAdvanced;
+  const data = tab === 'team' ? filteredTeam : filteredPlayers;
   const totalPages = Math.ceil(data.length / perPage) || 1;
   const paged = data.slice((page - 1) * perPage, page * perPage);
 
-  const totalG = advancedStats.reduce((s, p) => s + p.goals, 0);
-  const totalA = advancedStats.reduce((s, p) => s + p.assists, 0);
+  const totalG = mergedPlayers.reduce((s, p) => s + p.goals, 0);
+  const totalA = mergedPlayers.reduce((s, p) => s + p.assists, 0);
 
+    const HeaderCell = (props: any) => {
+    if (useSplit && tab !== 'team') return <SplitHeader {...props} />;
+    return <SortHeader {...props} />;
+  };
   return (
     <div className="space-y-3">
       {/* Header row */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-4">
           <h2 className="text-lg font-bold text-gray-900">Quadball</h2>
-          <div className="flex text-xs text-gray-400 gap-3 font-mono">
+          <div className="flex text-xs text-slate-500 gap-3 font-mono">
             {tab === 'team' ? (
-              <span>{teamStats.length} teams</span>
+              <span>{mergedTeams.length} teams</span>
             ) : (
-              <span>{advancedStats.length} players</span>
+              <span>{mergedPlayers.length} players</span>
             )}
             <span>{totalG}G</span>
             <span>{totalA}A</span>
@@ -225,19 +317,22 @@ export default function QuadballStatsView({
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {/* Tabs */}
           <div className="flex border border-gray-200 rounded-md overflow-hidden text-xs">
-            <button onClick={() => { setTab('basic'); setSortKey('points'); setSortDir('desc'); }}
-              className={cn('px-3 py-1 font-medium transition-colors', tab === 'basic' ? 'bg-red-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50')}>
-              Basic
+            <button onClick={() => { setTab('boxscore'); setSortKey('goals'); setSortDir('desc'); }}
+              className={cn('px-3 py-1 font-medium transition-colors', tab === 'boxscore' ? 'bg-red-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50')}>
+              Box Score
             </button>
-            <button onClick={() => { setTab('advanced'); setSortKey('plusMinus'); setSortDir('desc'); }}
+            <button onClick={() => { setTab('rates'); setSortKey('goalsPerGame'); setSortDir('desc'); }}
+              className={cn('px-3 py-1 font-medium transition-colors border-l border-gray-200', tab === 'rates' ? 'bg-red-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50')}>
+              Rate Score
+            </button>
+            <button onClick={() => { setTab('advanced'); setSortKey('gameScore'); setSortDir('desc'); }}
               className={cn('px-3 py-1 font-medium transition-colors border-l border-gray-200', tab === 'advanced' ? 'bg-red-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50')}>
-              Advanced
+              Advanced Ratings
             </button>
-            <button onClick={() => { setTab('teamPlayers'); setSortKey('gameScore'); setSortDir('desc'); }}
-              className={cn('px-3 py-1 font-medium transition-colors border-l border-gray-200', tab === 'teamPlayers' ? 'bg-red-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50')}>
-              Team (Indiv)
+            <button onClick={() => { setTab('plusminus'); setSortKey('plusMinus'); setSortDir('desc'); }}
+              className={cn('px-3 py-1 font-medium transition-colors border-l border-gray-200', tab === 'plusminus' ? 'bg-red-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50')}>
+              Plus/Minus
             </button>
             <button onClick={() => { setTab('team'); setSortKey('netRtg'); setSortDir('desc'); }}
               className={cn('px-3 py-1 font-medium transition-colors border-l border-gray-200', tab === 'team' ? 'bg-red-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50')}>
@@ -270,74 +365,93 @@ export default function QuadballStatsView({
           <table className="w-full border-collapse">
             <thead>
               <tr className="border-b border-gray-100 bg-gray-50/80">
-                <th className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-left text-gray-400 sticky left-0 bg-gray-50 z-10 min-w-[140px]">
+                <th className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-left text-slate-600 sticky left-0 bg-gray-50 z-10 min-w-[140px]">
                   {tab === 'team' ? 'Team' : 'Player'}
                 </th>
-                {tab === 'basic' ? (<>
-                  <SortHeader label="GP" sortKey="gamesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Games Played" />
-                  <SortHeader label="MIN" sortKey="minutesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Minutes Played" />
-                  <SortHeader label="S" sortKey="shots" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Shots (total attempts)" />
-                  <SortHeader label="G" sortKey="goals" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals" />
-                  <SortHeader label="A" sortKey="assists" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Assists" />
-                  <SortHeader label="TO" sortKey="turnovers" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Turnovers" />
-                  <SortHeader label="A:TO" sortKey="assistToTurnover" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Assist to Turnover Ratio" />
-                  <SortHeader label="S%" sortKey="shotPct" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Shooting %" />
-                  <SortHeader label="CTRL%" sortKey="controlPctOnField" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Team Bludger Control % While On Field" />
+                {tab === 'boxscore' ? (<>
+                  <HeaderCell label="GP" sortKey="gamesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Games Played" />
+                  <HeaderCell label="MIN" sortKey="minutesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Minutes Played" />
+                  <HeaderCell label="S" sortKey="shots" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Shots (throws)" />
+                  <HeaderCell label="ATT" sortKey="attempts" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Attempts (drives/physical attacks)" />
+                  <HeaderCell label="G" sortKey="goals" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals" />
+                  <HeaderCell label="A" sortKey="assists" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Assists" />
+                  <HeaderCell label="TO" sortKey="turnovers" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Turnovers" />
+                  <HeaderCell label="S%" sortKey="shotPct" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Scoring % (Goals / (Goals + Shots + Attempts))" />
+                  <HeaderCell label="CTRL%" sortKey="controlPctOnField" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Team Bludger Control % While On Field" />
+                </>) : tab === 'rates' ? (<>
+                  <HeaderCell label="GP" sortKey="gamesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Games Played" />
+                  <HeaderCell label="MIN" sortKey="minutesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Minutes Played" />
+                  <HeaderCell label="G/G" sortKey="goalsPerGame" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals per Game" />
+                  <HeaderCell label="A/G" sortKey="assistsPerGame" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Assists per Game" />
+                  <HeaderCell label="PTS/G" sortKey="pointsPerGame" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Points per Game" />
+                  <HeaderCell label="G/20" sortKey="goalsPerTwenty" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals per 20 Minutes" />
+                  <HeaderCell label="A/20" sortKey="assistsPerTwenty" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Assists per 20 Minutes" />
+                  <HeaderCell label="PTS/20" sortKey="pointsPerTwenty" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Points per 20 Minutes" />
+                  <HeaderCell label="G/100" sortKey="goalsPer100Possessions" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals per 100 Possessions" />
+                  <HeaderCell label="A/100" sortKey="assistsPer100Possessions" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Assists per 100 Possessions" />
+                  <HeaderCell label="PTS/100" sortKey="pointsPer100Possessions" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Points per 100 Possessions" />
                 </>) : tab === 'advanced' ? (<>
-                  <SortHeader label="GP" sortKey="gamesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Games Played" />
-                  <SortHeader label="G" sortKey="goals" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals" />
-                  <SortHeader label="A" sortKey="assists" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Assists" />
-                  <SortHeader label="MIN" sortKey="minutesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Minutes Played" />
-                  <SortHeader label="+" sortKey="plus" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals scored while on field" />
-                  <SortHeader label="−" sortKey="minus" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals conceded while on field" />
-                  <SortHeader label="+/−" sortKey="plusMinus" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Plus / Minus (Net differntial)" />
-                  <SortHeader label="+:−" sortKey="plusMinusRatio" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Ratio of Plus to Minus" />
-                  <SortHeader label="Off+:−" sortKey="offPlusMinusRatio" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Ratio of Plus to Minus while player is off the field" />
-                  <SortHeader label="REL +:−" sortKey="relPlusMinusRatio" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Relative Value (Your +:− Ratio vs. your team's when you are off)" />
-                  <SortHeader label="G/20" sortKey="goalsPerTwenty" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals per 20 Min" />
-                  <SortHeader label="A/20" sortKey="assistsPerTwenty" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Assists per 20 Min" />
-                  <SortHeader label="PTS/20" sortKey="pointsPerTwenty" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Points per 20 Min" />
-                  <SortHeader label="G/G" sortKey="goalsPerGame" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals per Game" />
-                  <SortHeader label="A/G" sortKey="assistsPerGame" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Assists per Game" />
-                  <SortHeader label="PTS/G" sortKey="pointsPerGame" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Points per Game" />
-                </>) : tab === 'teamPlayers' ? (<>
-                  <SortHeader label="GP" sortKey="gamesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Games Played" />
-                  <SortHeader label="ORTG" sortKey="oRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Offensive Rating (Team points scored per 100 offensive possessions while on field)" />
-                  <SortHeader label="DRTG" sortKey="dRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Defensive Rating (Team points conceded per 100 defensive possessions while on field)" />
-                  <SortHeader label="NET" sortKey="netRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Net Rating (ORTG - DRTG)" />
-                  <SortHeader label="TOV%" sortKey="tovPct" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Team Turnover Rate (Team Turnovers per possession while on field)" />
-                  <SortHeader label="FTOV%" sortKey="fTovPct" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Forced Turnover Rate (Opponent Turnovers per possession while on field)" />
-                  <SortHeader label="MIN" sortKey="minutesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Minutes Played" />
-                  <SortHeader label="USG%" sortKey="usgPct" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Usage Rate (Estimates % of team possessions player is involved in while on field)" />
-                  <SortHeader label="GmSc" sortKey="gameScore" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Game Score (Composite single-number rating of productivity)" />
-                  <SortHeader label="TO/20" sortKey="turnoversPer20" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Individual Turnovers per 20 Min" />
+                  <HeaderCell label="GP" sortKey="gamesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Games Played" />
+                  <HeaderCell label="MIN" sortKey="minutesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Minutes Played" />
+                  <HeaderCell label="ORTG" sortKey="oRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Offensive Rating (Points scored per 100 offensive possessions while on field)" />
+                  <HeaderCell label="DRTG" sortKey="dRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Defensive Rating (Points conceded per 100 defensive possessions while on field)" />
+                  <HeaderCell label="NET" sortKey="netRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Net Rating (ORTG - DRTG)" />
+                  <HeaderCell label="eOff" sortKey="eOff" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Expected Offense (Expected points per offensive possession)" />
+                  <HeaderCell label="eDef" sortKey="eDef" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Expected Defense (Expected points allowed per defensive possession)" />
+                  <HeaderCell label="EPR" sortKey="epr" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Empty Possession Rate (Empty Turnovers / Offensive Possessions)" />
+                  <HeaderCell label="fEPR" sortKey="fEpr" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Forced Empty Possession Rate (Opponent Empty Turnovers / Defensive Possessions)" />
+                  <HeaderCell label="USG%" sortKey="usgPct" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Usage Rate (Estimates % of team possessions player is involved in while on field)" />
+                  <HeaderCell label="GmSc" sortKey="gameScore" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Game Score (Composite single-number rating of productivity)" />
+                </>) : tab === 'plusminus' ? (<>
+                  <HeaderCell label="GP" sortKey="gamesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Games Played" />
+                  <HeaderCell label="MIN" sortKey="minutesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Minutes Played" />
+                  <HeaderCell label="+" sortKey="plus" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals scored while on field" />
+                  <HeaderCell label="−" sortKey="minus" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals conceded while on field" />
+                  <HeaderCell label="+/−" sortKey="plusMinus" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Plus / Minus (Net differntial)" />
+                  <HeaderCell label="+:−" sortKey="plusMinusRatio" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Ratio of Plus to Minus" />
+                  <HeaderCell label="Off+:−" sortKey="offPlusMinusRatio" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Ratio of Plus to Minus while player is off the field" />
+                  <HeaderCell label="REL +:−" sortKey="relPlusMinusRatio" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Relative Value (Your +:− Ratio vs. your team's when you are off)" />
                 </>) : (<>
-                  <SortHeader label="GP" sortKey="gamesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Games Played" />
-                  <SortHeader label="G" sortKey="goals" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals" />
-                  <SortHeader label="A" sortKey="assists" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Assists" />
-                  <SortHeader label="S" sortKey="shots" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Shots" />
-                  <SortHeader label="TO" sortKey="turnovers" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Turnovers" />
-                  <SortHeader label="G/G" sortKey="goalsPerGame" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals per Game" />
-                  <SortHeader label="A/G" sortKey="assistsPerGame" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Assists per Game" />
-                  <SortHeader label="PTS/G" sortKey="pointsPerGame" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Points per Game" />
-                  <SortHeader label="ORTG" sortKey="oRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Offensive Rating" />
-                  <SortHeader label="DRTG" sortKey="dRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Defensive Rating" />
-                  <SortHeader label="NET" sortKey="netRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Net Rating" />
-                  <SortHeader label="TOV%" sortKey="tovPct" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Turnover Rate" />
-                  <SortHeader label="FTOV%" sortKey="fTovPct" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Forced Turnover Rate" />
+                  <HeaderCell label="GP" sortKey="gamesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Games Played" />
+                  <HeaderCell label="G" sortKey="goals" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals" />
+                  <HeaderCell label="A" sortKey="assists" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Assists" />
+                  <HeaderCell label="S" sortKey="shots" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Shots" />
+                  <HeaderCell label="ATT" sortKey="attempts" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Attempts" />
+                  <HeaderCell label="TO" sortKey="turnovers" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Turnovers" />
+                  <HeaderCell label="G/G" sortKey="goalsPerGame" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals per Game" />
+                  <HeaderCell label="A/G" sortKey="assistsPerGame" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Assists per Game" />
+                  <HeaderCell label="PTS/G" sortKey="pointsPerGame" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Points per Game" />
+                  <HeaderCell label="ORTG" sortKey="oRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Offensive Rating" />
+                  <HeaderCell label="DRTG" sortKey="dRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Defensive Rating" />
+                  <HeaderCell label="NET" sortKey="netRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Net Rating" />
+                  <HeaderCell label="eOff" sortKey="eOff" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Expected Offense" />
+                  <HeaderCell label="eDef" sortKey="eDef" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Expected Defense" />
                 </>)}
               </tr>
             </thead>
             <tbody>
               {paged.length === 0 ? (
-                <tr><td colSpan={12} className="py-8 text-center text-gray-400 text-xs">No stats found</td></tr>
+                <tr><td colSpan={12} className="py-8 text-center text-slate-500 text-xs">No stats found</td></tr>
               ) : paged.map((row: any, idx) => {
                 const rank = (page - 1) * perPage + idx + 1;
+                const DataCell = ({ prop, fmt, bold }: { prop?: string, fmt?: (v: any, rowObj?: any) => string|number, bold?: boolean }) => {
+                  if (useSplit && tab !== 'team') {
+                    let wVal = prop ? (row._with?.[prop] ?? '—') : '—';
+                    let woVal = prop ? (row._without?.[prop] ?? '—') : '—';
+                    if (fmt && row._with && wVal !== '—') wVal = fmt(wVal, row._with);
+                    if (fmt && row._without && woVal !== '—') woVal = fmt(woVal, row._without);
+                    return <SplitCell valWith={wVal} valWithout={woVal} bold={bold} />;
+                  } else {
+                    let aVal = prop ? (row[prop] ?? '—') : '—';
+                    if (fmt && aVal !== '—') aVal = fmt(aVal, row);
+                    return <Cell value={aVal} bold={bold} />;
+                  }
+                };
                 return (
                   <tr key={tab === 'team' ? row.teamId : row.playerId} className="border-b border-gray-50 hover:bg-red-50/30 transition-colors">
                     <td className="px-2 py-1.5 sticky left-0 bg-white z-10 group-hover:bg-red-50/30">
                       <div className="flex items-center gap-2">
-                        <span className="text-[10px] text-gray-300 w-4 text-right font-mono">{rank}</span>
+                        <span className="text-[10px] text-slate-400 w-4 text-right font-mono">{rank}</span>
                         {tab === 'team' ? (
                           <button onClick={() => onTeamSelect?.(row.teamId)} className="text-xs font-medium text-blue-600 hover:text-blue-800 hover:underline truncate">
                             {row.teamName}
@@ -349,58 +463,64 @@ export default function QuadballStatsView({
                         )}
                       </div>
                     </td>
-                    {tab === 'basic' ? (<>
-                      <Cell value={row.gamesPlayed} />
-                      <Cell value={row.minutesPlayed} />
-                      <Cell value={row.shots} highlight={row.shots > 5 ? 'pos' : undefined} />
-                      <Cell value={row.goals} bold highlight={row.goals > 0 ? 'pos' : undefined} />
-                      <Cell value={row.assists} bold highlight={row.assists > 0 ? 'pos' : undefined} />
-                      <Cell value={row.turnovers} highlight={row.turnovers > 3 ? 'neg' : undefined} />
-                      <Cell value={row.turnovers > 0 ? (Math.round((row.assists / row.turnovers) * 100) / 100) : row.assists > 0 ? '∞' : 0} highlight={row.turnovers > 0 && row.assists / row.turnovers >= 2 ? 'pos' : undefined} />
-                      <Cell value={`${row.shots > 0 ? Math.round((row.goals / row.shots) * 1000) / 10 : 0}%`} highlight={row.shots > 0 && (row.goals / row.shots) >= 0.5 ? 'pos' : undefined} />
-                      <Cell value={`${row.controlPctOnField}%`} highlight={row.controlPctOnField >= 55 ? 'pos' : row.controlPctOnField <= 45 ? 'neg' : undefined} />
+                    {tab === 'boxscore' ? (<>
+                      <DataCell prop="gamesPlayed" />
+                      <DataCell prop="minutesPlayed" />
+                      <DataCell prop="shots" />
+                      <DataCell prop="attempts" />
+                      <DataCell prop="goals" bold />
+                      <DataCell prop="assists" bold />
+                      <DataCell prop="turnovers" />
+                      <DataCell prop="shotPct" fmt={v => `${v}%`} />
+                      <DataCell prop="controlPctOnField" fmt={v => `${v}%`} />
+                    </>) : tab === 'rates' ? (<>
+                      <DataCell prop="gamesPlayed" />
+                      <DataCell prop="minutesPlayed" />
+                      <DataCell prop="goalsPerGame" />
+                      <DataCell prop="assistsPerGame" />
+                      <DataCell prop="pointsPerGame" bold />
+                      <DataCell prop="goalsPerTwenty" />
+                      <DataCell prop="assistsPerTwenty" />
+                      <DataCell prop="pointsPerTwenty" bold />
+                      <DataCell prop="goalsPer100Possessions" />
+                      <DataCell prop="assistsPer100Possessions" />
+                      <DataCell prop="pointsPer100Possessions" bold />
                     </>) : tab === 'advanced' ? (<>
-                      <Cell value={row.gamesPlayed} />
-                      <Cell value={row.goals} />
-                      <Cell value={row.assists} />
-                      <Cell value={row.minutesPlayed} />
-                      <Cell value={row.plus} highlight={row.plus > 0 ? 'pos' : undefined} />
-                      <Cell value={row.minus} highlight={row.minus > 0 ? 'neg' : undefined} />
-                      <Cell value={row.plusMinus > 0 ? `+${row.plusMinus}` : row.plusMinus || 'E'} highlight={row.plusMinus > 0 ? 'pos' : row.plusMinus < 0 ? 'neg' : undefined} bold />
-                      <Cell value={row.plusMinusRatio === Infinity ? '∞' : row.plusMinusRatio} />
-                      <Cell value={row.offPlusMinusRatio === Infinity ? '∞' : row.offPlusMinusRatio} />
-                      <Cell value={row.relPlusMinusRatio > 0 ? `+${row.relPlusMinusRatio}` : row.relPlusMinusRatio || 'E'} highlight={row.relPlusMinusRatio > 0 ? 'pos' : row.relPlusMinusRatio < 0 ? 'neg' : undefined} />
-                      <Cell value={row.goalsPerTwenty} highlight={row.goalsPerTwenty > 0 ? 'pos' : undefined} />
-                      <Cell value={row.assistsPerTwenty} highlight={row.assistsPerTwenty > 0 ? 'pos' : undefined} />
-                      <Cell value={row.pointsPerTwenty} highlight={row.pointsPerTwenty > 0 ? 'pos' : undefined} />
-                      <Cell value={row.goalsPerGame} highlight={row.goalsPerGame > 0 ? 'pos' : undefined} />
-                      <Cell value={row.assistsPerGame} highlight={row.assistsPerGame > 0 ? 'pos' : undefined} />
-                      <Cell value={row.pointsPerGame} highlight={row.pointsPerGame > 0 ? 'pos' : undefined} />
-                    </>) : tab === 'teamPlayers' ? (<>
-                      <Cell value={row.gamesPlayed} />
-                      <Cell value={row.oRtg} highlight={row.oRtg > 0 ? 'pos' : undefined} />
-                      <Cell value={row.dRtg} highlight={row.dRtg > 0 ? 'neg' : undefined} />
-                      <Cell value={row.netRtg > 0 ? `+${row.netRtg}` : row.netRtg || 'E'} highlight={row.netRtg > 0 ? 'pos' : row.netRtg < 0 ? 'neg' : undefined} bold />
-                      <Cell value={`${row.tovPct}%`} highlight={row.tovPct >= 20 ? 'neg' : undefined} />
-                      <Cell value={`${row.fTovPct}%`} highlight={row.fTovPct >= 20 ? 'pos' : undefined} />
-                      <Cell value={row.minutesPlayed} />
-                      <Cell value={`${row.usgPct}%`} />
-                      <Cell value={row.gameScore} highlight={row.gameScore > 0 ? 'pos' : row.gameScore < 0 ? 'neg' : undefined} bold />
-                      <Cell value={row.turnoversPer20} highlight={row.turnoversPer20 > 0 ? 'neg' : undefined} />
+                      <DataCell prop="gamesPlayed" />
+                      <DataCell prop="minutesPlayed" />
+                      <DataCell prop="oRtg" />
+                      <DataCell prop="dRtg" />
+                      <DataCell prop="netRtg" bold fmt={v => v > 0 ? `+${v}` : v || 'E'} />
+                      <DataCell prop="eOff" />
+                      <DataCell prop="eDef" />
+                      <DataCell prop="epr" fmt={v => `${v}%`} />
+                      <DataCell prop="fEpr" fmt={v => `${v}%`} />
+                      <DataCell prop="usgPct" fmt={v => `${v}%`} />
+                      <DataCell prop="gameScore" bold />
+                    </>) : tab === 'plusminus' ? (<>
+                      <DataCell prop="gamesPlayed" />
+                      <DataCell prop="minutesPlayed" />
+                      <DataCell prop="plus" />
+                      <DataCell prop="minus" />
+                      <DataCell prop="plusMinus" bold fmt={v => v > 0 ? `+${v}` : v || 'E'} />
+                      <DataCell prop="plusMinusRatio" fmt={v => v === Infinity ? '∞' : v} />
+                      <DataCell prop="offPlusMinusRatio" fmt={v => v === Infinity ? '∞' : v} />
+                      <DataCell prop="relPlusMinusRatio" fmt={v => v > 0 ? `+${v}` : v || 'E'} />
                     </>) : (<>
-                      <Cell value={row.gamesPlayed} />
-                      <Cell value={row.goals} bold highlight={row.goals > 0 ? 'pos' : undefined} />
-                      <Cell value={row.assists} bold highlight={row.assists > 0 ? 'pos' : undefined} />
-                      <Cell value={row.shots} />
-                      <Cell value={row.turnovers} highlight={row.turnovers > 3 ? 'neg' : undefined} />
-                      <Cell value={row.goalsPerGame} highlight={row.goalsPerGame > 0 ? 'pos' : undefined} />
-                      <Cell value={row.assistsPerGame} highlight={row.assistsPerGame > 0 ? 'pos' : undefined} />
-                      <Cell value={row.pointsPerGame} highlight={row.pointsPerGame > 0 ? 'pos' : undefined} />
-                      <Cell value={row.oRtg} highlight={row.oRtg > 0 ? 'pos' : undefined} />
-                      <Cell value={row.dRtg} highlight={row.dRtg > 0 ? 'neg' : undefined} />
-                      <Cell value={row.netRtg > 0 ? `+${row.netRtg}` : row.netRtg || 'E'} highlight={row.netRtg > 0 ? 'pos' : row.netRtg < 0 ? 'neg' : undefined} bold />
-                      <Cell value={`${row.tovPct}%`} highlight={row.tovPct >= 20 ? 'neg' : undefined} />
-                      <Cell value={`${row.fTovPct}%`} highlight={row.fTovPct >= 20 ? 'pos' : undefined} />
+                      <DataCell prop="gamesPlayed" />
+                      <DataCell prop="goals" bold />
+                      <DataCell prop="assists" bold />
+                      <DataCell prop="shots" />
+                      <DataCell prop="attempts" />
+                      <DataCell prop="turnovers" />
+                      <DataCell prop="goalsPerGame" />
+                      <DataCell prop="assistsPerGame" />
+                      <DataCell prop="pointsPerGame" />
+                      <DataCell prop="oRtg" />
+                      <DataCell prop="dRtg" />
+                      <DataCell prop="netRtg" bold fmt={v => v > 0 ? `+${v}` : v || 'E'} />
+                      <DataCell prop="eOff" />
+                      <DataCell prop="eDef" />
                     </>)}
                   </tr>
                 );
@@ -411,8 +531,8 @@ export default function QuadballStatsView({
       </div>
 
       {/* Pagination footer */}
-      <div className="flex items-center justify-between text-[10px] text-gray-400">
-        <span>{data.length} players • S = shots (total) • G = goals • A = assists • TO = turnovers • A:TO = assist/turnover • S% = shooting %</span>
+      <div className="flex items-center justify-between text-[10px] text-slate-500">
+        <span>{data.length} players • S = shots • ATT = attempts (drives) • G = goals • A = assists • TO = turnovers • A:TO = assist/turnover • S% = shooting %</span>
         <div className="flex items-center gap-1">
           <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
             className="p-1 rounded disabled:opacity-30 hover:bg-gray-100"><ChevronLeft className="w-3 h-3" /></button>

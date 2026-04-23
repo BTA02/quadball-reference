@@ -28,7 +28,7 @@ function sortData<T extends Record<string, any>>(data: T[], key: string, dir: So
 function SortHeader({ label, sortKey, currentSort, currentDir, onSort }: any) {
   const active = currentSort === sortKey;
   return (
-    <th className={cn('px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider cursor-pointer select-none whitespace-nowrap text-center', active ? 'text-emerald-500' : 'text-gray-400 hover:text-gray-600')} onClick={() => onSort(sortKey)}>
+    <th className={cn('px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider cursor-pointer select-none whitespace-nowrap text-center', active ? 'text-emerald-700' : 'text-slate-600 hover:text-slate-900')} onClick={() => onSort(sortKey)}>
       <span className="inline-flex items-center gap-0.5">{label}</span>
       {active && <span className="text-[10px] ml-1">{currentDir === 'asc' ? '↑' : '↓'}</span>}
     </th>
@@ -37,7 +37,7 @@ function SortHeader({ label, sortKey, currentSort, currentDir, onSort }: any) {
 
 function Cell({ value, highlight, bold }: any) {
   return (
-    <td className={cn('px-2 py-1.5 text-center text-xs tabular-nums font-mono', highlight === 'pos' && 'text-green-600', highlight === 'neg' && 'text-red-500', !highlight && 'text-[#e2e8f0]', bold && 'font-bold')}>
+    <td className={cn('px-2 py-1.5 text-center text-xs tabular-nums font-mono', highlight === 'pos' && 'text-emerald-700 font-bold', highlight === 'neg' && 'text-red-600 font-bold', !highlight && 'text-slate-800', bold && 'font-black')}>
       {typeof value === 'number' && value === Infinity ? '∞' : value}
     </td>
   );
@@ -86,7 +86,7 @@ export default function TeamProfileView({
              ...tStat,
              gameId: g.id,
              opponent: oppName,
-             description: g.description
+             description: g.tag
            };
          }
          return null;
@@ -139,11 +139,14 @@ export default function TeamProfileView({
       <SortHeader label="GF" sortKey="goals" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
       <SortHeader label="GA" sortKey="goalsAgainst" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
       <SortHeader label="TO" sortKey="turnovers" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
+      <SortHeader label="EPR" sortKey="epr" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
+      <SortHeader label="fEPR" sortKey="fEpr" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
       <SortHeader label="+/−" sortKey="plusMinus" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
       <SortHeader label="ORTG" sortKey="oRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
       <SortHeader label="DRTG" sortKey="dRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
       <SortHeader label="NET" sortKey="netRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
-      <SortHeader label="TOV%" sortKey="tovPct" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
+      <SortHeader label="eOff" sortKey="eOff" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
+      <SortHeader label="eDef" sortKey="eDef" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
     </tr>
   );
 
@@ -154,11 +157,14 @@ export default function TeamProfileView({
       <Cell value={row.goals} />
       <Cell value={row.goalsAgainst} />
       <Cell value={row.turnovers} />
+      <Cell value={`${row.epr}%`} highlight={row.epr >= 20 ? 'neg' : undefined} />
+      <Cell value={`${row.fEpr}%`} highlight={row.fEpr >= 20 ? 'pos' : undefined} />
       <Cell value={row.plusMinus} highlight={row.plusMinus > 0 ? 'pos' : row.plusMinus < 0 ? 'neg' : undefined} bold />
       <Cell value={row.oRtg} />
       <Cell value={row.dRtg} />
       <Cell value={row.netRtg} highlight={row.netRtg > 0 ? 'pos' : row.netRtg < 0 ? 'neg' : undefined} bold />
-      <Cell value={row.tovPct} />
+      <Cell value={row.eOff} highlight={row.eOff > 45 ? 'pos' : undefined} />
+      <Cell value={row.eDef} highlight={row.eDef < 30 ? 'pos' : row.eDef > 50 ? 'neg' : undefined} />
     </tr>
   );
 

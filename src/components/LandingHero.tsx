@@ -4,27 +4,34 @@ import { signIn } from '../lib/firebase';
 
 interface LandingHeroProps {
   onProceed: () => void;
+  onSignIn?: () => void;
 }
 
-export default function LandingHero({ onProceed }: LandingHeroProps) {
+export default function LandingHero({ onProceed, onSignIn }: LandingHeroProps) {
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col font-sans text-gray-900">
       {/* Navigation */}
-      <nav className="flex items-center justify-between px-8 py-6 max-w-5xl mx-auto w-full">
-        <div className="flex items-center gap-3">
-          <img src="/quadball-logo.svg" alt="Logo" className="w-8 h-8" />
-          <span className="text-xl font-bold tracking-tight">Quadball Reference</span>
+      <nav className="flex flex-wrap items-center justify-between px-5 sm:px-8 py-5 sm:py-6 max-w-5xl mx-auto w-full gap-y-4">
+        <div className="flex items-center gap-2 sm:gap-3">
+          <img src="/quadball-logo.svg" alt="Logo" className="w-7 h-7 sm:w-8 sm:h-8" />
+          <span className="text-lg sm:text-xl font-bold tracking-tight">Quadball Reference</span>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3 sm:gap-4 w-full sm:w-auto justify-end sm:justify-start relative z-50 cursor-pointer">
           <button 
-            onClick={onProceed}
-            className="text-sm font-medium text-gray-500 hover:text-gray-900 transition-colors"
+            onClick={(e) => { e.preventDefault(); onProceed(); }}
+            className="text-xs sm:text-sm font-medium text-gray-500 hover:text-gray-900 transition-colors cursor-pointer relative z-50 p-2"
           >
             Continue as Guest
           </button>
           <button 
-            onClick={signIn}
-            className="px-5 py-2 bg-gray-900 hover:bg-gray-800 rounded-lg text-sm font-bold text-white transition-all shadow-sm"
+            onClick={async (e) => { 
+                e.preventDefault(); 
+                try {
+                    await signIn();
+                    onSignIn?.();
+                } catch(error) { console.error('Sign-in cancelled or failed', error); }
+            }}
+            className="px-4 py-2 sm:px-5 sm:py-2 bg-gray-900 hover:bg-gray-800 rounded-lg text-xs sm:text-sm font-bold text-white transition-all shadow-sm cursor-pointer relative z-50"
           >
             Sign In
           </button>
@@ -49,7 +56,13 @@ export default function LandingHero({ onProceed }: LandingHeroProps) {
             <ArrowRight className="w-4 h-4" />
           </button>
           <button 
-            onClick={signIn}
+            onClick={async (e) => { 
+                e.preventDefault(); 
+                try {
+                    await signIn();
+                    onSignIn?.();
+                } catch(error) { console.error('Sign-in cancelled or failed', error); }
+            }}
             className="flex items-center justify-center gap-2 px-8 py-3.5 bg-white border border-gray-200 hover:bg-gray-50 rounded-xl font-bold text-gray-700 shadow-sm transition-all"
           >
             Sign in & Contribute

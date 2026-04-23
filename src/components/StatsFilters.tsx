@@ -9,8 +9,8 @@ export interface StatsFiltersProps {
   onTeamChange?: (val: string) => void;
   
   // Game state dropdowns
-  controlFilter?: 'all' | 'with' | 'without';
-  onControlFilterChange?: (val: 'all' | 'with' | 'without') => void;
+  bludgerControlMode?: 'all' | 'separate';
+  onBludgerControlModeChange?: (val: 'all' | 'separate') => void;
   flagFilter?: 'all' | 'on' | 'off';
   onFlagFilterChange?: (val: 'all' | 'on' | 'off') => void;
 
@@ -41,7 +41,7 @@ const inputBase = 'rounded-lg text-xs font-medium outline-none transition-all du
 export default function StatsFilters({
   seasonId, onSeasonChange,
   teamId, onTeamChange,
-  controlFilter, onControlFilterChange,
+  bludgerControlMode, onBludgerControlModeChange,
   flagFilter, onFlagFilterChange,
   positionFilter, onPositionFilterChange,
   outlierFilter, onOutlierFilterChange,
@@ -83,14 +83,13 @@ export default function StatsFilters({
         </div>
       )}
 
-      {onControlFilterChange && (
+      {onBludgerControlModeChange && (
         <div className="relative">
-          <select value={controlFilter} onChange={e => onControlFilterChange(e.target.value as any)}
+          <select value={bludgerControlMode} onChange={e => onBludgerControlModeChange(e.target.value as any)}
             className={selectBase}
             style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%2394a3b8' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: 'right 0.5rem center' }}>
             <option value="all">All Bludger Control</option>
-            <option value="with">With Control</option>
-            <option value="without">Without Control</option>
+            <option value="separate">Separate Control</option>
           </select>
         </div>
       )}

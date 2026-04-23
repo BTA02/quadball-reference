@@ -4109,7 +4109,7 @@ export default function App() {
   const [statsTeamId, setStatsTeamId] = useState<string>('');
   const [statsSearch, setStatsSearch] = useState<string>('');
   const [statsMinGames, setStatsMinGames] = useState<number>(1);
-  const [statsControlFilter, setStatsControlFilter] = useState<'all' | 'with' | 'without'>('all');
+  const [bludgerControlMode, setBludgerControlMode] = useState<'all' | 'separate'>('all');
   const [statsFlagFilter, setStatsFlagFilter] = useState<'all' | 'on' | 'off'>('all');
   const [statsOutlierFilter, setStatsOutlierFilter] = useState<'include' | 'exclude'>('include');
   const [statsPositionFilter, setStatsPositionFilter] = useState<'all' | 'chaser' | 'keeper'>('all');
@@ -5814,7 +5814,7 @@ export default function App() {
               seasons={filteredDropdownSeasons} teams={filteredDropdownTeams}
               search={statsSearch} onSearchChange={setStatsSearch}
               minGames={statsMinGames} onMinGamesChange={setStatsMinGames}
-              controlFilter={statsControlFilter} onControlFilterChange={setStatsControlFilter}
+              bludgerControlMode={bludgerControlMode} onBludgerControlModeChange={setBludgerControlMode}
               flagFilter={statsFlagFilter} onFlagFilterChange={setStatsFlagFilter}
               outlierFilter={statsOutlierFilter} onOutlierFilterChange={setStatsOutlierFilter}
               positionFilter={statsSubView === 'quadball' ? statsPositionFilter : undefined}
@@ -5840,7 +5840,7 @@ export default function App() {
                 teamId={statsTeamId}
                 search={statsSearch}
                 minGames={statsMinGames}
-                controlFilter={statsControlFilter}
+                bludgerControlMode={bludgerControlMode}
                 flagFilter={statsFlagFilter}
                 outlierFilter={statsOutlierFilter}
                 positionFilter={statsPositionFilter}
@@ -5859,7 +5859,7 @@ export default function App() {
                 teamId={statsTeamId}
                 search={statsSearch}
                 minGames={statsMinGames}
-                controlFilter={statsControlFilter}
+                bludgerControlMode={bludgerControlMode}
                 flagFilter={statsFlagFilter}
                 outlierFilter={statsOutlierFilter}
                 onPlayerSelect={handlePlayerProfileClick}
@@ -5877,7 +5877,7 @@ export default function App() {
                 teamId={statsTeamId}
                 search={statsSearch}
                 minGames={statsMinGames}
-                controlFilter={statsControlFilter}
+                bludgerControlMode={bludgerControlMode}
                 flagFilter={statsFlagFilter}
                 onPlayerSelect={handlePlayerProfileClick}
               />
