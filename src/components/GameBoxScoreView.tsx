@@ -69,8 +69,8 @@ export default function GameBoxScoreView({
   const [sortKeyAwayP, setSortKeyAwayP] = useState('totalMinutes');
   const [sortDirAwayP, setSortDirAwayP] = useState<SortDir>('desc');
 
-  const { homeStats, awayStats, homePairs, awayPairs, score } = useMemo(() => {
-    if (!game) return { homeStats: [], awayStats: [], homePairs: [], awayPairs: [], score: {home: 0, away: 0, homeCatch: false, awayCatch: false, setScore: null, gameTimeStr: ''} };
+  const { homeStats, awayStats, homePairs, awayPairs, scoreByPeriod, score } = useMemo(() => {
+    if (!game) return { homeStats: [], awayStats: [], homePairs: [], awayPairs: [], scoreByPeriod: { home: { preFlag: 0, flagOnPitch: 0, postFlag: 0 }, away: { preFlag: 0, flagOnPitch: 0, postFlag: 0 } }, score: {home: 0, away: 0, homeCatch: false, awayCatch: false, setScore: null, gameTimeStr: ''} };
     const gEvents = events.filter(e => e.gameId === game.id);
     
     // Compute total combined game stats for all players
@@ -104,6 +104,34 @@ export default function GameBoxScoreView({
     const sortedEvents = [...gEvents].sort((a, b) => a.videoTime - b.videoTime);
     let setScore: number | null = null;
     const flagReleaseEvent = sortedEvents.find(e => e.type === 'flag_released');
+    const flagCatchEvent = sortedEvents.find(e => e.type === 'flag_catch');
+
+    const scoreByPeriod = {
+      home: { preFlag: 0, flagOnPitch: 0, postFlag: 0 },
+      away: { preFlag: 0, flagOnPitch: 0, postFlag: 0 }
+    };
+
+    sortedEvents.forEach(e => {
+      const isHome = e.teamId === game.homeTeamId;
+      const isAway = e.teamId === game.awayTeamId;
+      if (!isHome && !isAway) return;
+
+      const points = e.type === 'goal' ? 10 : (e.type === 'flag_catch' ? 35 : 0);
+      if (points === 0) return;
+
+      let period: 'preFlag' | 'flagOnPitch' | 'postFlag' = 'preFlag';
+      if (flagReleaseEvent && e.videoTime > flagReleaseEvent.videoTime) {
+        if (flagCatchEvent && e.videoTime > flagCatchEvent.videoTime) {
+          period = 'postFlag';
+        } else {
+          period = 'flagOnPitch';
+        }
+      }
+
+      if (isHome) scoreByPeriod.home[period] += points;
+      if (isAway) scoreByPeriod.away[period] += points;
+    });
+
     if (flagReleaseEvent) {
        const preReleaseHome = sortedEvents.filter(e => e.videoTime <= flagReleaseEvent.videoTime && e.teamId === game.homeTeamId && e.type === 'goal').length * 10;
        const preReleaseAway = sortedEvents.filter(e => e.videoTime <= flagReleaseEvent.videoTime && e.teamId === game.awayTeamId && e.type === 'goal').length * 10;
@@ -119,6 +147,7 @@ export default function GameBoxScoreView({
       awayStats: aStats,
       homePairs: hPairs,
       awayPairs: aPairs,
+      scoreByPeriod,
       score: { home: matchHomeGoals + (hCatch ? 35 : 0), away: matchAwayGoals + (aCatch ? 35 : 0), homeCatch: hCatch, awayCatch: aCatch, setScore, gameTimeStr }
     };
   }, [events, players, game, sortKeyHome, sortDirHome, sortKeyAway, sortDirAway, sortKeyHomeP, sortDirHomeP, sortKeyAwayP, sortDirAwayP]);
@@ -246,6 +275,36 @@ export default function GameBoxScoreView({
               {score.away}{score.awayCatch && <span className="text-amber-500 text-5xl align-top">*</span>}
             </div>
           </div>
+        </div>
+
+        <div className="mt-4 mb-2 overflow-hidden rounded-xl border border-gray-200 shadow-sm w-full max-w-xl bg-white hidden sm:block">
+          <table className="w-full text-sm text-center">
+            <thead>
+              <tr className="bg-gray-100 text-gray-500 text-[10px] uppercase font-bold tracking-widest border-b border-gray-200">
+                <th className="py-2 px-3 text-left border-r border-gray-200">Team</th>
+                <th className="py-2 px-3">Pre-Flag</th>
+                <th className="py-2 px-3">Flag on Pitch</th>
+                <th className="py-2 px-3">Post-Flag</th>
+                <th className="py-2 px-3 bg-gray-200/50 text-gray-800 border-l border-gray-200">Total</th>
+              </tr>
+            </thead>
+            <tbody className="font-mono text-gray-800 divide-y divide-gray-100">
+              <tr>
+                <td className="py-2 px-3 text-left font-bold font-sans truncate max-w-[120px] border-r border-gray-100">{homeTeam?.name || 'Home'}</td>
+                <td className="py-2 px-3">{scoreByPeriod.home.preFlag}</td>
+                <td className="py-2 px-3">{scoreByPeriod.home.flagOnPitch}</td>
+                <td className="py-2 px-3">{scoreByPeriod.home.postFlag}</td>
+                <td className="py-2 px-3 bg-gray-50 font-black border-l border-gray-100">{score.home}</td>
+              </tr>
+              <tr>
+                <td className="py-2 px-3 text-left font-bold font-sans truncate max-w-[120px] border-r border-gray-100">{awayTeam?.name || 'Away'}</td>
+                <td className="py-2 px-3">{scoreByPeriod.away.preFlag}</td>
+                <td className="py-2 px-3">{scoreByPeriod.away.flagOnPitch}</td>
+                <td className="py-2 px-3">{scoreByPeriod.away.postFlag}</td>
+                <td className="py-2 px-3 bg-gray-50 font-black border-l border-gray-100">{score.away}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
 

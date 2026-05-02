@@ -4,7 +4,7 @@ import { cn } from '../lib/utils';
 import { EventType } from '../App';
 import { computeControlPeriodsFromEvents } from '../lib/statsComputations';
 
-interface Team { id: string; name: string; scoreboard_name?: string; }
+interface Team { id: string; name: string; nickname?: string; colorPrimary?: string; colorDark?: string; colorLight?: string; [k: string]: any; }
 interface GameEvent {
   id: string;
   type: EventType;
@@ -36,6 +36,18 @@ export default function MatchMomentumView({
   
   const homeTeam = teams.find(t => t.id === homeTeamId);
   const awayTeam = teams.find(t => t.id === awayTeamId);
+  const homeName = homeTeam?.nickname || homeTeam?.name || 'Home';
+  const awayName = awayTeam?.nickname || awayTeam?.name || 'Away';
+  const homeColor = homeTeam?.colorPrimary || '#ef4444';
+  const awayColor = awayTeam?.colorPrimary || '#3b82f6';
+
+  // Helper to convert hex to rgba
+  const hexToRgba = (hex: string, alpha: number) => {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  };
 
   const analysis = useMemo(() => {
     const sorted = [...events].sort((a, b) => a.videoTime - b.videoTime);
@@ -207,8 +219,8 @@ export default function MatchMomentumView({
         {/* The Graph */}
         <div className="bg-white border rounded-2xl p-4 shadow-sm relative">
           <div className="flex justify-between text-[10px] uppercase font-bold tracking-widest mb-4">
-            <span className="text-red-600 flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-red-500"></div> {homeTeam?.scoreboard_name || homeTeam?.name || 'Home'}</span>
-            <span className="text-blue-600 flex items-center gap-1.5">{awayTeam?.scoreboard_name || awayTeam?.name || 'Away'} <div className="w-2 h-2 rounded-full bg-blue-500"></div></span>
+            <span style={{ color: homeColor }} className="flex items-center gap-1.5 text-[10px] uppercase font-bold tracking-widest"><div className="w-2 h-2 rounded-full" style={{ backgroundColor: homeColor }}></div> {homeName}</span>
+            <span style={{ color: awayColor }} className="flex items-center gap-1.5 text-[10px] uppercase font-bold tracking-widest">{awayName} <div className="w-2 h-2 rounded-full" style={{ backgroundColor: awayColor }}></div></span>
           </div>
           
           <div className="relative w-full aspect-[21/9] border-y border-gray-100 group">
@@ -224,15 +236,15 @@ export default function MatchMomentumView({
                  const x1 = Math.max(0, getX(Math.max(minTime, cp.startTime)));
                  const x2 = Math.min(svgWidth, getX(Math.min(maxTime, cp.endTime)));
                  if (x2 <= x1) return null;
-                 const color = cp.teamId === homeTeamId ? 'rgba(239, 68, 68, 0.08)' : 'rgba(59, 130, 246, 0.08)';
+                 const color = cp.teamId === homeTeamId ? hexToRgba(homeColor, 0.08) : hexToRgba(awayColor, 0.08);
                  return (
                    <rect key={`cp-${i}`} x={x1} y="0" width={x2 - x1} height={svgHeight} fill={color} />
                  );
               })}
 
               {/* Main Line */}
-              <path d={homePathD} fill="none" stroke="#ef4444" strokeWidth="2.5" strokeLinejoin="round" />
-              <path d={awayPathD} fill="none" stroke="#3b82f6" strokeWidth="2.5" strokeLinejoin="round" />
+              <path d={homePathD} fill="none" stroke={homeColor} strokeWidth="2.5" strokeLinejoin="round" />
+              <path d={awayPathD} fill="none" stroke={awayColor} strokeWidth="2.5" strokeLinejoin="round" />
 
               {/* Target / Set Score Line */}
               {targetScore !== null && (
@@ -257,10 +269,10 @@ export default function MatchMomentumView({
                    dotColor = '#eab308'; // yellow
                 } else if (pt.teamId === homeTeamId) {
                    dotY = getY(pt.homePts);
-                   dotColor = '#ef4444'; // red
+                   dotColor = homeColor;
                 } else if (pt.teamId === awayTeamId) {
                    dotY = getY(pt.awayPts);
-                   dotColor = '#3b82f6'; // blue
+                   dotColor = awayColor;
                 } else {
                    dotY = getY(Math.max(pt.homePts, pt.awayPts));
                    dotColor = '#27272a'; // tie/none
@@ -277,7 +289,7 @@ export default function MatchMomentumView({
                     onClick={() => onSeek?.(Math.max(0, pt.time - 5))}
                   >
                     <title>
-                      {homeTeam?.name}: {pt.homePts} - {awayTeam?.name}: {pt.awayPts} 
+                      {homeName}: {pt.homePts} - {awayName}: {pt.awayPts} 
                       at {formatTime(pt.gameTime)} ({pt.type === 'goal' ? 'Goal' : pt.type})
                     </title>
                   </circle>
@@ -301,34 +313,34 @@ export default function MatchMomentumView({
 
         {/* Insights Grid */}
         <div className="grid grid-cols-2 gap-4">
-          <div className="bg-red-50/50 p-4 rounded-xl border border-red-100 flex flex-col gap-1 items-start">
-            <span className="text-[10px] uppercase tracking-widest text-red-500 font-bold mb-2">Largest Lead</span>
+          <div className="p-4 rounded-xl border flex flex-col gap-1 items-start" style={{ backgroundColor: hexToRgba(homeColor, 0.05), borderColor: hexToRgba(homeColor, 0.15) }}>
+            <span className="text-[10px] uppercase tracking-widest font-bold mb-2" style={{ color: homeColor }}>Largest Lead</span>
             <div className="flex items-baseline gap-2">
-              <span className="text-3xl font-black text-red-700 leading-none">{analysis.maxLeadHome}</span>
-              <span className="text-xs font-bold text-red-600 uppercase">Points</span>
+              <span className="text-3xl font-black leading-none" style={{ color: homeColor }}>{analysis.maxLeadHome}</span>
+              <span className="text-xs font-bold uppercase" style={{ color: homeColor }}>Points</span>
             </div>
-            <p className="text-[10px] font-medium text-red-400 truncate w-full">{homeTeam?.name || 'Home'}</p>
+            <p className="text-[10px] font-medium truncate w-full" style={{ color: hexToRgba(homeColor, 0.6) }}>{homeName}</p>
           </div>
 
-          <div className="bg-blue-50/50 p-4 rounded-xl border border-blue-100 flex flex-col gap-1 items-start text-right items-end">
-            <span className="text-[10px] uppercase tracking-widest text-blue-500 font-bold mb-2">Largest Lead</span>
+          <div className="p-4 rounded-xl border flex flex-col gap-1 items-start text-right items-end" style={{ backgroundColor: hexToRgba(awayColor, 0.05), borderColor: hexToRgba(awayColor, 0.15) }}>
+            <span className="text-[10px] uppercase tracking-widest font-bold mb-2" style={{ color: awayColor }}>Largest Lead</span>
             <div className="flex items-baseline gap-2">
-              <span className="text-xs font-bold text-blue-600 uppercase">Points</span>
-              <span className="text-3xl font-black text-blue-700 leading-none">{analysis.maxLeadAway}</span>
+              <span className="text-xs font-bold uppercase" style={{ color: awayColor }}>Points</span>
+              <span className="text-3xl font-black leading-none" style={{ color: awayColor }}>{analysis.maxLeadAway}</span>
             </div>
-            <p className="text-[10px] font-medium text-blue-400 truncate w-full">{awayTeam?.name || 'Away'}</p>
+            <p className="text-[10px] font-medium truncate w-full" style={{ color: hexToRgba(awayColor, 0.6) }}>{awayName}</p>
           </div>
           
           <div className="bg-gray-50 p-4 rounded-xl border border-gray-200 flex flex-col gap-1 items-start h-full">
             <span className="text-[10px] uppercase tracking-widest text-gray-500 font-bold mb-2 flex items-center gap-1.5"><Zap className="w-3.5 h-3.5 text-amber-500" /> Defining Runs</span>
             <div className="flex flex-col gap-2 w-full mt-1">
               <div className="flex justify-between items-center text-sm">
-                <span className="font-bold text-red-700 truncate min-w-0 pr-2 max-w-[60px] text-[10px] uppercase">{homeTeam?.scoreboard_name?.[0] || 'H'}</span>
-                <span className="font-mono bg-red-100 text-red-700 px-2 py-0.5 rounded-full text-xs font-bold">{analysis.maxRunHome > 0 ? `+${analysis.maxRunHome}` : '-'} run</span>
+                <span className="font-bold truncate min-w-0 pr-2 max-w-[60px] text-[10px] uppercase" style={{ color: homeColor }}>{homeName?.[0] || 'H'}</span>
+                <span className="font-mono px-2 py-0.5 rounded-full text-xs font-bold" style={{ backgroundColor: hexToRgba(homeColor, 0.1), color: homeColor }}>{analysis.maxRunHome > 0 ? `+${analysis.maxRunHome}` : '-'} run</span>
               </div>
               <div className="flex justify-between items-center text-sm border-t border-gray-200/60 pt-2">
-                <span className="font-bold text-blue-700 truncate min-w-0 pr-2 max-w-[60px] text-[10px] uppercase">{awayTeam?.scoreboard_name?.[0] || 'A'}</span>
-                <span className="font-mono bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full text-xs font-bold">{analysis.maxRunAway > 0 ? `+${analysis.maxRunAway}` : '-'} run</span>
+                <span className="font-bold truncate min-w-0 pr-2 max-w-[60px] text-[10px] uppercase" style={{ color: awayColor }}>{awayName?.[0] || 'A'}</span>
+                <span className="font-mono px-2 py-0.5 rounded-full text-xs font-bold" style={{ backgroundColor: hexToRgba(awayColor, 0.1), color: awayColor }}>{analysis.maxRunAway > 0 ? `+${analysis.maxRunAway}` : '-'} run</span>
               </div>
             </div>
           </div>

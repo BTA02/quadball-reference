@@ -4,7 +4,7 @@ import { computeTeamQuadballStats, getScoreboardName } from '../lib/statsComputa
 
 interface Player { id: string; firstName: string; lastName: string; [k: string]: any; }
 interface GameEvent { id: string; videoId: string; gameId: string; type: string; videoTime: number; status: string; playerId?: string; teamId?: string; [k: string]: any; }
-interface Team { id: string; name: string; [k: string]: any; }
+interface Team { id: string; name: string; nickname?: string; colorPrimary?: string; [k: string]: any; }
 interface Game { id: string; isVerified?: boolean; seasonId: string; homeTeamId: string; awayTeamId: string; [k: string]: any; createdAt: any; }
 interface Season { id: string; name: string; description?: string; year?: string; league?: string; [k: string]: any; }
 
@@ -75,7 +75,7 @@ export default function TeamProfileView({
        const filteredGames = playedGames.filter(g => g.seasonId === activeSeasonId);
        return filteredGames.map(g => {
          const gEvents = events.filter(e => e.gameId === g.id);
-         const stat = computeTeamQuadballStats(gEvents, players, teams, [g], {});
+         const stat = computeTeamQuadballStats(gEvents, players, teams, [g], { teamId: activeTeamId });
          const tStat = stat.find(st => st.teamId === activeTeamId);
          
          const opponent = g.homeTeamId === activeTeamId ? g.awayTeamId : g.homeTeamId;
@@ -102,7 +102,7 @@ export default function TeamProfileView({
     validSeasons.forEach(s => {
       const sGames = playedGames.filter(g => g.seasonId === s.id);
       const sEvents = events.filter(e => sGames.some(g => g.id === e.gameId));
-      const stat = computeTeamQuadballStats(sEvents, players, teams, sGames, {});
+      const stat = computeTeamQuadballStats(sEvents, players, teams, sGames, { teamId: activeTeamId });
       const tStat = stat.find(st => st.teamId === activeTeamId);
       if (tStat && tStat.gamesPlayed > 0) {
         const l = s.league || 'Other';
@@ -120,7 +120,7 @@ export default function TeamProfileView({
   const careerTotal = useMemo(() => {
     if (playedGames.length === 0) return null;
     const cEvents = events.filter(e => playedGames.some(g => g.id === e.gameId));
-    const stat = computeTeamQuadballStats(cEvents, players, teams, playedGames, {});
+    const stat = computeTeamQuadballStats(cEvents, players, teams, playedGames, { teamId: activeTeamId });
     const tStat = stat.find(st => st.teamId === activeTeamId);
     return tStat && tStat.gamesPlayed > 0 ? tStat : null;
   }, [playedGames, events, players, teams, activeTeamId]);
@@ -132,26 +132,34 @@ export default function TeamProfileView({
 
   if (!team) return <div>Team not found</div>;
 
-  const renderTableHeader = () => (
+  const teamColor = (team as any).colorPrimary || '#059669';
+  const hexToRgba = (hex: string, alpha: number) => {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  };
+
+  const TableHeaderRow = ({ onSortClick, currentSort, currentDir }: any) => (
     <tr className="border-b border-gray-100 bg-gray-50/80">
       <th className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-left text-gray-400 sticky left-0 bg-gray-50 z-10 w-48">Event</th>
-      <SortHeader label="GP" sortKey="gamesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
-      <SortHeader label="GF" sortKey="goals" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
-      <SortHeader label="GA" sortKey="goalsAgainst" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
-      <SortHeader label="TO" sortKey="turnovers" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
-      <SortHeader label="EPR" sortKey="epr" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
-      <SortHeader label="fEPR" sortKey="fEpr" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
-      <SortHeader label="+/−" sortKey="plusMinus" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
-      <SortHeader label="ORTG" sortKey="oRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
-      <SortHeader label="DRTG" sortKey="dRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
-      <SortHeader label="NET" sortKey="netRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
-      <SortHeader label="eOff" sortKey="eOff" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
-      <SortHeader label="eDef" sortKey="eDef" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
+      <SortHeader label="GP" sortKey="gamesPlayed" currentSort={currentSort} currentDir={currentDir} onSort={onSortClick} />
+      <SortHeader label="GF" sortKey="goals" currentSort={currentSort} currentDir={currentDir} onSort={onSortClick} />
+      <SortHeader label="GA" sortKey="goalsAgainst" currentSort={currentSort} currentDir={currentDir} onSort={onSortClick} />
+      <SortHeader label="TO" sortKey="turnovers" currentSort={currentSort} currentDir={currentDir} onSort={onSortClick} />
+      <SortHeader label="EPR" sortKey="epr" currentSort={currentSort} currentDir={currentDir} onSort={onSortClick} />
+      <SortHeader label="fEPR" sortKey="fEpr" currentSort={currentSort} currentDir={currentDir} onSort={onSortClick} />
+      <SortHeader label="+/−" sortKey="plusMinus" currentSort={currentSort} currentDir={currentDir} onSort={onSortClick} />
+      <SortHeader label="ORTG" sortKey="oRtg" currentSort={currentSort} currentDir={currentDir} onSort={onSortClick} />
+      <SortHeader label="DRTG" sortKey="dRtg" currentSort={currentSort} currentDir={currentDir} onSort={onSortClick} />
+      <SortHeader label="NET" sortKey="netRtg" currentSort={currentSort} currentDir={currentDir} onSort={onSortClick} />
+      <SortHeader label="eOff" sortKey="eOff" currentSort={currentSort} currentDir={currentDir} onSort={onSortClick} />
+      <SortHeader label="eDef" sortKey="eDef" currentSort={currentSort} currentDir={currentDir} onSort={onSortClick} />
     </tr>
   );
 
-  const renderRow = (row: any, title: React.ReactNode, key: string) => (
-    <tr key={key} className="border-b border-gray-50 hover:bg-gray-50/30 transition-colors">
+  const TableDataRow = ({ row, title, rowKey }: any) => (
+    <tr key={rowKey} className="border-b border-gray-50 hover:bg-gray-50/30 transition-colors">
       <td className="px-2 py-1.5 sticky left-0 bg-white z-10 group-hover:bg-gray-50/30 text-xs font-medium text-gray-800 truncate">{title}</td>
       <Cell value={row.gamesPlayed} />
       <Cell value={row.goals} />
@@ -168,21 +176,23 @@ export default function TeamProfileView({
     </tr>
   );
 
-  const renderAggHeader = renderTableHeader;
-  const renderAggRow = renderRow;
-
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12">
-      <div className="flex items-center gap-4">
-        <button onClick={onBack} className="p-2 bg-white border border-gray-200 rounded-xl hover:bg-emerald-50 text-gray-500 hover:text-emerald-600 transition-colors">
+      <div className="flex items-start gap-4">
+        <button onClick={onBack} className="p-2 bg-white border border-gray-200 rounded-xl hover:bg-gray-100 text-gray-500 hover:text-gray-900 transition-colors mt-1">
           <ChevronLeft className="w-5 h-5" />
         </button>
         <div>
-          <h2 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-emerald-600 via-teal-700 to-emerald-800">
+          <h2 className="text-3xl font-black tracking-tight text-gray-900">
             {team.name}
           </h2>
-          <p className="text-sm text-gray-400 capitalize flex gap-2">
-            <span>{playedGames.length} Historic Games</span>
+          {(team as any).nickname && (team as any).nickname !== team.name && (
+            <p className="text-sm font-medium mt-0.5 text-gray-400">
+              {(team as any).nickname}
+            </p>
+          )}
+          <p className="text-sm text-gray-400 mt-0.5">
+            {playedGames.length} Historic Games
           </p>
         </div>
       </div>
@@ -209,14 +219,21 @@ export default function TeamProfileView({
               <div className="p-10 text-center text-gray-400 text-sm flex items-center justify-center h-full">No recorded games.</div>
             ) : (
               <table className="w-full border-collapse">
-                <thead>{renderTableHeader()}</thead>
+                <thead><TableHeaderRow onSortClick={handleSort} currentSort={sortKey} currentDir={sortDir} /></thead>
                 <tbody>
-                  {sortedPerGame.map(r => renderRow(r, (
-                    <button onClick={() => onGameSelect?.(r.gameId)} className="text-emerald-600 hover:underline flex flex-col items-start max-w-[220px] overflow-hidden">
-                      <span className="font-bold truncate w-full text-left">vs {r.opponent || 'Opponent'}</span>
-                      {r.description && <span className="text-[10px] text-gray-400 font-normal truncate w-full text-left leading-tight mt-0.5">{r.description}</span>}
-                    </button>
-                  ), r.gameId))}
+                  {sortedPerGame.map((r, idx) => (
+                    <TableDataRow 
+                      key={`game-${r.gameId}-${idx}`} 
+                      row={r} 
+                      title={
+                        <button onClick={() => onGameSelect?.(r.gameId)} className="text-gray-900 hover:underline flex flex-col items-start max-w-[220px] overflow-hidden">
+                          <span className="font-bold truncate w-full text-left">vs {r.opponent || 'Opponent'}</span>
+                          {r.description && <span className="text-[10px] text-gray-400 font-normal truncate w-full text-left leading-tight mt-0.5">{r.description}</span>}
+                        </button>
+                      } 
+                      rowKey={`game-${r.gameId}-${idx}`} 
+                    />
+                  ))}
                 </tbody>
               </table>
             )}
@@ -239,9 +256,9 @@ export default function TeamProfileView({
                       OVERALL MULTI-YEAR PROFILE (ALL LEAGUES)
                     </div>
                     <table className="w-full border-collapse border border-gray-200 rounded-b-lg">
-                      <thead>{renderAggHeader()}</thead>
+                      <thead><TableHeaderRow onSortClick={() => {}} currentSort="" currentDir="asc" /></thead>
                       <tbody>
-                        {renderAggRow(careerTotal, 'All Time', 'career')}
+                        <TableDataRow key="career" row={careerTotal} title="All Time" rowKey="career" />
                       </tbody>
                     </table>
                   </div>
@@ -249,13 +266,15 @@ export default function TeamProfileView({
 
                 {Object.entries(seasonAverages).map(([league, rows]) => (
                   <div key={league} className="mt-6 border border-gray-200 rounded-lg overflow-hidden">
-                    <div className="bg-emerald-50/60 font-bold px-4 py-2 text-emerald-800 uppercase tracking-widest text-[10px] border-b border-emerald-100">
+                    <div className="font-bold px-4 py-2 uppercase tracking-widest text-[10px] border-b bg-gray-50/60 text-gray-800 border-gray-200">
                       {league} League
                     </div>
                     <table className="w-full border-collapse">
-                      <thead>{renderAggHeader()}</thead>
+                      <thead><TableHeaderRow onSortClick={() => {}} currentSort="" currentDir="asc" /></thead>
                       <tbody>
-                        {rows.map(r => renderAggRow(r, r.seasonLabel, r.seasonLabel))}
+                        {rows.map((r, idx) => (
+                          <TableDataRow key={`agg-${league}-${idx}`} row={r} title={r.seasonLabel} rowKey={`agg-${league}-${idx}`} />
+                        ))}
                       </tbody>
                     </table>
                   </div>

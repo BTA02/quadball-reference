@@ -371,12 +371,13 @@ export default function QuadballStatsView({
                 {tab === 'boxscore' ? (<>
                   <HeaderCell label="GP" sortKey="gamesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Games Played" />
                   <HeaderCell label="MIN" sortKey="minutesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Minutes Played" />
-                  <HeaderCell label="S" sortKey="shots" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Shots (throws)" />
-                  <HeaderCell label="ATT" sortKey="attempts" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Attempts (drives/physical attacks)" />
+                  <HeaderCell label="S" sortKey="shots" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Missed Shot (throws)" />
+                  <HeaderCell label="ATT" sortKey="attempts" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Missed Attempt (drives/physical attacks)" />
+                  <HeaderCell label="KO" sortKey="missKo" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Missed by Knockout" />
                   <HeaderCell label="G" sortKey="goals" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals" />
                   <HeaderCell label="A" sortKey="assists" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Assists" />
                   <HeaderCell label="TO" sortKey="turnovers" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Turnovers" />
-                  <HeaderCell label="S%" sortKey="shotPct" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Scoring % (Goals / (Goals + Shots + Attempts))" />
+                  <HeaderCell label="S%" sortKey="shotPct" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Scoring % (Goals / (Goals + Shots + Attempts + KOs))" />
                   <HeaderCell label="CTRL%" sortKey="controlPctOnField" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Team Bludger Control % While On Field" />
                 </>) : tab === 'rates' ? (<>
                   <HeaderCell label="GP" sortKey="gamesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Games Played" />
@@ -415,8 +416,9 @@ export default function QuadballStatsView({
                   <HeaderCell label="GP" sortKey="gamesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Games Played" />
                   <HeaderCell label="G" sortKey="goals" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals" />
                   <HeaderCell label="A" sortKey="assists" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Assists" />
-                  <HeaderCell label="S" sortKey="shots" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Shots" />
-                  <HeaderCell label="ATT" sortKey="attempts" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Attempts" />
+                  <HeaderCell label="S" sortKey="shots" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Missed Shot" />
+                  <HeaderCell label="ATT" sortKey="attempts" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Missed Attempt" />
+                  <HeaderCell label="KO" sortKey="missKo" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Missed by Knockout" />
                   <HeaderCell label="TO" sortKey="turnovers" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Turnovers" />
                   <HeaderCell label="G/G" sortKey="goalsPerGame" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals per Game" />
                   <HeaderCell label="A/G" sortKey="assistsPerGame" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Assists per Game" />
@@ -468,6 +470,7 @@ export default function QuadballStatsView({
                       <DataCell prop="minutesPlayed" />
                       <DataCell prop="shots" />
                       <DataCell prop="attempts" />
+                      <DataCell prop="missKo" />
                       <DataCell prop="goals" bold />
                       <DataCell prop="assists" bold />
                       <DataCell prop="turnovers" />
@@ -512,6 +515,7 @@ export default function QuadballStatsView({
                       <DataCell prop="assists" bold />
                       <DataCell prop="shots" />
                       <DataCell prop="attempts" />
+                      <DataCell prop="missKo" />
                       <DataCell prop="turnovers" />
                       <DataCell prop="goalsPerGame" />
                       <DataCell prop="assistsPerGame" />

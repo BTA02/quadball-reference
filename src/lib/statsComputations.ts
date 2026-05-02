@@ -91,6 +91,7 @@ export interface BasicPlayerStats {
   assists: number;
   shots: number;
   attempts: number;
+  missKo: number;
   turnovers: number;
   fouls: number;
   cards: number;
@@ -143,6 +144,7 @@ export function computeBasicStats(
       assists: 0,
       shots: 0,
       attempts: 0,
+      missKo: 0,
       turnovers: 0,
       fouls: 0,
       cards: 0,
@@ -171,6 +173,7 @@ export function computeBasicStats(
     else if (t === 'assist') stats.assists++;
     else if (t === 'shot') stats.shots++;
     else if (t === 'attempt') stats.attempts++;
+    else if (t === 'miss_ko') stats.missKo++;
     else if (t === 'turnover') stats.turnovers++;
     else if (t === 'foul') stats.fouls++;
     else if (t === 'card') stats.cards++;
@@ -179,8 +182,8 @@ export function computeBasicStats(
   // Finalize derived stats
   for (const [nid, stats] of statsMap) {
     stats.gamesPlayed = playerGameSets.get(nid)?.size || 0;
-    stats.points = stats.goals + stats.assists;
-    stats.shotPct = (stats.goals + stats.shots + stats.attempts) > 0 ? Math.round((stats.goals / (stats.goals + stats.shots + stats.attempts)) * 1000) / 10 : 0;
+    stats.points = stats.goals * 10;
+    stats.shotPct = (stats.goals + stats.shots + stats.attempts + stats.missKo) > 0 ? Math.round((stats.goals / (stats.goals + stats.shots + stats.attempts + stats.missKo)) * 1000) / 10 : 0;
   }
 
   return Array.from(statsMap.values());
@@ -319,6 +322,7 @@ export interface AdvancedPlayerStats {
   assists: number;
   shots: number;
   attempts: number;
+  missKo: number;
   turnovers: number;
   fouls: number;
   points: number;
@@ -361,6 +365,15 @@ export function computeGameClockIntervals(gameEvents: GameEvent[]): [number, num
     }
   }
 
+  // Fallback for legacy data with no gamestart tags
+  if (intervals.length === 0 && gameEvents.length > 0) {
+    const firstEventTime = gameEvents[0].videoTime;
+    const lastEventTime = gameEvents[gameEvents.length - 1].videoTime;
+    if (lastEventTime >= firstEventTime) {
+      intervals.push([firstEventTime, lastEventTime]);
+    }
+  }
+
   return intervals;
 }
 
@@ -373,6 +386,10 @@ function getGameMinutesInWindow(
   windowStart: number,
   windowEnd: number
 ): number {
+  if (clockIntervals.length === 0) {
+    return Math.max(0, windowEnd - windowStart) / 60;
+  }
+  
   let total = 0;
   for (const [s, e] of clockIntervals) {
     const overlapStart = Math.max(s, windowStart);
@@ -569,6 +586,7 @@ export function computeAdvancedStats(
     assists: number;
     shots: number;
     attempts: number;
+    missKo: number;
     turnovers: number;
     fouls: number;
     teamPossessions: number;
@@ -596,6 +614,7 @@ export function computeAdvancedStats(
         assists: 0,
         shots: 0,
         attempts: 0,
+        missKo: 0,
         turnovers: 0,
         fouls: 0,
         teamPossessions: 0,
@@ -888,6 +907,7 @@ export function computeAdvancedStats(
       else if (t === 'assist') accum.assists++;
       else if (t === 'shot') accum.shots++;
       else if (t === 'attempt') accum.attempts++;
+      else if (t === 'miss_ko') accum.missKo++;
       else if (t === 'turnover') accum.turnovers++;
       else if (t === 'foul') accum.fouls++;
     }
@@ -956,7 +976,7 @@ export function computeAdvancedStats(
       goalsPer100Possessions: accum.teamPossessions > 0 ? Math.round((accum.goals / accum.teamPossessions) * 100 * 100) / 100 : ('N/A' as any),
       assistsPer100Possessions: accum.teamPossessions > 0 ? Math.round((accum.assists / accum.teamPossessions) * 100 * 100) / 100 : ('N/A' as any),
       pointsPer100Possessions: accum.teamPossessions > 0 ? Math.round((points / accum.teamPossessions) * 100 * 100) / 100 : ('N/A' as any),
-      shotPct: (accum.goals + accum.shots + accum.attempts) > 0 ? Math.round((accum.goals / (accum.goals + accum.shots + accum.attempts)) * 1000) / 10 : 0,
+      shotPct: (accum.goals + accum.shots + accum.attempts + accum.missKo) > 0 ? Math.round((accum.goals / (accum.goals + accum.shots + accum.attempts + accum.missKo)) * 1000) / 10 : 0,
       assistToTurnover: accum.turnovers > 0
         ? Math.round((accum.assists / accum.turnovers) * 100) / 100
         : accum.assists > 0 ? Infinity : 0,
@@ -967,6 +987,7 @@ export function computeAdvancedStats(
       assists: accum.assists,
       shots: accum.shots, // Explicit thrown shots
       attempts: accum.attempts, // Physical drives
+      missKo: accum.missKo,     // Miss by KO
       turnovers: accum.turnovers,
       fouls: accum.fouls,
       teamTurnoversOn: accum.teamTurnoversOn,
@@ -1020,6 +1041,7 @@ export interface ExtendedPlayerStats {
   assists: number;
   shots: number;
   attempts: number;
+  missKo: number;
   turnovers: number;
   fouls: number;
   points: number;
@@ -1095,7 +1117,7 @@ export function computeExtendedStats(
     const gameScore = mins > 0 ? Math.round((rawGameScore / mins) * 20 * 10) / 10 : 0;
     
     // Expected Offense (eOff): Score per possession (100 for goals, scaled partial score for non-goals based on missed shots)
-    const missedChances = a.shots + a.attempts;
+    const missedChances = a.shots + a.attempts + a.missKo;
     const nonGoalPoss = Math.max(0, teamPoss - a.goals);
     let nonGoalScore = 0;
     if (nonGoalPoss > 0) {
@@ -1160,13 +1182,14 @@ export function computeExtendedStats(
       assists: a.assists,
       shots: a.shots,
       attempts: a.attempts,
+      missKo: a.missKo,
       turnovers: a.turnovers,
       fouls: a.fouls,
       points,
       // Merged basic metrics
       controlPctOnField: a.controlPctOnField,
-      shotPct: (a.goals + a.shots + a.attempts) > 0 
-        ? Math.round((a.goals / (a.goals + a.shots + a.attempts)) * 1000) / 10 
+      shotPct: (a.goals + a.shots + a.attempts + a.missKo) > 0 
+        ? Math.round((a.goals / (a.goals + a.shots + a.attempts + a.missKo)) * 1000) / 10 
         : 0,
       assistToTurnover: a.turnovers > 0
         ? Math.round((a.assists / a.turnovers) * 100) / 100
@@ -1194,6 +1217,7 @@ export interface TeamQuadballStats {
   assists: number;
   shots: number;
   attempts: number;
+  missKo: number;
   turnovers: number;
   goalsAgainst: number;
   plusMinus: number;
@@ -1288,7 +1312,8 @@ export function computeTeamQuadballStats(
       let isNewPossForEventTeam = false;
       let isEmptyTurnover = false;
 
-      if (['goal', 'shot', 'attempt', 'turnover'].includes(t)) {
+      // Check if team ends possession
+      if (['goal', 'shot', 'attempt', 'miss_ko', 'turnover'].includes(t)) {
         isNewPossForEventTeam = (currentInferredPossTeam !== e.teamId);
         if (isNewPossForEventTeam) {
           getTA(e.teamId).teamPoss++;
@@ -1343,7 +1368,7 @@ export function computeTeamQuadballStats(
     if (filters.teamId && tid !== filters.teamId) continue;
     
     const gp = acc.gameIds.size;
-    const totalMissT = acc.shots + acc.attempts; // Total shots + drives
+    const totalMissT = acc.shots + acc.attempts + acc.missKo; // Total shots + drives + KO
     const teamPoss = acc.teamPoss;
     const oppPoss = acc.oppPoss;
     
@@ -1378,8 +1403,9 @@ export function computeTeamQuadballStats(
       assists: acc.assists,
       shots: acc.shots,
       attempts: acc.attempts,
+      missKo: acc.missKo,
       turnovers: acc.turnovers,
-      shotPct: (acc.goals + acc.shots + acc.attempts) > 0 ? Math.round((acc.goals / (acc.goals + acc.shots + acc.attempts)) * 1000) / 10 : 0,
+      shotPct: (acc.goals + acc.shots + acc.attempts + acc.missKo) > 0 ? Math.round((acc.goals / (acc.goals + acc.shots + acc.attempts + acc.missKo)) * 1000) / 10 : 0,
       goalsPerGame: gp > 0 ? Math.round((acc.goals / gp) * 100) / 100 : 0,
       assistsPerGame: gp > 0 ? Math.round((acc.assists / gp) * 100) / 100 : 0,
       pointsPerGame: gp > 0 ? Math.round(((acc.goals + acc.assists) / gp) * 100) / 100 : 0,
@@ -2331,7 +2357,7 @@ function groupEventsByGame(
   for (const e of events) {
     if (!relevantGameIds.has(e.gameId)) continue;
     if (!eventsByGame.has(e.gameId)) eventsByGame.set(e.gameId, []);
-    eventsByGame.get(e.gameId)!.push(e);
+    eventsByGame.get(e.gameId)!.push({ ...e, videoTime: Number(e.videoTime) || 0 });
   }
 
   if (filters.outlierFilter === 'exclude') {
