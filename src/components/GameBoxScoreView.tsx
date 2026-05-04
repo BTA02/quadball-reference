@@ -8,43 +8,9 @@ interface Team { id: string; name: string; [k: string]: any; }
 interface Game { id: string; isVerified?: boolean; seasonId: string; homeTeamId: string; awayTeamId: string; [k: string]: any; }
 interface Season { id: string; name: string; description?: string; year?: string; league?: string; [k: string]: any; }
 
-function cn(...classes: (string | false | null | undefined)[]) {
-  return classes.filter(Boolean).join(' ');
-}
-
-type SortDir = 'asc' | 'desc';
-
-function sortData<T extends Record<string, any>>(data: T[], key: string, dir: SortDir): T[] {
-  return [...data].sort((a, b) => {
-    const va = a[key] ?? 0;
-    const vb = b[key] ?? 0;
-    if ((typeof va === 'number' || typeof va === 'string') && (typeof vb === 'number' || typeof vb === 'string') && va !== '' && vb !== '' && !isNaN(Number(va)) && !isNaN(Number(vb))) {
-      return dir === 'asc' ? Number(va) - Number(vb) : Number(vb) - Number(va);
-    }
-    return dir === 'asc' ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
-  });
-}
-
-function SortHeader({ label, sortKey, currentSort, currentDir, onSort, tooltip }: any) {
-  const active = currentSort === sortKey;
-  return (
-    <th className={cn('px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider cursor-pointer select-none whitespace-nowrap text-center', active ? 'text-red-700' : 'text-slate-600 hover:text-slate-900')} onClick={() => onSort(sortKey)} title={tooltip}>
-      <span className="inline-flex items-center gap-0.5">{label}</span>
-      {active && <span className="text-[10px] ml-1">{currentDir === 'asc' ? '↑' : '↓'}</span>}
-    </th>
-  );
-}
-
-function Cell({ value, highlight, bold, align = 'center' }: any) {
-  return (
-    <td className={cn('px-2 py-1.5 text-xs tabular-nums font-mono', 
-      align === 'center' ? 'text-center' : align === 'left' ? 'text-left' : 'text-right',
-      highlight === 'pos' && 'text-emerald-700 font-bold', highlight === 'neg' && 'text-red-600 font-bold', !highlight && 'text-slate-800', bold && 'font-black'
-    )}>
-      {typeof value === 'number' && value === Infinity ? '∞' : value}
-    </td>
-  );
-}
+import { 
+  cn, SortDir, sortBy, SortHeader, Cell
+} from './ui/StatsTable';
 
 export default function GameBoxScoreView({
   players, events, games, seasons, teams, activeGameId,
@@ -90,11 +56,11 @@ export default function GameBoxScoreView({
     
     const activePairs = pairs.filter(p => p.totalMinutes > 0);
     
-    const hStats = sortData(activeStats.filter(s => (s as any).teamId === game.homeTeamId), sortKeyHome, sortDirHome);
-    const aStats = sortData(activeStats.filter(s => (s as any).teamId === game.awayTeamId), sortKeyAway, sortDirAway);
+    const hStats = sortBy(activeStats.filter(s => (s as any).teamId === game.homeTeamId), sortKeyHome, sortDirHome);
+    const aStats = sortBy(activeStats.filter(s => (s as any).teamId === game.awayTeamId), sortKeyAway, sortDirAway);
 
-    const hPairs = sortData(activePairs.filter(p => (p as any).teamId === game.homeTeamId), sortKeyHomeP, sortDirHomeP);
-    const aPairs = sortData(activePairs.filter(p => (p as any).teamId === game.awayTeamId), sortKeyAwayP, sortDirAwayP);
+    const hPairs = sortBy(activePairs.filter(p => (p as any).teamId === game.homeTeamId), sortKeyHomeP, sortDirHomeP);
+    const aPairs = sortBy(activePairs.filter(p => (p as any).teamId === game.awayTeamId), sortKeyAwayP, sortDirAwayP);
 
     const matchHomeGoals = gEvents.filter(e => e.teamId === game.homeTeamId && e.type === 'goal').length * 10;
     const matchAwayGoals = gEvents.filter(e => e.teamId === game.awayTeamId && e.type === 'goal').length * 10;

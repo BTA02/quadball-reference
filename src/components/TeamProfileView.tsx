@@ -8,40 +8,9 @@ interface Team { id: string; name: string; nickname?: string; colorPrimary?: str
 interface Game { id: string; isVerified?: boolean; seasonId: string; homeTeamId: string; awayTeamId: string; [k: string]: any; createdAt: any; }
 interface Season { id: string; name: string; description?: string; year?: string; league?: string; [k: string]: any; }
 
-function cn(...classes: (string | false | null | undefined)[]) {
-  return classes.filter(Boolean).join(' ');
-}
-
-type SortDir = 'asc' | 'desc';
-
-function sortData<T extends Record<string, any>>(data: T[], key: string, dir: SortDir): T[] {
-  return [...data].sort((a, b) => {
-    const va = a[key] ?? 0;
-    const vb = b[key] ?? 0;
-    if ((typeof va === 'number' || typeof va === 'string') && (typeof vb === 'number' || typeof vb === 'string') && va !== '' && vb !== '' && !isNaN(Number(va)) && !isNaN(Number(vb))) {
-      return dir === 'asc' ? Number(va) - Number(vb) : Number(vb) - Number(va);
-    }
-    return dir === 'asc' ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
-  });
-}
-
-function SortHeader({ label, sortKey, currentSort, currentDir, onSort }: any) {
-  const active = currentSort === sortKey;
-  return (
-    <th className={cn('px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider cursor-pointer select-none whitespace-nowrap text-center', active ? 'text-emerald-700' : 'text-slate-600 hover:text-slate-900')} onClick={() => onSort(sortKey)}>
-      <span className="inline-flex items-center gap-0.5">{label}</span>
-      {active && <span className="text-[10px] ml-1">{currentDir === 'asc' ? '↑' : '↓'}</span>}
-    </th>
-  );
-}
-
-function Cell({ value, highlight, bold }: any) {
-  return (
-    <td className={cn('px-2 py-1.5 text-center text-xs tabular-nums font-mono', highlight === 'pos' && 'text-emerald-700 font-bold', highlight === 'neg' && 'text-red-600 font-bold', !highlight && 'text-slate-800', bold && 'font-black')}>
-      {typeof value === 'number' && value === Infinity ? '∞' : value}
-    </td>
-  );
-}
+import { 
+  cn, SortDir, sortBy, SortHeader, Cell
+} from './ui/StatsTable';
 
 export default function TeamProfileView({
   players, events, games, seasons, teams, activeTeamId,
@@ -95,7 +64,7 @@ export default function TeamProfileView({
     return [];
   }, [playedGames, activeSeasonId, events, players, teams, activeTeamId]);
 
-  const sortedPerGame = useMemo(() => sortData(perGameStats as any[], sortKey, sortDir), [perGameStats, sortKey, sortDir]);
+  const sortedPerGame = useMemo(() => sortBy(perGameStats as any[], sortKey, sortDir), [perGameStats, sortKey, sortDir]);
 
   const seasonAverages = useMemo(() => {
     const leagues: Record<string, any[]> = {};

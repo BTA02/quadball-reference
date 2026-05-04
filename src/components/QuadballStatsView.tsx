@@ -19,130 +19,10 @@ interface Team { id: string; name: string; [k: string]: any; }
 interface Game { id: string; isVerified?: boolean; seasonId: string; homeTeamId: string; awayTeamId: string; [k: string]: any; }
 interface Season { id: string; name: string; [k: string]: any; }
 
-function cn(...classes: (string | false | null | undefined)[]) {
-  return classes.filter(Boolean).join(' ');
-}
-
-type SortDir = 'asc' | 'desc';
-
-function sortBy<T>(arr: T[], key: any, dir: SortDir): T[] {
-  return [...arr].sort((a: any, b: any) => {
-    let targetA = a;
-    let targetB = b;
-    let k = String(key);
-    
-    if (k.endsWith(':with')) {
-      k = k.replace(':with', '');
-      targetA = a._with || {};
-      targetB = b._with || {};
-    } else if (k.endsWith(':without')) {
-      k = k.replace(':without', '');
-      targetA = a._without || {};
-      targetB = b._without || {};
-    }
-
-    const va = targetA[k] ?? 0;
-    const vb = targetB[k] ?? 0;
-
-    const aInd = va === 'N/A' || va === '∞' || va === Infinity || (typeof va === 'number' && isNaN(va)) || va === 'NaN';
-    const bInd = vb === 'N/A' || vb === '∞' || vb === Infinity || (typeof vb === 'number' && isNaN(vb)) || vb === 'NaN';
-    if (aInd && !bInd) return 1;
-    if (!aInd && bInd) return -1;
-    if (aInd && bInd) return 0;
-    
-    // Numeric sorting fallback if both values are numbers or successfully parse to numbers (and isn't empty string)
-    if (
-      (typeof va === 'number' || typeof va === 'string') &&
-      (typeof vb === 'number' || typeof vb === 'string') &&
-      va !== '' && vb !== '' &&
-      !isNaN(Number(va)) && !isNaN(Number(vb))
-    ) {
-      const numA = Number(va);
-      const numB = Number(vb);
-      return dir === 'asc' ? numA - numB : numB - numA;
-    }
-    
-    return dir === 'asc' 
-      ? String(va).localeCompare(String(vb)) 
-      : String(vb).localeCompare(String(va));
-  });
-}
-
-function SortHeader({ label, sortKey, currentSort, currentDir, onSort, tooltip }: {
-  label: string; sortKey: string; currentSort: string; currentDir: SortDir;
-  onSort: (k: string) => void; tooltip?: string;
-}) {
-  const active = currentSort === sortKey;
-  return (
-    <th className={cn('px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider cursor-pointer select-none whitespace-nowrap text-center',
-        active ? 'text-red-600' : 'text-slate-600 hover:text-slate-800')}
-      onClick={() => onSort(sortKey)} title={tooltip}>
-      <span className="inline-flex items-center gap-0.5">
-        {label}
-        {active && (currentDir === 'asc'
-          ? <ChevronUp className="w-3 h-3" />
-          : <ChevronDown className="w-3 h-3" />)}
-      </span>
-    </th>
-  );
-}
-
-function Cell({ value, highlight, bold, align = 'center' }: { value: string | number; highlight?: 'pos' | 'neg'; bold?: boolean, align?: 'left'|'center'|'right' }) {
-  return (
-      <td className={cn('px-2 py-1.5 text-xs tabular-nums font-mono text-slate-900',
-        align === 'center' ? 'text-center' : align === 'left' ? 'text-left' : 'text-right',
-        bold && 'font-bold'
-    )}>
-      {typeof value === 'number' && value === Infinity ? '∞' : value}
-    </td>
-  );
-}
-
-
-function SplitHeader({ label, sortKey, currentSort, currentDir, onSort, tooltip }: {
-  label: string; sortKey: string; currentSort: string; currentDir: SortDir;
-  onSort: (k: string) => void; tooltip?: string;
-}) {
-  const activeMain = currentSort === sortKey;
-  const activeWith = currentSort === `${sortKey}:with`;
-  const activeWithout = currentSort === `${sortKey}:without`;
-
-  return (
-    <th className="p-0 border-r border-gray-100 align-bottom min-w-[90px]">
-      <div className={cn('px-2 py-1 text-[10px] font-semibold uppercase tracking-wider cursor-pointer select-none text-center border-b border-gray-100 transition-colors', activeMain ? 'text-red-600 bg-red-50/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50')} onClick={() => onSort(sortKey)} title={tooltip}>
-        <span className="inline-flex flex-col items-center justify-center w-full">
-          <span className="inline-flex items-center gap-0.5">
-            {label}
-            {activeMain && (currentDir === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
-          </span>
-        </span>
-      </div>
-      <div className="flex text-[9px] uppercase tracking-wider font-semibold cursor-pointer">
-        <div className={cn('w-1/2 flex justify-center items-center py-0.5 border-r border-gray-100/50 transition-colors', activeWith ? 'text-red-700 bg-red-50/40' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50')} onClick={() => onSort(`${sortKey}:with`)}>
-          With {activeWith && (currentDir === 'asc' ? '↑' : '↓')}
-        </div>
-        <div className={cn('w-1/2 flex justify-center items-center py-0.5 transition-colors bg-slate-50/50', activeWithout ? 'text-red-700 bg-red-50/40' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-100')} onClick={() => onSort(`${sortKey}:without`)}>
-          W/O {activeWithout && (currentDir === 'asc' ? '↑' : '↓')}
-        </div>
-      </div>
-    </th>
-  );
-}
-
-function SplitCell({ valWith, valWithout, bold }: { valWith: string | number, valWithout: string | number, bold?: boolean }) {
-  return (
-    <td className="p-0 border-r border-gray-100">
-      <div className="flex h-full min-h-[30px]">
-        <div className="w-1/2 px-1 py-1.5 flex items-center justify-center text-xs tabular-nums font-mono text-slate-800 bg-white border-r border-gray-100/50">
-          <span className={bold ? 'font-bold' : ''}>{typeof valWith === 'number' && valWith === Infinity ? '∞' : valWith}</span>
-        </div>
-        <div className="w-1/2 px-1 py-1.5 flex items-center justify-center text-xs tabular-nums font-mono text-slate-800 bg-slate-50">
-          <span className={bold ? 'font-bold' : ''}>{typeof valWithout === 'number' && valWithout === Infinity ? '∞' : valWithout}</span>
-        </div>
-      </div>
-    </td>
-  );
-}
+import { 
+  cn, SortDir, sortBy, SortHeader, Cell, SplitHeader, SplitCell, 
+  StatsTabSelector, StatsTabButton, StatsPaginationFooter 
+} from './ui/StatsTable';
 
 interface QuadballStatsViewProps {
   players: Player[];
@@ -317,28 +197,13 @@ export default function QuadballStatsView({
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <div className="flex border border-gray-200 rounded-md overflow-hidden text-xs">
-            <button onClick={() => { setTab('boxscore'); setSortKey('goals'); setSortDir('desc'); }}
-              className={cn('px-3 py-1 font-medium transition-colors', tab === 'boxscore' ? 'bg-red-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50')}>
-              Box Score
-            </button>
-            <button onClick={() => { setTab('rates'); setSortKey('goalsPerGame'); setSortDir('desc'); }}
-              className={cn('px-3 py-1 font-medium transition-colors border-l border-gray-200', tab === 'rates' ? 'bg-red-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50')}>
-              Rate Score
-            </button>
-            <button onClick={() => { setTab('advanced'); setSortKey('gameScore'); setSortDir('desc'); }}
-              className={cn('px-3 py-1 font-medium transition-colors border-l border-gray-200', tab === 'advanced' ? 'bg-red-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50')}>
-              Advanced Ratings
-            </button>
-            <button onClick={() => { setTab('plusminus'); setSortKey('plusMinus'); setSortDir('desc'); }}
-              className={cn('px-3 py-1 font-medium transition-colors border-l border-gray-200', tab === 'plusminus' ? 'bg-red-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50')}>
-              Plus/Minus
-            </button>
-            <button onClick={() => { setTab('team'); setSortKey('netRtg'); setSortDir('desc'); }}
-              className={cn('px-3 py-1 font-medium transition-colors border-l border-gray-200', tab === 'team' ? 'bg-red-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50')}>
-              Team
-            </button>
-          </div>
+          <StatsTabSelector>
+            <StatsTabButton isFirst active={tab === 'boxscore'} onClick={() => { setTab('boxscore'); setSortKey('goals'); setSortDir('desc'); }} label="Box Score" />
+            <StatsTabButton active={tab === 'rates'} onClick={() => { setTab('rates'); setSortKey('goalsPerGame'); setSortDir('desc'); }} label="Rate Score" />
+            <StatsTabButton active={tab === 'plusminus'} onClick={() => { setTab('plusminus'); setSortKey('plusMinus'); setSortDir('desc'); }} label="Plus/Minus" />
+            <StatsTabButton active={tab === 'advanced'} onClick={() => { setTab('advanced'); setSortKey('gameScore'); setSortDir('desc'); }} label="Advanced" />
+            <StatsTabButton active={tab === 'team'} onClick={() => { setTab('team'); setSortKey('netRtg'); setSortDir('desc'); }} label="Team" />
+          </StatsTabSelector>
           <button onClick={() => setShowHelp(!showHelp)} className="p-1.5 text-gray-400 hover:text-red-600 transition-colors ml-1 bg-white border border-gray-200 rounded-md" title="How stats are calculated">
             <Info className="w-4 h-4" />
           </button>
@@ -397,8 +262,7 @@ export default function QuadballStatsView({
                   <HeaderCell label="ORTG" sortKey="oRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Offensive Rating (Points scored per 100 offensive possessions while on field)" />
                   <HeaderCell label="DRTG" sortKey="dRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Defensive Rating (Points conceded per 100 defensive possessions while on field)" />
                   <HeaderCell label="NET" sortKey="netRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Net Rating (ORTG - DRTG)" />
-                  <HeaderCell label="eOff" sortKey="eOff" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Expected Offense (Expected points per offensive possession)" />
-                  <HeaderCell label="eDef" sortKey="eDef" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Expected Defense (Expected points allowed per defensive possession)" />
+                  <HeaderCell label="RAPM" sortKey="rapm" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Regularized Adjusted Plus-Minus" />
                   <HeaderCell label="EPR" sortKey="epr" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Empty Possession Rate (Empty Turnovers / Offensive Possessions)" />
                   <HeaderCell label="fEPR" sortKey="fEpr" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Forced Empty Possession Rate (Opponent Empty Turnovers / Defensive Possessions)" />
                   <HeaderCell label="USG%" sortKey="usgPct" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Usage Rate (Estimates % of team possessions player is involved in while on field)" />
@@ -426,8 +290,6 @@ export default function QuadballStatsView({
                   <HeaderCell label="ORTG" sortKey="oRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Offensive Rating" />
                   <HeaderCell label="DRTG" sortKey="dRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Defensive Rating" />
                   <HeaderCell label="NET" sortKey="netRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Net Rating" />
-                  <HeaderCell label="eOff" sortKey="eOff" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Expected Offense" />
-                  <HeaderCell label="eDef" sortKey="eDef" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Expected Defense" />
                 </>)}
               </tr>
             </thead>
@@ -494,8 +356,7 @@ export default function QuadballStatsView({
                       <DataCell prop="oRtg" />
                       <DataCell prop="dRtg" />
                       <DataCell prop="netRtg" bold fmt={v => v > 0 ? `+${v}` : v || 'E'} />
-                      <DataCell prop="eOff" />
-                      <DataCell prop="eDef" />
+                      <DataCell prop="rapm" bold fmt={v => v > 0 ? `+${v}` : v || 'E'} />
                       <DataCell prop="epr" fmt={v => `${v}%`} />
                       <DataCell prop="fEpr" fmt={v => `${v}%`} />
                       <DataCell prop="usgPct" fmt={v => `${v}%`} />
@@ -523,8 +384,6 @@ export default function QuadballStatsView({
                       <DataCell prop="oRtg" />
                       <DataCell prop="dRtg" />
                       <DataCell prop="netRtg" bold fmt={v => v > 0 ? `+${v}` : v || 'E'} />
-                      <DataCell prop="eOff" />
-                      <DataCell prop="eDef" />
                     </>)}
                   </tr>
                 );
@@ -535,16 +394,14 @@ export default function QuadballStatsView({
       </div>
 
       {/* Pagination footer */}
-      <div className="flex items-center justify-between text-[10px] text-slate-500">
-        <span>{data.length} players • S = shots • ATT = attempts (drives) • G = goals • A = assists • TO = turnovers • A:TO = assist/turnover • S% = shooting %</span>
-        <div className="flex items-center gap-1">
-          <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
-            className="p-1 rounded disabled:opacity-30 hover:bg-gray-100"><ChevronLeft className="w-3 h-3" /></button>
-          <span className="px-2 font-mono">{page}/{totalPages}</span>
-          <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}
-            className="p-1 rounded disabled:opacity-30 hover:bg-gray-100"><ChevronRight className="w-3 h-3" /></button>
-        </div>
-      </div>
+      <StatsPaginationFooter
+        itemCount={data.length}
+        itemName={tab === 'team' ? 'teams' : 'players'}
+        legend="S = shots • ATT = attempts (drives) • G = goals • A = assists • TO = turnovers • S% = shooting %"
+        page={page}
+        totalPages={totalPages}
+        setPage={setPage}
+      />
     </div>
   );
 }

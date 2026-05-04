@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { ChevronLeft } from 'lucide-react';
-import { computeExtendedStats, computeTeamQuadballStats, computeBeaterSoloStats, computeBeaterPairStats, computeSeekerStats, AdvancedPlayerStats, getScoreboardName } from '../lib/statsComputations';
+import { computeAdvancedStats, computeTeamQuadballStats, computeBeaterSoloStats, computeSeekerStats, AdvancedPlayerStats, getScoreboardName } from '../lib/statsComputations';
 
 interface Player { id: string; firstName: string; lastName: string; preferredName?: string; nickname?: string; [k: string]: any; }
 interface GameEvent { id: string; videoId: string; gameId: string; type: string; videoTime: number; status: string; playerId?: string; teamId?: string; [k: string]: any; }
@@ -9,7 +9,7 @@ interface Game { id: string; isVerified?: boolean; seasonId: string; homeTeamId:
 interface Season { id: string; name: string; description?: string; year?: string; league?: string; [k: string]: any; }
 
 import { 
-  cn, SortDir, sortBy, SortHeader, Cell, SplitHeader, SplitCell,
+  cn, SortDir, sortBy, SortHeader, Cell,
   StatsTabSelector, StatsTabButton
 } from './ui/StatsTable';
 
@@ -24,10 +24,6 @@ export default function PlayerProfileView({
 }) {
   const player = players.find(p => p.id === activePlayerId);
   const [positionTab, setPositionTab] = useState<'quadball' | 'dodgeball' | 'flag'>('quadball');
-  const [quadTab, setQuadTab] = useState<'boxscore' | 'rates' | 'advanced' | 'plusminus'>('boxscore');
-  const [dodgeTab, setDodgeTab] = useState<'solo' | 'pairs'>('solo');
-  const [pairSortKey, setPairSortKey] = useState('totalMinutes');
-  const [pairSortDir, setPairSortDir] = useState<SortDir>('desc');
 
   const { playedGames, validSeasons } = useMemo(() => {
     const played = games.filter(g => events.some(e => e.gameId === g.id && e.playerId === activePlayerId && e.type === 'sub_in'));
@@ -42,53 +38,10 @@ export default function PlayerProfileView({
   const [sortKey, setSortKey] = useState('minutesPlayed');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
 
-  const activeGames = activeSeasonId === 'all' ? playedGames : playedGames.filter(g => g.seasonId === activeSeasonId);
-  const activeEvents = events.filter(e => activeGames.some(g => g.id === e.gameId));
-
-  const quadStats = useMemo(() => {
-    if (positionTab !== 'quadball' || activeGames.length === 0) return null;
-    const stats = computeExtendedStats(activeEvents, players, activeGames, { outlierFilter: 'include' });
-    const pStat = stats.find(s => s.playerId === activePlayerId);
-    return pStat || null;
-  }, [activeEvents, players, activeGames, activePlayerId, positionTab]);
-
-  const dodgeSoloStats = useMemo(() => {
-    if (positionTab !== 'dodgeball' || activeGames.length === 0) return null;
-    const stats = computeBeaterSoloStats(activeEvents, players, activeGames, {});
-    return stats.find(s => s.playerId === activePlayerId) || null;
-  }, [activeEvents, players, activeGames, activePlayerId, positionTab]);
-
-  const dodgePairStats = useMemo(() => {
-    if (positionTab !== 'dodgeball' || activeGames.length === 0) return [];
-    const stats = computeBeaterPairStats(activeEvents, players, activeGames, {});
-    const pairs = stats.filter(p => p.player1Id === activePlayerId || p.player2Id === activePlayerId);
-    return sortBy(pairs, pairSortKey, pairSortDir);
-  }, [activeEvents, players, activeGames, activePlayerId, positionTab, pairSortKey, pairSortDir]);
-
-  const flagStats = useMemo(() => {
-    if (positionTab !== 'flag' || activeGames.length === 0) return null;
-    const stats = computeSeekerStats(activeEvents, players, activeGames, {});
-    return stats.find(s => s.playerId === activePlayerId) || null;
-  }, [activeEvents, players, activeGames, activePlayerId, positionTab]);
-
-  const handlePairSort = (k: string) => {
-    if (pairSortKey === k) setPairSortDir(d => d === 'asc' ? 'desc' : 'asc');
-    else { setPairSortKey(k); setPairSortDir('desc'); }
-  };
-
-  const QuadHeaderCell = (props: any) => {
-    return <SortHeader {...props} onSort={() => {}} currentSort="" currentDir="asc" />;
-  };
-
-  const QuadCell = (props: any) => {
-    return <Cell {...props} />;
-  };
-
-
   const getStatsFn = (pos: string) => {
     if (pos === 'dodgeball') return computeBeaterSoloStats;
     if (pos === 'flag') return computeSeekerStats;
-    return computeExtendedStats;
+    return computeAdvancedStats;
   };
 
   const perGameStats = useMemo(() => {
@@ -389,264 +342,26 @@ export default function PlayerProfileView({
         </div>
       </div>
 
-      
-      <div className="flex flex-wrap items-center justify-between gap-4 bg-white p-4 rounded-2xl border border-gray-200 shadow-sm">
-        <div className="flex items-center gap-4">
-          <StatsTabSelector>
-            <StatsTabButton isFirst active={positionTab === 'quadball'} onClick={() => setPositionTab('quadball')} label="Quadball" activeClass="bg-blue-600 text-white" />
-            <StatsTabButton active={positionTab === 'dodgeball'} onClick={() => setPositionTab('dodgeball')} label="Dodgeball" activeClass="bg-neutral-900 text-white" />
-            <StatsTabButton active={positionTab === 'flag'} onClick={() => setPositionTab('flag')} label="Flag" activeClass="bg-yellow-400 text-black" />
-          </StatsTabSelector>
-        </div>
-        <select
-          value={activeSeasonId}
-          onChange={e => setSelectedSeasonId(e.target.value)}
-          className="bg-gray-50 border text-xs font-medium tracking-wide shadow-sm border-gray-200 text-gray-700 rounded-lg px-3 py-2 outline-none focus:border-blue-500"
-        >
-          <option value="all">View All Championships...</option>
-          {validSeasons.map(s => <option key={s.id} value={s.id}>{s.description || s.name}</option>)}
-        </select>
-      </div>
-
       <div className="flex flex-col gap-6">
-        {/* Season Stats */}
-        <div className="flex flex-col gap-3">
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <h3 className="font-bold text-gray-800">Season Stats</h3>
-            {positionTab === 'quadball' && (
-              <StatsTabSelector>
-                <StatsTabButton isFirst active={quadTab === 'boxscore'} onClick={() => setQuadTab('boxscore')} label="Box Score" />
-                <StatsTabButton active={quadTab === 'rates'} onClick={() => setQuadTab('rates')} label="Rate Score" />
-                <StatsTabButton active={quadTab === 'plusminus'} onClick={() => setQuadTab('plusminus')} label="Plus/Minus" />
-                <StatsTabButton active={quadTab === 'advanced'} onClick={() => setQuadTab('advanced')} label="Advanced" />
-              </StatsTabSelector>
-            )}
-            {positionTab === 'dodgeball' && (
-              <StatsTabSelector>
-                <StatsTabButton isFirst active={dodgeTab === 'solo'} onClick={() => setDodgeTab('solo')} label="Solo" />
-                <StatsTabButton active={dodgeTab === 'pairs'} onClick={() => setDodgeTab('pairs')} label="Pairs" />
-              </StatsTabSelector>
-            )}
-          </div>
-          
-          <div className="border border-gray-200 rounded-lg overflow-hidden bg-white flex flex-col">
-            <div className="overflow-x-auto flex-1 bg-white">
-            {positionTab === 'quadball' && (!quadStats ? (
-              <div className="p-10 text-center text-gray-400 text-sm">No Quadball stats for this selection.</div>
-            ) : (
-              <table className="w-full border-collapse">
-                <thead>
-                  <tr className="border-b border-gray-100 bg-gray-50/80">
-                    <th className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-left text-gray-400 sticky left-0 bg-gray-50 z-10 w-48">Player</th>
-                    {quadTab === 'boxscore' ? (<>
-                      <QuadHeaderCell label="GP" sortKey="gamesPlayed" />
-                      <QuadHeaderCell label="MIN" sortKey="minutesPlayed" />
-                      <QuadHeaderCell label="S" sortKey="shots" />
-                      <QuadHeaderCell label="ATT" sortKey="attempts" />
-                      <QuadHeaderCell label="KO" sortKey="missKo" />
-                      <QuadHeaderCell label="G" sortKey="goals" />
-                      <QuadHeaderCell label="A" sortKey="assists" />
-                      <QuadHeaderCell label="TO" sortKey="turnovers" />
-                      <QuadHeaderCell label="S%" sortKey="shotPct" />
-                      <QuadHeaderCell label="CTRL%" sortKey="controlPctOnField" />
-                    </>) : quadTab === 'rates' ? (<>
-                      <QuadHeaderCell label="GP" sortKey="gamesPlayed" />
-                      <QuadHeaderCell label="MIN" sortKey="minutesPlayed" />
-                      <QuadHeaderCell label="G/G" sortKey="goalsPerGame" />
-                      <QuadHeaderCell label="G/20" sortKey="goalsPerTwenty" />
-                      <QuadHeaderCell label="A/G" sortKey="assistsPerGame" />
-                      <QuadHeaderCell label="A/20" sortKey="assistsPerTwenty" />
-                      <QuadHeaderCell label="PTS/G" sortKey="pointsPerGame" />
-                      <QuadHeaderCell label="PTS/20" sortKey="pointsPerTwenty" />
-                      <QuadHeaderCell label="A:TO" sortKey="assistToTurnover" />
-                    </>) : quadTab === 'advanced' ? (<>
-                      <QuadHeaderCell label="MIN" sortKey="minutesPlayed" />
-                      <QuadHeaderCell label="POSS" sortKey="teamPossessions" />
-                      <QuadHeaderCell label="USG%" sortKey="usgPct" />
-                      <QuadHeaderCell label="ORTG" sortKey="oRtg" />
-                      <QuadHeaderCell label="DRTG" sortKey="dRtg" />
-                      <QuadHeaderCell label="NET" sortKey="netRtg" />
-                      <QuadHeaderCell label="RAPM" sortKey="rapm" />
-                      <QuadHeaderCell label="GmSc" sortKey="gameScore" />
-                    </>) : (<>
-                      <QuadHeaderCell label="MIN" sortKey="minutesPlayed" />
-                      <QuadHeaderCell label="+" sortKey="plus" />
-                      <QuadHeaderCell label="−" sortKey="minus" />
-                      <QuadHeaderCell label="+/−" sortKey="plusMinus" />
-                      <QuadHeaderCell label="RATIO" sortKey="plusMinusRatio" />
-                      <QuadHeaderCell label="OFF +/−" sortKey="offPlusMinus" />
-                      <QuadHeaderCell label="ON/OFF" sortKey="onOffDt" />
-                      <QuadHeaderCell label="REL RATIO" sortKey="relPlusMinusRatio" />
-                      <QuadHeaderCell label="EPR" sortKey="epr" />
-                      <QuadHeaderCell label="fEPR" sortKey="fEpr" />
-                    </>)}
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr className="border-b border-gray-50 hover:bg-gray-50/30 transition-colors">
-                    <td className="px-2 py-1.5 sticky left-0 bg-white z-10 font-bold text-gray-900 text-xs truncate">
-                      {player.firstName} {player.lastName}
-                    </td>
-                    {quadTab === 'boxscore' ? (<>
-                      <Cell value={quadStats.gamesPlayed} />
-                      <Cell value={quadStats.minutesPlayed} />
-                      <Cell value={quadStats.shots} />
-                      <Cell value={quadStats.attempts} />
-                      <Cell value={quadStats.missKo} />
-                      <Cell value={quadStats.goals} />
-                      <Cell value={quadStats.assists} />
-                      <Cell value={quadStats.turnovers} />
-                      <Cell value={quadStats.shotPct} />
-                      <Cell value={quadStats.controlPctOnField} />
-                    </>) : quadTab === 'rates' ? (<>
-                      <QuadCell sortKey="gamesPlayed" value={quadStats.gamesPlayed} />
-                      <QuadCell sortKey="minutesPlayed" value={quadStats.minutesPlayed} />
-                      <QuadCell sortKey="goalsPerGame" value={quadStats.goalsPerGame} />
-                      <QuadCell sortKey="goalsPerTwenty" value={quadStats.goalsPerTwenty} />
-                      <QuadCell sortKey="assistsPerGame" value={quadStats.assistsPerGame} />
-                      <QuadCell sortKey="assistsPerTwenty" value={quadStats.assistsPerTwenty} />
-                      <QuadCell sortKey="pointsPerGame" value={quadStats.pointsPerGame} />
-                      <QuadCell sortKey="pointsPerTwenty" value={quadStats.pointsPerTwenty} />
-                      <QuadCell sortKey="assistToTurnover" value={quadStats.assistToTurnover} />
-                    </>) : quadTab === 'advanced' ? (<>
-                      <QuadCell sortKey="minutesPlayed" value={quadStats.minutesPlayed} />
-                      <QuadCell sortKey="teamPossessions" value={quadStats.teamPossessions} />
-                      <QuadCell sortKey="usgPct" value={quadStats.usgPct} />
-                      <QuadCell sortKey="oRtg" value={quadStats.oRtg} />
-                      <QuadCell sortKey="dRtg" value={quadStats.dRtg} />
-                      <QuadCell sortKey="netRtg" value={quadStats.netRtg} bold highlight={quadStats.netRtg > 0 ? 'pos' : quadStats.netRtg < 0 ? 'neg' : undefined} />
-                      <QuadCell sortKey="rapm" value={quadStats.rapm} bold highlight={quadStats.rapm > 0 ? 'pos' : quadStats.rapm < 0 ? 'neg' : undefined} />
-                      <QuadCell sortKey="gameScore" value={quadStats.gameScore} />
-                    </>) : (<>
-                      <QuadCell sortKey="minutesPlayed" value={quadStats.minutesPlayed} />
-                      <QuadCell sortKey="plus" value={quadStats.plus} />
-                      <QuadCell sortKey="minus" value={quadStats.minus} />
-                      <QuadCell sortKey="plusMinus" value={quadStats.plusMinus} bold highlight={quadStats.plusMinus > 0 ? 'pos' : quadStats.plusMinus < 0 ? 'neg' : undefined} />
-                      <QuadCell sortKey="plusMinusRatio" value={quadStats.plusMinusRatio} />
-                      <QuadCell sortKey="offPlusMinus" value={quadStats.offPlusMinus} />
-                      <QuadCell sortKey="onOffDt" value={quadStats.onOffDt} />
-                      <QuadCell sortKey="relPlusMinusRatio" value={quadStats.relPlusMinusRatio} />
-                      <QuadCell sortKey="epr" value={quadStats.epr} />
-                      <QuadCell sortKey="fEpr" value={quadStats.fEpr} />
-                    </>)}
-                  </tr>
-                </tbody>
-              </table>
-            ))}
-            
-            {positionTab === 'dodgeball' && dodgeTab === 'solo' && (!dodgeSoloStats ? (
-              <div className="p-10 text-center text-gray-400 text-sm">No Dodgeball Solo stats for this selection.</div>
-            ) : (
-              <table className="w-full border-collapse">
-                <thead>
-                  <tr className="border-b border-gray-100 bg-gray-50/80">
-                    <th className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-left text-gray-400 sticky left-0 bg-gray-50 z-10 w-48">Player</th>
-                    <SortHeader label="GP" sortKey="gamesPlayed" currentSort="" currentDir="asc" onSort={() => {}} />
-                    <SortHeader label="MIN" sortKey="totalMinutes" currentSort="" currentDir="asc" onSort={() => {}} />
-                    <SortHeader label="CTRL MIN" sortKey="controlMinutes" currentSort="" currentDir="asc" onSort={() => {}} />
-                    <SortHeader label="CTRL %" sortKey="controlPct" currentSort="" currentDir="asc" onSort={() => {}} />
-                    <SortHeader label="+" sortKey="plus" currentSort="" currentDir="asc" onSort={() => {}} />
-                    <SortHeader label="−" sortKey="minus" currentSort="" currentDir="asc" onSort={() => {}} />
-                    <SortHeader label="+/−" sortKey="plusMinus" currentSort="" currentDir="asc" onSort={() => {}} />
-                    <SortHeader label="RATIO" sortKey="plusMinusRatio" currentSort="" currentDir="asc" onSort={() => {}} />
-                    <SortHeader label="+/− / 20" sortKey="plusMinusPerTwenty" currentSort="" currentDir="asc" onSort={() => {}} />
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr className="border-b border-gray-50 hover:bg-gray-50/30 transition-colors">
-                    <td className="px-2 py-1.5 sticky left-0 bg-white z-10 font-bold text-gray-900 text-xs truncate">
-                      {player.firstName} {player.lastName}
-                    </td>
-                    <Cell value={dodgeSoloStats.gamesPlayed} />
-                    <Cell value={dodgeSoloStats.totalMinutes} />
-                    <Cell value={dodgeSoloStats.controlMinutes} />
-                    <Cell value={dodgeSoloStats.controlPct} />
-                    <Cell value={dodgeSoloStats.plus} />
-                    <Cell value={dodgeSoloStats.minus} />
-                    <Cell value={dodgeSoloStats.plusMinus} bold highlight={dodgeSoloStats.plusMinus > 0 ? 'pos' : dodgeSoloStats.plusMinus < 0 ? 'neg' : undefined} />
-                    <Cell value={dodgeSoloStats.plusMinusRatio} />
-                    <Cell value={dodgeSoloStats.plusMinusPerTwenty} />
-                  </tr>
-                </tbody>
-              </table>
-            ))}
-            
-            {positionTab === 'dodgeball' && dodgeTab === 'pairs' && (dodgePairStats.length === 0 ? (
-              <div className="p-10 text-center text-gray-400 text-sm">No Dodgeball Pair stats for this selection.</div>
-            ) : (
-              <table className="w-full border-collapse">
-                <thead>
-                  <tr className="border-b border-gray-100 bg-gray-50/80">
-                    <th className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-left text-gray-400 sticky left-0 bg-gray-50 z-10 w-48">Pair</th>
-                    <SortHeader label="MIN" sortKey="totalMinutes" currentSort={pairSortKey} currentDir={pairSortDir} onSort={handlePairSort} />
-                    <SortHeader label="CTRL MIN" sortKey="controlMinutes" currentSort={pairSortKey} currentDir={pairSortDir} onSort={handlePairSort} />
-                    <SortHeader label="CTRL %" sortKey="controlPct" currentSort={pairSortKey} currentDir={pairSortDir} onSort={handlePairSort} />
-                    <SortHeader label="+" sortKey="plus" currentSort={pairSortKey} currentDir={pairSortDir} onSort={handlePairSort} />
-                    <SortHeader label="−" sortKey="minus" currentSort={pairSortKey} currentDir={pairSortDir} onSort={handlePairSort} />
-                    <SortHeader label="+/−" sortKey="plusMinus" currentSort={pairSortKey} currentDir={pairSortDir} onSort={handlePairSort} />
-                  </tr>
-                </thead>
-                <tbody>
-                  {dodgePairStats.map((pStat: any) => (
-                    <tr key={pStat.pairKey} className="border-b border-gray-50 hover:bg-gray-50/30 transition-colors">
-                      <td className="px-2 py-1.5 sticky left-0 bg-white z-10 font-bold text-gray-900 text-xs">
-                        <div className="flex flex-col">
-                           <span>{pStat.player1Name}</span>
-                           <span>{pStat.player2Name}</span>
-                        </div>
-                      </td>
-                      <Cell value={pStat.totalMinutes} />
-                      <Cell value={pStat.controlMinutes} />
-                      <Cell value={pStat.controlPct} />
-                      <Cell value={pStat.plus} />
-                      <Cell value={pStat.minus} />
-                      <Cell value={pStat.plusMinus} bold highlight={pStat.plusMinus > 0 ? 'pos' : pStat.plusMinus < 0 ? 'neg' : undefined} />
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ))}
-
-            {positionTab === 'flag' && (!flagStats ? (
-              <div className="p-10 text-center text-gray-400 text-sm">No Flag stats for this selection.</div>
-            ) : (
-              <table className="w-full border-collapse">
-                <thead>
-                  <tr className="border-b border-gray-100 bg-gray-50/80">
-                    <th className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-left text-gray-400 sticky left-0 bg-gray-50 z-10 w-48">Player</th>
-                    <SortHeader label="STINTS" sortKey="stints" currentSort="" currentDir="asc" onSort={() => {}} />
-                    <SortHeader label="TIME/STINT" sortKey="timePerStint" currentSort="" currentDir="asc" onSort={() => {}} />
-                    <SortHeader label="CTH" sortKey="catches" currentSort="" currentDir="asc" onSort={() => {}} />
-                    <SortHeader label="OpCTH" sortKey="oppCatchesOnPitch" currentSort="" currentDir="asc" onSort={() => {}} />
-                    <SortHeader label="TIME TO CH" sortKey="catchTimeSec" currentSort="" currentDir="asc" onSort={() => {}} />
-                    <SortHeader label="REL TO CH" sortKey="releaseToCatchSec" currentSort="" currentDir="asc" onSort={() => {}} />
-                    <SortHeader label="CTRL %" sortKey="controlPctOnPitch" currentSort="" currentDir="asc" onSort={() => {}} />
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr className="border-b border-gray-50 hover:bg-gray-50/30 transition-colors">
-                    <td className="px-2 py-1.5 sticky left-0 bg-white z-10 font-bold text-gray-900 text-xs truncate">
-                      {player.firstName} {player.lastName}
-                    </td>
-                    <Cell value={flagStats.stints} />
-                    <Cell value={flagStats.timePerStint} />
-                    <Cell value={flagStats.catches} />
-                    <Cell value={flagStats.oppCatchesOnPitch} />
-                    <Cell value={flagStats.catchTimeSec} />
-                    <Cell value={flagStats.releaseToCatchSec} />
-                    <Cell value={flagStats.controlPctOnPitch} />
-                  </tr>
-                </tbody>
-              </table>
-            ))}
-          </div>
-        </div>
-      </div>
-
         {/* Game Logs */}
         <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden flex flex-col min-h-[400px]">
           <div className="p-4 border-b border-gray-100 bg-gray-50/50 flex flex-wrap items-center justify-between gap-4">
-            <h3 className="font-bold text-gray-800">Game Logs</h3>
+            <div className="flex items-center gap-4">
+              <h3 className="font-bold text-gray-800">Game Logs</h3>
+              <StatsTabSelector>
+                <StatsTabButton isFirst active={positionTab === 'quadball'} onClick={() => setPositionTab('quadball')} label="Quadball" activeClass="bg-blue-600 text-white" />
+                <StatsTabButton active={positionTab === 'dodgeball'} onClick={() => setPositionTab('dodgeball')} label="Dodgeball" activeClass="bg-neutral-900 text-white" />
+                <StatsTabButton active={positionTab === 'flag'} onClick={() => setPositionTab('flag')} label="Flag" activeClass="bg-yellow-400 text-black" />
+              </StatsTabSelector>
+            </div>
+            <select
+              value={activeSeasonId}
+              onChange={e => setSelectedSeasonId(e.target.value)}
+              className="bg-white border text-xs font-medium tracking-wide shadow-sm border-gray-200 text-gray-700 rounded-lg px-3 py-1.5 outline-none focus:border-blue-500"
+            >
+              <option value="all">View All Championships...</option>
+              {validSeasons.map(s => <option key={s.id} value={s.id}>{s.description || s.name}</option>)}
+            </select>
           </div>
           
           <div className="p-0 overflow-x-auto flex-1 bg-white">

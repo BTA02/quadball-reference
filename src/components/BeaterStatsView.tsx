@@ -21,67 +21,10 @@ interface Team { id: string; name: string; [k: string]: any; }
 interface Game { id: string; isVerified?: boolean; seasonId: string; homeTeamId: string; awayTeamId: string; [k: string]: any; }
 interface Season { id: string; name: string; [k: string]: any; }
 
-function cn(...classes: (string | false | null | undefined)[]) {
-  return classes.filter(Boolean).join(' ');
-}
-
-type SortDir = 'asc' | 'desc';
-
-function sortBy<T>(arr: T[], key: keyof T, dir: SortDir): T[] {
-  return [...arr].sort((a, b) => {
-    const va = a[key] ?? 0;
-    const vb = b[key] ?? 0;
-
-    const aInd = va === 'N/A' || va === '∞' || va === Infinity || (typeof va === 'number' && isNaN(va)) || va === 'NaN';
-    const bInd = vb === 'N/A' || vb === '∞' || vb === Infinity || (typeof vb === 'number' && isNaN(vb)) || vb === 'NaN';
-    if (aInd && !bInd) return 1;
-    if (!aInd && bInd) return -1;
-    if (aInd && bInd) return 0;
-    
-    if (
-      (typeof va === 'number' || typeof va === 'string') &&
-      (typeof vb === 'number' || typeof vb === 'string') &&
-      va !== '' && vb !== '' &&
-      !isNaN(Number(va)) && !isNaN(Number(vb))
-    ) {
-      const numA = Number(va);
-      const numB = Number(vb);
-      return dir === 'asc' ? numA - numB : numB - numA;
-    }
-    
-    return dir === 'asc' 
-      ? String(va).localeCompare(String(vb)) 
-      : String(vb).localeCompare(String(va));
-  });
-}
-
-function SortHeader({ label, sortKey, currentSort, currentDir, onSort, tooltip }: {
-  label: string; sortKey: string; currentSort: string; currentDir: SortDir;
-  onSort: (k: string) => void; tooltip?: string;
-}) {
-  const active = currentSort === sortKey;
-  return (
-    <th className={cn('px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider cursor-pointer select-none whitespace-nowrap text-center',
-        active ? 'text-purple-700' : 'text-slate-600 hover:text-slate-900')}
-      onClick={() => onSort(sortKey)} title={tooltip}>
-      <span className="inline-flex items-center gap-0.5">
-        {label}
-        {active && (currentDir === 'asc'
-          ? <ChevronUp className="w-3 h-3" />
-          : <ChevronDown className="w-3 h-3" />)}
-      </span>
-    </th>
-  );
-}
-
-function Cell({ value, highlight, bold }: { value: string | number; highlight?: 'pos' | 'neg'; bold?: boolean }) {
-  return (
-    <td className={cn('px-2 py-1.5 text-center text-xs tabular-nums font-mono text-slate-800',
-        bold && 'font-bold')}>
-      {value}
-    </td>
-  );
-}
+import { 
+  cn, SortDir, sortBy, SortHeader, Cell, 
+  StatsTabSelector, StatsTabButton, StatsPaginationFooter 
+} from './ui/StatsTable';
 
 interface BeaterStatsViewProps {
   players: Player[];
@@ -203,20 +146,11 @@ export default function BeaterStatsView({
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <div className="flex border border-gray-200 rounded-md overflow-hidden text-xs">
-            <button onClick={() => { setTab('pairs'); setSortKey('plusMinus'); setSortDir('desc'); }}
-              className={cn('px-3 py-1 font-medium transition-colors', tab === 'pairs' ? 'bg-purple-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50')}>
-              Pairs
-            </button>
-            <button onClick={() => { setTab('solo'); setSortKey('plusMinus'); setSortDir('desc'); }}
-              className={cn('px-3 py-1 font-medium transition-colors border-l border-gray-200', tab === 'solo' ? 'bg-purple-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50')}>
-              Solo
-            </button>
-            <button onClick={() => { setTab('team'); setSortKey('controlPct'); setSortDir('desc'); }}
-              className={cn('px-3 py-1 font-medium transition-colors border-l border-gray-200', tab === 'team' ? 'bg-purple-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50')}>
-              Team
-            </button>
-          </div>
+          <StatsTabSelector>
+            <StatsTabButton isFirst active={tab === 'pairs'} onClick={() => { setTab('pairs'); setSortKey('plusMinus'); setSortDir('desc'); }} label="Pairs" activeClass="bg-purple-600 text-white" />
+            <StatsTabButton active={tab === 'solo'} onClick={() => { setTab('solo'); setSortKey('plusMinus'); setSortDir('desc'); }} label="Solo" activeClass="bg-purple-600 text-white" />
+            <StatsTabButton active={tab === 'team'} onClick={() => { setTab('team'); setSortKey('controlPct'); setSortDir('desc'); }} label="Team" activeClass="bg-purple-600 text-white" />
+          </StatsTabSelector>
         </div>
       </div>
 
@@ -306,16 +240,13 @@ export default function BeaterStatsView({
         </div>
       </div>
 
-      <div className="flex items-center justify-between text-[10px] text-gray-400">
-        <span>{data.length} {tab === 'pairs' ? 'pairs' : 'beaters'}</span>
-        <div className="flex items-center gap-1">
-          <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
-            className="p-1 rounded disabled:opacity-30 hover:bg-gray-100"><ChevronLeft className="w-3 h-3" /></button>
-          <span className="px-2 font-mono">{page}/{totalPages}</span>
-          <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}
-            className="p-1 rounded disabled:opacity-30 hover:bg-gray-100"><ChevronRight className="w-3 h-3" /></button>
-        </div>
-      </div>
+      <StatsPaginationFooter
+        itemCount={data.length}
+        itemName={tab === 'pairs' ? 'pairs' : tab === 'team' ? 'teams' : 'beaters'}
+        page={page}
+        totalPages={totalPages}
+        setPage={setPage}
+      />
     </div>
   );
 }

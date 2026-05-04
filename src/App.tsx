@@ -37,7 +37,9 @@ import {
   Edit2,
   TrendingUp,
   Rewind,
-  FastForward
+  FastForward,
+  MapPin,
+  X
 } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
 import {
@@ -161,6 +163,14 @@ export interface DraftEvent {
   position?: PositionType | null;
   subPlayerId?: string | null;
   color?: string | null;
+}
+
+export type PinType = 'sub' | 'control' | 'possession' | 'general';
+export interface Pin {
+  id: string;
+  videoId: string;
+  time: number;
+  type: PinType;
 }
 
 interface Game {
@@ -4196,6 +4206,7 @@ export default function App() {
   const [eventsListTeamFilter, setEventsListTeamFilter] = useState<string>('all');
   const [eventsListEventFilter, setEventsListEventFilter] = useState<string>('all');
   const [draftEvents, setDraftEvents] = useState<DraftEvent[]>([]);
+  const [pins, setPins] = useState<Pin[]>([]);
   const [watchLeagueId, setWatchLeagueId] = useState<string>('all');
   const [trackerYearId, setTrackerYearId] = useState<string>('all');
   const [trackerTeamId, setTrackerTeamId] = useState<string>('all');
@@ -4814,6 +4825,35 @@ export default function App() {
       toast.error("Please select an event type");
       return;
     }
+
+    if ((draft.type === 'control_change' || draft.type === 'control_start') && currentVideo) {
+      const pastControlEvents = events
+        .filter(e => e.type === 'control_change' || e.type === 'control_start')
+        .filter(e => e.videoTime <= draft.videoTime)
+        .sort((a, b) => b.videoTime - a.videoTime);
+
+      const lastControlEvent = pastControlEvents[0];
+      if (lastControlEvent && lastControlEvent.teamId === draft.teamId) {
+        const midTime = (lastControlEvent.videoTime + draft.videoTime) / 2;
+        setPins(prev => [...prev, {
+          id: crypto.randomUUID(),
+          videoId: currentVideo.id,
+          time: midTime,
+          type: 'control'
+        }]);
+        toast.info("Dropped a pin for missing control transition");
+      }
+    }
+
+    if ((draft.type === 'goal' || draft.type === 'turnover' || draft.type === 'quadball_start') && currentVideo) {
+      setPins(prev => [...prev, {
+        id: crypto.randomUUID(),
+        videoId: currentVideo.id,
+        time: draft.videoTime,
+        type: 'possession'
+      }]);
+    }
+
     handleAddEvent(
       draft.type,
       draft.playerId || undefined,
@@ -6443,6 +6483,7 @@ export default function App() {
                 )}
               </div>
 
+
               {!user && (
                 <p className="mt-4 text-center text-sm text-gray-400 flex items-center justify-center gap-2">
                   <AlertCircle className="w-4 h-4" />
@@ -6562,6 +6603,19 @@ export default function App() {
                           </button>
                         </div>
                       </div>
+
+                      {/* Drop Pins UI */}
+                      {player && currentVideo && (
+                        <div className="flex flex-col gap-1.5 mt-1">
+                          <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Drop Pin</span>
+                          <div className="grid grid-cols-4 gap-1.5">
+                            <button onClick={() => setPins(prev => [...prev, { id: crypto.randomUUID(), videoId: currentVideo.id, time: player.getCurrentTime(), type: 'sub' }])} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-yellow-200 hover:border-yellow-500 hover:bg-yellow-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[9px] uppercase font-bold tracking-tight text-yellow-700">Sub Pin</span></button>
+                            <button onClick={() => setPins(prev => [...prev, { id: crypto.randomUUID(), videoId: currentVideo.id, time: player.getCurrentTime(), type: 'control' }])} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-yellow-200 hover:border-yellow-500 hover:bg-yellow-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[9px] uppercase font-bold tracking-tight text-yellow-700">Ctrl Pin</span></button>
+                            <button onClick={() => setPins(prev => [...prev, { id: crypto.randomUUID(), videoId: currentVideo.id, time: player.getCurrentTime(), type: 'possession' }])} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-yellow-200 hover:border-yellow-500 hover:bg-yellow-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[9px] uppercase font-bold tracking-tight text-yellow-700">Poss Pin</span></button>
+                            <button onClick={() => setPins(prev => [...prev, { id: crypto.randomUUID(), videoId: currentVideo.id, time: player.getCurrentTime(), type: 'general' }])} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-yellow-200 hover:border-yellow-500 hover:bg-yellow-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[9px] uppercase font-bold tracking-tight text-yellow-700">Gen Pin</span></button>
+                          </div>
+                        </div>
+                      )}
 
                       {/* Cards UI */}
                       <div className="flex flex-col gap-1.5 mt-1">
@@ -7292,9 +7346,10 @@ export default function App() {
                           <option value="assist">Assists</option>
                           <option value="shot">Shots / Attempts</option>
                           <option value="turnover">Turnovers</option>
-                          <option value="control_change">Control Change</option>
+                          <option value="control_change">Control & Control Pins</option>
                           <option value="card">Cards / Fouls</option>
-                          <option value="sub_in">Substitutions</option>
+                          <option value="sub_in">Subs & Sub Pins</option>
+                          <option value="possession_pins">Possessions & Pins</option>
                         </select>
                       </div>
                       {['trusted', 'moderator', 'author'].includes(effectiveRole) && currentGame && (
@@ -7336,15 +7391,25 @@ export default function App() {
                     </div>
                     <div className="space-y-4">
                     {(() => {
-                      let displayEvents = [...activeTrackingEvents].sort((a,b) => a.videoTime - b.videoTime);
+                      const pinEvents = pins.filter(p => p.videoId === currentVideo?.id).map(p => ({
+                        id: p.id,
+                        type: `pin_${p.type}`,
+                        videoTime: p.time,
+                        gameTime: 0,
+                        teamId: null,
+                        playerId: null,
+                        status: 'recorded'
+                      } as any));
+                      let displayEvents = [...activeTrackingEvents, ...pinEvents].sort((a,b) => a.videoTime - b.videoTime);
                       
                       if (statsFilter === 'verified') displayEvents = displayEvents.filter(e => e.status === 'verified');
                       if (eventsListTeamFilter !== 'all') displayEvents = displayEvents.filter(e => e.teamId === eventsListTeamFilter);
                       if (eventsListEventFilter !== 'all') {
-                        if (eventsListEventFilter === 'sub_in') displayEvents = displayEvents.filter(e => e.type === 'sub_in' || e.type === 'sub_out');
+                        if (eventsListEventFilter === 'sub_in') displayEvents = displayEvents.filter(e => e.type === 'sub_in' || e.type === 'sub_out' || e.type === 'pin_sub');
                         else if (eventsListEventFilter === 'card') displayEvents = displayEvents.filter(e => e.type === 'foul' || e.type === 'card');
                         else if (eventsListEventFilter === 'shot') displayEvents = displayEvents.filter(e => e.type === 'shot' || e.type === 'attempt' || e.type === 'miss_ko');
-                        else if (eventsListEventFilter === 'control_change') displayEvents = displayEvents.filter(e => e.type === 'control_change' || e.type === 'control_start');
+                        else if (eventsListEventFilter === 'control_change') displayEvents = displayEvents.filter(e => e.type === 'control_change' || e.type === 'control_start' || e.type === 'pin_control');
+                        else if (eventsListEventFilter === 'possession_pins') displayEvents = displayEvents.filter(e => e.type === 'goal' || e.type === 'turnover' || e.type === 'quadball_start' || e.type === 'pin_possession');
                         else displayEvents = displayEvents.filter(e => e.type === eventsListEventFilter);
                       }
 
@@ -7358,6 +7423,38 @@ export default function App() {
                         </div>
                       ) : (
                         displayEvents.slice().reverse().map((event) => {
+                          const isPin = event.type.startsWith('pin_');
+                          if (isPin) {
+                            const pinType = event.type.replace('pin_', '');
+                            let colorClass = "bg-gray-400 text-white";
+                            let lineClass = "bg-gray-400";
+                            if (pinType === 'control') { colorClass = "bg-black text-white"; lineClass = "bg-black"; }
+                            else if (pinType === 'general') { colorClass = "bg-yellow-400 text-yellow-900"; lineClass = "bg-yellow-400"; }
+                            else if (pinType === 'possession') { colorClass = "bg-purple-600 text-white"; lineClass = "bg-purple-600"; }
+                            else if (pinType === 'sub') { colorClass = "bg-cyan-600 text-white"; lineClass = "bg-cyan-600"; }
+
+                            return (
+                              <div key={event.id} className="flex items-center gap-1.5 group w-full py-1 relative">
+                                <div className={`flex-1 h-[2px] ${lineClass} opacity-30 group-hover:opacity-100 transition-opacity`}></div>
+                                <button 
+                                  onClick={() => player?.seekTo(event.videoTime)}
+                                  className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider ${colorClass} hover:opacity-80 transition-opacity flex items-center gap-1 shadow-sm shrink-0`}
+                                >
+                                  <MapPin className="w-2.5 h-2.5" />
+                                  {pinType} @ {formatTime(event.videoTime)}
+                                </button>
+                                <button 
+                                  onClick={(e) => { e.stopPropagation(); setPins(prev => prev.filter(pin => pin.id !== event.id)); }} 
+                                  className="text-gray-400 hover:text-red-500 transition-colors p-0.5 opacity-0 group-hover:opacity-100 shrink-0" 
+                                  title="Dismiss Pin"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                                <div className={`flex-1 h-[2px] ${lineClass} opacity-30 group-hover:opacity-100 transition-opacity`}></div>
+                              </div>
+                            );
+                          }
+
                           const eventConfig = EVENT_CONFIG[event.type as EventType] || { label: event.type, icon: <AlertCircle className="w-4 h-4" />, color: 'bg-neutral-500' };
                           const dynamicLabel = (event.type === 'sub_in' && event.position) ? `${event.position} In` : (event.type === 'sub_out' && event.position) ? `${event.position} Out` : eventConfig.label;
                           return (

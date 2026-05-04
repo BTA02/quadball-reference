@@ -14,64 +14,10 @@ interface Team { id: string; name: string; [k: string]: any; }
 interface Game { id: string; isVerified?: boolean; seasonId: string; homeTeamId: string; awayTeamId: string; [k: string]: any; }
 interface Season { id: string; name: string; [k: string]: any; }
 
-function cn(...classes: (string | false | null | undefined)[]) {
-  return classes.filter(Boolean).join(' ');
-}
-
-type SortDir = 'asc' | 'desc';
-
-function sortBy<T>(arr: T[], key: keyof T, dir: SortDir): T[] {
-  return [...arr].sort((a, b) => {
-    const va = a[key] ?? 0;
-    const vb = b[key] ?? 0;
-    
-    const aInd = va === 'N/A' || va === '∞' || va === Infinity || (typeof va === 'number' && isNaN(va)) || va === 'NaN';
-    const bInd = vb === 'N/A' || vb === '∞' || vb === Infinity || (typeof vb === 'number' && isNaN(vb)) || vb === 'NaN';
-    if (aInd && !bInd) return 1;
-    if (!aInd && bInd) return -1;
-    if (aInd && bInd) return 0;
-
-    if (
-      (typeof va === 'number' || typeof va === 'string') &&
-      (typeof vb === 'number' || typeof vb === 'string') &&
-      va !== '' && vb !== '' &&
-      !isNaN(Number(va)) && !isNaN(Number(vb))
-    ) {
-      return dir === 'asc' ? Number(va) - Number(vb) : Number(vb) - Number(va);
-    }
-    return dir === 'asc'
-      ? String(va).localeCompare(String(vb))
-      : String(vb).localeCompare(String(va));
-  });
-}
-
-function SortHeader({ label, sortKey, currentSort, currentDir, onSort, tooltip }: {
-  label: string; sortKey: string; currentSort: string; currentDir: SortDir;
-  onSort: (k: string) => void; tooltip?: string;
-}) {
-  const active = currentSort === sortKey;
-  return (
-    <th className={cn('px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider cursor-pointer select-none whitespace-nowrap text-center',
-        active ? 'text-amber-700' : 'text-slate-600 hover:text-slate-900')}
-      onClick={() => onSort(sortKey)} title={tooltip}>
-      <span className="inline-flex items-center gap-0.5">
-        {label}
-        {active && (currentDir === 'asc'
-          ? <ChevronUp className="w-3 h-3" />
-          : <ChevronDown className="w-3 h-3" />)}
-      </span>
-    </th>
-  );
-}
-
-function Cell({ value, highlight, bold }: { value: string | number; highlight?: 'pos' | 'neg' | 'gold'; bold?: boolean }) {
-  return (
-    <td className={cn('px-2 py-1.5 text-center text-xs tabular-nums font-mono text-slate-800',
-        bold && 'font-bold')}>
-      {value}
-    </td>
-  );
-}
+import { 
+  cn, SortDir, sortBy, SortHeader, Cell, 
+  StatsPaginationFooter 
+} from './ui/StatsTable';
 
 function formatMinutes(min: number): string {
   if (min <= 0) return '—';
@@ -236,16 +182,14 @@ export default function SeekerStatsView({
         </div>
       </div>
 
-      <div className="flex items-center justify-between text-[10px] text-gray-400">
-        <span>{filtered.length} seekers • CTH = catches • OpCTH = opp. catches while on pitch • AVG CTH = avg time to catch • FROM REL = avg time from release • CTRL% = bludger control while seeking</span>
-        <div className="flex items-center gap-1">
-          <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
-            className="p-1 rounded disabled:opacity-30 hover:bg-gray-100"><ChevronLeft className="w-3 h-3" /></button>
-          <span className="px-2 font-mono">{page}/{totalPages}</span>
-          <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}
-            className="p-1 rounded disabled:opacity-30 hover:bg-gray-100"><ChevronRight className="w-3 h-3" /></button>
-        </div>
-      </div>
+      <StatsPaginationFooter
+        itemCount={filtered.length}
+        itemName="seekers"
+        legend="CTH = catches • OpCTH = opp. catches while on pitch • AVG CTH = avg time to catch • FROM REL = avg time from release • CTRL% = bludger control while seeking"
+        page={page}
+        totalPages={totalPages}
+        setPage={setPage}
+      />
     </div>
   );
 }

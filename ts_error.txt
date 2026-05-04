@@ -1,0 +1,64 @@
+src/App.tsx(1584,43): error TS2345: Argument of type '"search" | "games" | "rosters" | "events" | "videos" | "players" | "teams" | "seasons" | "roles" | "import"' is not assignable to parameter of type 'SetStateAction<"games" | "rosters" | "events" | "players" | "teams" | "seasons" | "roles" | "import">'.
+  Type '"search"' is not assignable to type 'SetStateAction<"games" | "rosters" | "events" | "players" | "teams" | "seasons" | "roles" | "import">'.
+src/App.tsx(3295,13): error TS2367: This comparison appears to be unintentional because the types '"games" | "rosters" | "players" | "teams" | "seasons" | "roles"' and '"search"' have no overlap.
+src/App.tsx(3554,22): error TS2367: This comparison appears to be unintentional because the types '"games" | "players" | "teams" | "seasons"' and '"videos"' have no overlap.
+src/App.tsx(3723,20): error TS2367: This comparison appears to be unintentional because the types '"games" | "players" | "teams" | "seasons"' and '"videos"' have no overlap.
+src/App.tsx(5963,14): error TS2304: Cannot find name 'GameCastView'.
+src/components/BeaterStatsView.tsx(25,3): error TS2459: Module '"./ui/StatsTable"' declares 'cn' locally, but it is not exported.
+src/components/GameBoxScoreView.tsx(12,3): error TS2459: Module '"./ui/StatsTable"' declares 'cn' locally, but it is not exported.
+src/components/GameBoxScoreView.tsx(132,77): error TS2322: Type 'string' is not assignable to type 'SortDir'.
+src/components/GameBoxScoreView.tsx(133,67): error TS2322: Type 'string' is not assignable to type 'SortDir'.
+src/components/GameBoxScoreView.tsx(134,67): error TS2322: Type 'string' is not assignable to type 'SortDir'.
+src/components/GameBoxScoreView.tsx(135,69): error TS2322: Type 'string' is not assignable to type 'SortDir'.
+src/components/GameBoxScoreView.tsx(136,70): error TS2322: Type 'string' is not assignable to type 'SortDir'.
+src/components/GameBoxScoreView.tsx(137,72): error TS2322: Type 'string' is not assignable to type 'SortDir'.
+src/components/GameBoxScoreView.tsx(138,66): error TS2322: Type 'string' is not assignable to type 'SortDir'.
+src/components/GameBoxScoreView.tsx(139,67): error TS2322: Type 'string' is not assignable to type 'SortDir'.
+src/components/GameBoxScoreView.tsx(140,73): error TS2322: Type 'string' is not assignable to type 'SortDir'.
+src/components/GameBoxScoreView.tsx(141,83): error TS2322: Type 'string' is not assignable to type 'SortDir'.
+src/components/GameBoxScoreView.tsx(168,76): error TS2322: Type 'string' is not assignable to type 'SortDir'.
+src/components/GameBoxScoreView.tsx(169,83): error TS2322: Type 'string' is not assignable to type 'SortDir'.
+src/components/GameBoxScoreView.tsx(170,77): error TS2322: Type 'string' is not assignable to type 'SortDir'.
+src/components/GameBoxScoreView.tsx(171,66): error TS2322: Type 'string' is not assignable to type 'SortDir'.
+src/components/GameBoxScoreView.tsx(172,67): error TS2322: Type 'string' is not assignable to type 'SortDir'.
+src/components/GameBoxScoreView.tsx(173,73): error TS2322: Type 'string' is not assignable to type 'SortDir'.
+src/components/MatchMomentumView.tsx(4,10): error TS2614: Module '"../App"' has no exported member 'EventType'. Did you mean to use 'import EventType from "../App"' instead?
+src/components/MatchMomentumView.tsx(137,60): error TS2345: Argument of type 'GameEvent[]' is not assignable to parameter of type 'GameEvent[]'.
+  Type 'GameEvent' is missing the following properties from type 'GameEvent': videoId, gameId, status
+src/components/PlayerProfileView.tsx(12,3): error TS2459: Module '"./ui/StatsTable"' declares 'cn' locally, but it is not exported.
+src/components/PlayerProfileView.tsx(107,63): error TS2339: Property 'minutesPlayed' does not exist on type 'ExtendedPlayerStats | BeaterSoloStats | SeekerStats'.
+  Property 'minutesPlayed' does not exist on type 'BeaterSoloStats'.
+src/components/PlayerProfileView.tsx(107,97): error TS2339: Property 'totalMinutes' does not exist on type 'ExtendedPlayerStats | BeaterSoloStats | SeekerStats'.
+  Property 'totalMinutes' does not exist on type 'ExtendedPlayerStats'.
+src/components/PlayerProfileView.tsx(107,130): error TS2339: Property 'stints' does not exist on type 'ExtendedPlayerStats | BeaterSoloStats | SeekerStats'.
+  Property 'stints' does not exist on type 'ExtendedPlayerStats'.
+src/components/PlayerProfileView.tsx(132,60): error TS2339: Property 'minutesPlayed' does not exist on type 'ExtendedPlayerStats | BeaterSoloStats | SeekerStats'.
+  Property 'minutesPlayed' does not exist on type 'BeaterSoloStats'.
+src/components/PlayerProfileView.tsx(132,94): error TS2339: Property 'totalMinutes' does not exist on type 'ExtendedPlayerStats | BeaterSoloStats | SeekerStats'.
+  Property 'totalMinutes' does not exist on type 'ExtendedPlayerStats'.
+src/components/PlayerProfileView.tsx(132,127): error TS2339: Property 'stints' does not exist on type 'ExtendedPlayerStats | BeaterSoloStats | SeekerStats'.
+  Property 'stints' does not exist on type 'ExtendedPlayerStats'.
+src/components/PlayerProfileView.tsx(151,61): error TS2339: Property 'minutesPlayed' does not exist on type 'ExtendedPlayerStats | BeaterSoloStats | SeekerStats'.
+  Property 'minutesPlayed' does not exist on type 'BeaterSoloStats'.
+src/components/PlayerProfileView.tsx(151,95): error TS2339: Property 'totalMinutes' does not exist on type 'ExtendedPlayerStats | BeaterSoloStats | SeekerStats'.
+  Property 'totalMinutes' does not exist on type 'ExtendedPlayerStats'.
+src/components/PlayerProfileView.tsx(151,128): error TS2339: Property 'stints' does not exist on type 'ExtendedPlayerStats | BeaterSoloStats | SeekerStats'.
+  Property 'stints' does not exist on type 'ExtendedPlayerStats'.
+src/components/PlayerProfileView.tsx(514,76): error TS2339: Property 'teamPossessions' does not exist on type 'ExtendedPlayerStats'.
+src/components/PlayerProfileView.tsx(528,73): error TS2551: Property 'offPlusMinus' does not exist on type 'ExtendedPlayerStats'. Did you mean 'plusMinus'?
+src/components/PlayerProfileView.tsx(529,68): error TS2339: Property 'onOffDt' does not exist on type 'ExtendedPlayerStats'.
+src/components/PlayerProfileView.tsx(570,49): error TS2339: Property 'plusMinusPerTwenty' does not exist on type 'BeaterSoloStats'.
+src/components/PlayerProfileView.tsx(633,44): error TS2339: Property 'stints' does not exist on type 'SeekerStats'.
+src/components/PlayerProfileView.tsx(634,44): error TS2339: Property 'timePerStint' does not exist on type 'SeekerStats'.
+src/components/PlayerProfileView.tsx(636,44): error TS2339: Property 'oppCatchesOnPitch' does not exist on type 'SeekerStats'.
+src/components/PlayerProfileView.tsx(637,44): error TS2339: Property 'catchTimeSec' does not exist on type 'SeekerStats'.
+src/components/PlayerProfileView.tsx(638,44): error TS2339: Property 'releaseToCatchSec' does not exist on type 'SeekerStats'.
+src/components/PlayerProfileView.tsx(639,44): error TS2339: Property 'controlPctOnPitch' does not exist on type 'SeekerStats'.
+src/components/QuadballStatsView.tsx(23,3): error TS2459: Module '"./ui/StatsTable"' declares 'cn' locally, but it is not exported.
+src/components/SeekerStatsView.tsx(18,3): error TS2459: Module '"./ui/StatsTable"' declares 'cn' locally, but it is not exported.
+src/components/TeamProfileView.tsx(12,3): error TS2459: Module '"./ui/StatsTable"' declares 'cn' locally, but it is not exported.
+src/lib/statsComputations.ts(1347,13): error TS2304: Cannot find name 'rapmScores'.
+src/scratch/debug_stats.ts(2,26): error TS2307: Cannot find module '../lib/demoData' or its corresponding type declarations.
+src/scratch/rapm_logic.ts(1,10): error TS2459: Module '"../lib/statsComputations"' declares 'GameEvent' locally, but it is not exported.
+src/scratch/rapm_logic.ts(1,21): error TS2459: Module '"../lib/statsComputations"' declares 'Player' locally, but it is not exported.
+src/scratch/rapm_logic.ts(1,29): error TS2459: Module '"../lib/statsComputations"' declares 'Game' locally, but it is not exported.
