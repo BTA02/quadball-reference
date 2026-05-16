@@ -30,23 +30,21 @@ interface QuadballStatsViewProps {
   teams: Team[];
   games: Game[];
   seasons: Season[];
-  statsFilter?: 'all' | 'verified' | 'legacy';
-  seasonId?: string;
-  teamId?: string;
+  statsFilter?: 'all' | 'verified' | 'verified_events' | 'legacy';
+  teamIds?: string[];
   search?: string;
   minGames?: number;
   bludgerControlMode?: 'all' | 'separate';
   flagFilter?: 'all' | 'on' | 'off';
   positionFilter?: 'all' | 'chaser' | 'keeper';
-  outlierFilter?: 'include' | 'exclude';
   onPlayerSelect?: (playerId: string) => void;
   onTeamSelect?: (teamId: string) => void;
 }
 
 export default function QuadballStatsView({ 
   players, events, teams, games, seasons, statsFilter = 'all',
-  seasonId: seasonFilter = '', teamId: teamFilter = '', search = '',
-  minGames = 1, bludgerControlMode = 'all', flagFilter = 'all', positionFilter = 'all', outlierFilter = 'include',
+  teamIds: teamFilterIds = [], search = '',
+  minGames = 1, bludgerControlMode = 'all', flagFilter = 'all', positionFilter = 'all',
   onPlayerSelect, onTeamSelect
 }: QuadballStatsViewProps) {
   const [tab, setTab] = useState<'boxscore' | 'rates' | 'advanced' | 'plusminus' | 'team'>('boxscore');
@@ -56,7 +54,7 @@ export default function QuadballStatsView({
   const [showHelp, setShowHelp] = useState(false);
   const perPage = 25;
 
-  useEffect(() => { setPage(1); }, [search, seasonFilter, teamFilter, positionFilter, minGames, bludgerControlMode, flagFilter]);
+  useEffect(() => { setPage(1); }, [search, teamFilterIds, positionFilter, minGames, bludgerControlMode, flagFilter]);
 
   const handleSort = (key: string) => {
     if (key === sortKey) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -90,13 +88,13 @@ export default function QuadballStatsView({
   }, [teams, games, filteredSeasons, statsFilter]);
 
   const filtersAll = useMemo(() => ({
-    seasonId: seasonFilter || undefined,
-    teamId: teamFilter || undefined,
+    teamId: teamFilterIds.length === 1 ? teamFilterIds[0] : undefined,
+    teamIds: teamFilterIds.length > 0 ? teamFilterIds : undefined,
     position: positionFilter === 'all' ? undefined : positionFilter,
     controlFilter: undefined,
     flagFilter: flagFilter === 'all' ? undefined : flagFilter,
-    outlierFilter
-  }), [seasonFilter, teamFilter, positionFilter, flagFilter, outlierFilter]);
+    skipRapm: statsFilter === 'verified_events'
+  }), [teamFilterIds, positionFilter, flagFilter, statsFilter]);
 
   const filtersWith = useMemo(() => ({ ...filtersAll, controlFilter: 'with' as const }), [filtersAll]);
   const filtersWithout = useMemo(() => ({ ...filtersAll, controlFilter: 'without' as const }), [filtersAll]);
@@ -210,17 +208,82 @@ export default function QuadballStatsView({
         </div>
       </div>
 
-      {/* Help Panel */}
+      {/* Help Panel — contextual per tab */}
       {showHelp && (
         <div className="bg-red-50 border border-red-100 rounded-lg p-3 text-xs text-red-900 space-y-2">
-          <p className="font-semibold">How Advanced Stats are Calculated</p>
-          <ul className="list-disc pl-4 space-y-1 opacity-90">
-            <li><strong>Possessions</strong> are inferred dynamically. Since "OFFENSE" tags are unreliable, a team possession ends when a Goal, Shot (Miss), or Turnover occurs while a player is on the field.</li>
-            <li><strong>USG% (Usage Rate)</strong> estimates the percentage of team possessions a player is directly involved in (Goals + Assists + Shots + Turnovers / Team Possessions).</li>
-            <li><strong>DRTG (Defensive Rating)</strong>: Points conceded per 100 team defensive possessions while on the field.</li>
-            <li><strong>NET (Net Rating)</strong>: Points differential per 100 team possessions while on the field (ORTG - DRTG).</li>
-            <li><strong>USG% (Usage Rate)</strong>: Rebounds, points, and turnovers normalized evaluating a specific player's dominance over their team's possession outcomes.</li>
-          </ul>
+          {tab === 'boxscore' ? (<>
+            <p className="font-semibold">Box Score — Counting Stats</p>
+            <ul className="list-disc pl-4 space-y-1 opacity-90">
+              <li><strong>GP</strong> — Games Played. Number of games with recorded minutes.</li>
+              <li><strong>MIN</strong> — Minutes Played. Total on-field time across all games.</li>
+              <li><strong>S</strong> — Missed Shots. Thrown shots that did not result in a goal.</li>
+              <li><strong>ATT</strong> — Missed Attempts. Drives or physical attacks on the hoops that did not result in a goal.</li>
+              <li><strong>KO</strong> — Missed by Knockout. Possessions ending because the player was knocked out before releasing a shot.</li>
+              <li><strong>G</strong> — Goals. Total goals scored (10 points each).</li>
+              <li><strong>A</strong> — Assists. Passes leading directly to a scored goal.</li>
+              <li><strong>TO</strong> — Turnovers. Loss of offensive possession without a shot attempt.</li>
+              <li><strong>S%</strong> — Scoring Percentage. Goals ÷ (Goals + Shots + Attempts + KOs).</li>
+              <li><strong>CTRL%</strong> — Bludger Control %. Percentage of game time the player's team held dodgeball control while the player was on the field.</li>
+            </ul>
+          </>) : tab === 'rates' ? (<>
+            <p className="font-semibold">Rate Score — Per-Game &amp; Pace-Adjusted Rates</p>
+            <ul className="list-disc pl-4 space-y-1 opacity-90">
+              <li><strong>GP</strong> — Games Played.</li>
+              <li><strong>MIN</strong> — Minutes Played.</li>
+              <li><strong>G/G</strong> — Goals per Game.</li>
+              <li><strong>A/G</strong> — Assists per Game.</li>
+              <li><strong>PTS/G</strong> — Points (Goals + Assists) per Game.</li>
+              <li><strong>G/20</strong> — Goals per 20 minutes played. Normalizes for different playing times.</li>
+              <li><strong>A/20</strong> — Assists per 20 minutes played.</li>
+              <li><strong>PTS/20</strong> — Points per 20 minutes played.</li>
+              <li><strong>G/25</strong> — Goals per 25 possessions. Adjusts for pace differences between games.</li>
+              <li><strong>A/25</strong> — Assists per 25 possessions.</li>
+              <li><strong>PTS/25</strong> — Points per 25 possessions.</li>
+            </ul>
+          </>) : tab === 'plusminus' ? (<>
+            <p className="font-semibold">Plus/Minus — On-Field Impact</p>
+            <ul className="list-disc pl-4 space-y-1 opacity-90">
+              <li><strong>GP</strong> — Games Played.</li>
+              <li><strong>MIN</strong> — Minutes Played.</li>
+              <li><strong>+</strong> — Plus. Total goals scored by the player's team while they are on the field.</li>
+              <li><strong>−</strong> — Minus. Total goals conceded by the player's team while they are on the field.</li>
+              <li><strong>+:−</strong> — Plus-to-Minus Ratio. Team goals scored ÷ Team goals conceded while on the field.</li>
+              <li><strong>Off+:−</strong> — Off-Field Ratio. The team's plus-to-minus ratio when this player is NOT on the field.</li>
+              <li><strong>REL +:−</strong> — Relative Value. The player's on-field ratio divided by the off-field ratio. Values above 1.0 indicate the team performs better with the player on the field.</li>
+            </ul>
+          </>) : tab === 'advanced' ? (<>
+            <p className="font-semibold">Advanced — Efficiency &amp; Impact Metrics</p>
+            <p className="opacity-75 mb-1">Possessions are inferred dynamically — a team possession ends when a Goal, Shot, or Turnover occurs while a player is on the field.</p>
+            <ul className="list-disc pl-4 space-y-1 opacity-90">
+              <li><strong>GP</strong> — Games Played.</li>
+              <li><strong>MIN</strong> — Minutes Played.</li>
+              <li><strong>ORTG</strong> — Offensive Rating. Points scored per 25 offensive possessions while on the field.</li>
+              <li><strong>DRTG</strong> — Defensive Rating. Points conceded per 25 defensive possessions while on the field.</li>
+              <li><strong>NET</strong> — Net Rating. ORTG minus DRTG. Positive values indicate outscoring opponents.</li>
+              <li><strong>RAPM</strong> — Regularized Adjusted Plus-Minus. A ridge-regression model that isolates individual impact by controlling for teammates and opponents on the field simultaneously.</li>
+              <li><strong>EPR</strong> — Empty Possession Rate. Percentage of offensive possessions that are "empty" — ending in a turnover with no shot, attempt, or KO taken during that possession.</li>
+              <li><strong>fEPR</strong> — Forced Empty Possession Rate. Percentage of defensive possessions where the opponent's possession was "empty" — they turned the ball over without getting off a shot, attempt, or KO.</li>
+              <li><strong>USG%</strong> — Usage Rate. Estimates the percentage of team possessions a player is directly involved in (Goals + Assists + Shots + Turnovers ÷ Team Possessions while on field).</li>
+              <li><strong>GmSc</strong> — Game Score. A composite single-number rating of overall productivity based on counting stats.</li>
+            </ul>
+          </>) : tab === 'team' ? (<>
+            <p className="font-semibold">Team Aggregates</p>
+            <ul className="list-disc pl-4 space-y-1 opacity-90">
+              <li><strong>GP</strong> — Games Played.</li>
+              <li><strong>G</strong> — Total Goals scored by the team.</li>
+              <li><strong>A</strong> — Total Assists recorded by the team.</li>
+              <li><strong>S</strong> — Missed Shots.</li>
+              <li><strong>ATT</strong> — Missed Attempts.</li>
+              <li><strong>KO</strong> — Missed by Knockout.</li>
+              <li><strong>TO</strong> — Turnovers.</li>
+              <li><strong>G/G</strong> — Goals per Game.</li>
+              <li><strong>A/G</strong> — Assists per Game.</li>
+              <li><strong>PTS/G</strong> — Points per Game.</li>
+              <li><strong>ORTG</strong> — Team Offensive Rating (points per 25 possessions).</li>
+              <li><strong>DRTG</strong> — Team Defensive Rating (opponent points per 25 possessions).</li>
+              <li><strong>NET</strong> — Net Rating (ORTG − DRTG).</li>
+            </ul>
+          </>) : null}
         </div>
       )}
 
@@ -253,14 +316,14 @@ export default function QuadballStatsView({
                   <HeaderCell label="G/20" sortKey="goalsPerTwenty" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals per 20 Minutes" />
                   <HeaderCell label="A/20" sortKey="assistsPerTwenty" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Assists per 20 Minutes" />
                   <HeaderCell label="PTS/20" sortKey="pointsPerTwenty" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Points per 20 Minutes" />
-                  <HeaderCell label="G/100" sortKey="goalsPer100Possessions" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals per 100 Possessions" />
-                  <HeaderCell label="A/100" sortKey="assistsPer100Possessions" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Assists per 100 Possessions" />
-                  <HeaderCell label="PTS/100" sortKey="pointsPer100Possessions" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Points per 100 Possessions" />
+                  <HeaderCell label="G/25" sortKey="goalsPer25Possessions" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals per 25 Possessions" />
+                  <HeaderCell label="A/25" sortKey="assistsPer25Possessions" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Assists per 25 Possessions" />
+                  <HeaderCell label="PTS/25" sortKey="pointsPer25Possessions" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Points per 25 Possessions" />
                 </>) : tab === 'advanced' ? (<>
                   <HeaderCell label="GP" sortKey="gamesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Games Played" />
                   <HeaderCell label="MIN" sortKey="minutesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Minutes Played" />
-                  <HeaderCell label="ORTG" sortKey="oRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Offensive Rating (Points scored per 100 offensive possessions while on field)" />
-                  <HeaderCell label="DRTG" sortKey="dRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Defensive Rating (Points conceded per 100 defensive possessions while on field)" />
+                  <HeaderCell label="ORTG" sortKey="oRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Offensive Rating (Points scored per 25 offensive possessions while on field)" />
+                  <HeaderCell label="DRTG" sortKey="dRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Defensive Rating (Points conceded per 25 defensive possessions while on field)" />
                   <HeaderCell label="NET" sortKey="netRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Net Rating (ORTG - DRTG)" />
                   <HeaderCell label="RAPM" sortKey="rapm" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Regularized Adjusted Plus-Minus" />
                   <HeaderCell label="EPR" sortKey="epr" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Empty Possession Rate (Empty Turnovers / Offensive Possessions)" />
@@ -272,7 +335,6 @@ export default function QuadballStatsView({
                   <HeaderCell label="MIN" sortKey="minutesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Minutes Played" />
                   <HeaderCell label="+" sortKey="plus" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals scored while on field" />
                   <HeaderCell label="−" sortKey="minus" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals conceded while on field" />
-                  <HeaderCell label="+/−" sortKey="plusMinus" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Plus / Minus (Net differntial)" />
                   <HeaderCell label="+:−" sortKey="plusMinusRatio" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Ratio of Plus to Minus" />
                   <HeaderCell label="Off+:−" sortKey="offPlusMinusRatio" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Ratio of Plus to Minus while player is off the field" />
                   <HeaderCell label="REL +:−" sortKey="relPlusMinusRatio" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Relative Value (Your +:− Ratio vs. your team's when you are off)" />
@@ -347,9 +409,9 @@ export default function QuadballStatsView({
                       <DataCell prop="goalsPerTwenty" />
                       <DataCell prop="assistsPerTwenty" />
                       <DataCell prop="pointsPerTwenty" bold />
-                      <DataCell prop="goalsPer100Possessions" />
-                      <DataCell prop="assistsPer100Possessions" />
-                      <DataCell prop="pointsPer100Possessions" bold />
+                      <DataCell prop="goalsPer25Possessions" />
+                      <DataCell prop="assistsPer25Possessions" />
+                      <DataCell prop="pointsPer25Possessions" bold />
                     </>) : tab === 'advanced' ? (<>
                       <DataCell prop="gamesPlayed" />
                       <DataCell prop="minutesPlayed" />
@@ -366,7 +428,6 @@ export default function QuadballStatsView({
                       <DataCell prop="minutesPlayed" />
                       <DataCell prop="plus" />
                       <DataCell prop="minus" />
-                      <DataCell prop="plusMinus" bold fmt={v => v > 0 ? `+${v}` : v || 'E'} />
                       <DataCell prop="plusMinusRatio" fmt={v => v === Infinity ? '∞' : v} />
                       <DataCell prop="offPlusMinusRatio" fmt={v => v === Infinity ? '∞' : v} />
                       <DataCell prop="relPlusMinusRatio" fmt={v => v > 0 ? `+${v}` : v || 'E'} />

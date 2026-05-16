@@ -4,7 +4,7 @@ import { cn } from '../lib/utils';
 import { EventType } from '../App';
 import { computeControlPeriodsFromEvents } from '../lib/statsComputations';
 
-interface Team { id: string; name: string; nickname?: string; colorPrimary?: string; colorDark?: string; colorLight?: string; [k: string]: any; }
+interface Team { id: string; name: string; nickname?: string; colorPrimaryDark?: string; colorPrimaryLight?: string; colorAccent?: string; colorPrimary?: string; colorDark?: string; colorLight?: string; [k: string]: any; }
 interface GameEvent {
   id: string;
   type: EventType;
@@ -38,8 +38,8 @@ export default function MatchMomentumView({
   const awayTeam = teams.find(t => t.id === awayTeamId);
   const homeName = homeTeam?.nickname || homeTeam?.name || 'Home';
   const awayName = awayTeam?.nickname || awayTeam?.name || 'Away';
-  const homeColor = homeTeam?.colorPrimary || '#ef4444';
-  const awayColor = awayTeam?.colorPrimary || '#3b82f6';
+  const homeColor = homeTeam?.colorPrimaryDark || homeTeam?.colorPrimary || '#ef4444';
+  const awayColor = awayTeam?.colorPrimaryDark || awayTeam?.colorPrimary || '#3b82f6';
 
   // Helper to convert hex to rgba
   const hexToRgba = (hex: string, alpha: number) => {

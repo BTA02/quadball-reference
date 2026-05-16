@@ -147,11 +147,29 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // Required for collectionGroup('players') queries
+    match /{path=**}/players/{playerId} {
+      allow read: if true;
+    }
+
     // Teams
     match /teams/{teamId} {
       allow read: if true;
       allow create: if isAdmin() && isValidTeam(request.resource.data);
       allow update: if (isAdmin() || (isAuthenticated() && request.auth.token.email in resource.data.emails)) && isValidTeam(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    // Leagues
+    match /leagues/{leagueId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Tournaments
+    match /tournaments/{tournamentId} {
+      allow read: if true;
+      allow create, update: if isAuthenticated();
       allow delete: if isAdmin();
     }
 

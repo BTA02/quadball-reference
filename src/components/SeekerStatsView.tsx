@@ -37,21 +37,19 @@ interface SeekerStatsViewProps {
   teams: Team[];
   games: Game[];
   seasons: Season[];
-  statsFilter?: 'all' | 'verified' | 'legacy';
-  seasonId?: string;
-  teamId?: string;
+  statsFilter?: 'all' | 'verified' | 'verified_events' | 'legacy';
+  teamIds?: string[];
   search?: string;
   minGames?: number;
   bludgerControlMode?: 'all' | 'separate';
   flagFilter?: 'all' | 'on' | 'off';
-  outlierFilter?: 'include' | 'exclude';
   onPlayerSelect?: (playerId: string) => void;
 }
 
 export default function SeekerStatsView({ 
   players, events, teams, games, seasons, statsFilter = 'all',
-  seasonId: seasonFilter = '', teamId: teamFilter = '', search = '',
-  minGames = 1, bludgerControlMode = 'all', flagFilter = 'all', outlierFilter = 'include',
+  teamIds: teamFilterIds = [], search = '',
+  minGames = 1, bludgerControlMode = 'all', flagFilter = 'all',
   onPlayerSelect
 }: SeekerStatsViewProps) {
   const [page, setPage] = useState(1);
@@ -59,7 +57,7 @@ export default function SeekerStatsView({
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const perPage = 25;
 
-  useEffect(() => { setPage(1); }, [seasonFilter, teamFilter, minGames, bludgerControlMode, flagFilter, outlierFilter]);
+  useEffect(() => { setPage(1); }, [search, teamFilterIds, minGames, bludgerControlMode, flagFilter]);
 
   const handleSort = (key: string) => {
     if (key === sortKey) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -93,12 +91,12 @@ export default function SeekerStatsView({
   }, [teams, games, filteredSeasons, statsFilter]);
 
   const filters = useMemo(() => ({
-    seasonId: seasonFilter || undefined,
-    teamId: teamFilter || undefined,
+    teamId: teamFilterIds.length === 1 ? teamFilterIds[0] : undefined,
+    teamIds: teamFilterIds.length > 0 ? teamFilterIds : undefined,
     controlFilter: bludgerControlMode === 'all' ? undefined : undefined,
     flagFilter: flagFilter === 'all' ? undefined : flagFilter,
-    outlierFilter
-  }), [seasonFilter, teamFilter, bludgerControlMode, flagFilter, outlierFilter]);
+    statsFilter: statsFilter === 'verified_events' ? 'verified' : statsFilter
+  }), [teamFilterIds, bludgerControlMode, flagFilter, statsFilter]);
 
   const seekerStats = useMemo(
     () => computeSeekerStats(events, players, games, filters),

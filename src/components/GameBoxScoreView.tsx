@@ -13,17 +13,19 @@ import {
 } from './ui/StatsTable';
 
 export default function GameBoxScoreView({
-  players, events, games, seasons, teams, activeGameId,
-  onBack, onPlayerSelect, onTeamSelect
+  players, events, games, seasons, teams, videos, activeGameId,
+  onBack, onPlayerSelect, onTeamSelect, onWatchVideo
 }: {
-  players: Player[]; events: GameEvent[]; games: Game[]; seasons: Season[]; teams: Team[];
+  players: Player[]; events: GameEvent[]; games: Game[]; seasons: Season[]; teams: Team[]; videos?: any[];
   activeGameId: string; onBack: () => void;
   onPlayerSelect?: (id: string) => void; onTeamSelect?: (id: string) => void;
+  onWatchVideo?: (video: any) => void;
 }) {
   const game = games.find(g => g.id === activeGameId);
   const season = seasons.find(s => s.id === game?.seasonId);
   const homeTeam = teams.find(t => t.id === game?.homeTeamId);
   const awayTeam = teams.find(t => t.id === game?.awayTeamId);
+  const video = videos?.find(v => v.gameId === activeGameId);
 
   const [sortKeyHome, setSortKeyHome] = useState('minutesPlayed');
   const [sortDirHome, setSortDirHome] = useState<SortDir>('desc');
@@ -195,10 +197,18 @@ export default function GameBoxScoreView({
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12">
-      <div className="flex items-center gap-4">
+      <div className="flex items-center justify-between gap-4">
         <button onClick={onBack} className="p-2 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 text-gray-500 hover:text-gray-900 transition-colors">
           <ChevronLeft className="w-5 h-5" />
         </button>
+        {video && onWatchVideo && (
+          <button 
+            onClick={() => onWatchVideo(video)} 
+            className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-xl font-bold transition-all shadow-sm"
+          >
+            Watch Video
+          </button>
+        )}
       </div>
 
       <div className="bg-white border text-center border-gray-200 rounded-2xl shadow-sm p-8 flex flex-col items-center justify-center relative overflow-hidden">

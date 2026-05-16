@@ -12,11 +12,11 @@ export const db = initializeFirestore(app, {
 export const googleProvider = new GoogleAuthProvider();
 
 export const signIn = async () => {
-  const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-  if (isMobile) {
-    await signInWithRedirect(auth, googleProvider);
-  } else {
+  try {
     await signInWithPopup(auth, googleProvider);
+  } catch (error) {
+    console.error("Login failed:", error);
+    toast.error("Sign in failed. Please try again or check your browser settings.");
   }
 };
 export const logOut = () => signOut(auth);

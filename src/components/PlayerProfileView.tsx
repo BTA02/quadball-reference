@@ -6,7 +6,20 @@ interface Player { id: string; firstName: string; lastName: string; preferredNam
 interface GameEvent { id: string; videoId: string; gameId: string; type: string; videoTime: number; status: string; playerId?: string; teamId?: string; [k: string]: any; }
 interface Team { id: string; name: string; [k: string]: any; }
 interface Game { id: string; isVerified?: boolean; seasonId: string; homeTeamId: string; awayTeamId: string; [k: string]: any; }
-interface Season { id: string; name: string; description?: string; year?: string; league?: string; [k: string]: any; }
+interface Season { id: string; name: string; description?: string; year?: string; division?: string; league?: string; leagueId?: string; [k: string]: any; }
+interface League { id: string; name: string; [k: string]: any; }
+
+function getSeasonLabel(s: Season, leagues: League[]): string {
+  const league = s.leagueId ? leagues.find(l => l.id === s.leagueId) : null;
+  const parts: string[] = [];
+  if (league) {
+    const words = league.name.split(/\s+/);
+    parts.push(words.length > 1 ? words.map(w => w.length <= 3 ? w.toUpperCase() : w[0]?.toUpperCase()).join('') : league.name);
+  }
+  if (s.division) parts.push(s.division);
+  if (s.year) parts.push(s.year);
+  return parts.length > 0 ? parts.join(' ') : (s.name || s.id);
+}
 
 import { 
   cn, SortDir, sortBy, SortHeader, Cell, SplitHeader, SplitCell,
@@ -14,14 +27,15 @@ import {
 } from './ui/StatsTable';
 
 export default function PlayerProfileView({
-  players, events, games, seasons, teams, activePlayerId, initialSeasonId,
-  onBack, onTeamSelect, onGameSelect, jerseyNumbers
+  players, events, games, seasons, teams, activePlayerId, initialSeasonId, leagues,
+  onBack, onTeamSelect, onGameSelect, jerseyNumbers, statsFilter
 }: {
   players: Player[]; events: GameEvent[]; games: Game[]; seasons: Season[]; teams: Team[];
   activePlayerId: string; initialSeasonId?: string; onBack: () => void;
   onTeamSelect?: (id: string) => void; onGameSelect?: (id: string) => void;
-  jerseyNumbers?: string[];
+  jerseyNumbers?: string[]; statsFilter?: string; leagues?: League[];
 }) {
+  const leaguesList = leagues || [];
   const player = players.find(p => p.id === activePlayerId);
   const [positionTab, setPositionTab] = useState<'quadball' | 'dodgeball' | 'flag'>('quadball');
   const [quadTab, setQuadTab] = useState<'boxscore' | 'rates' | 'advanced' | 'plusminus'>('boxscore');
@@ -30,7 +44,7 @@ export default function PlayerProfileView({
   const [pairSortDir, setPairSortDir] = useState<SortDir>('desc');
 
   const { playedGames, validSeasons } = useMemo(() => {
-    const played = games.filter(g => events.some(e => e.gameId === g.id && e.playerId === activePlayerId && e.type === 'sub_in'));
+    const played = games.filter(g => events.some(e => e.gameId === g.id && (e.playerId === activePlayerId || e.subPlayerId === activePlayerId)));
     const pSeasons = Array.from(new Set(played.map(g => g.seasonId))).map(sid => seasons.find(s => s.id === sid)).filter(Boolean) as Season[];
     pSeasons.sort((a,b) => (b.description || b.name).localeCompare(a.description || a.name));
     return { playedGames: played, validSeasons: pSeasons };
@@ -42,34 +56,36 @@ export default function PlayerProfileView({
   const [sortKey, setSortKey] = useState('minutesPlayed');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
 
+  const baseFilters = useMemo(() => ({ skipRapm: statsFilter === 'verified_events', outlierFilter: 'include' }), [statsFilter]);
+
   const activeGames = activeSeasonId === 'all' ? playedGames : playedGames.filter(g => g.seasonId === activeSeasonId);
   const activeEvents = events.filter(e => activeGames.some(g => g.id === e.gameId));
 
   const quadStats = useMemo(() => {
     if (positionTab !== 'quadball' || activeGames.length === 0) return null;
-    const stats = computeExtendedStats(activeEvents, players, activeGames, { outlierFilter: 'include' });
+    const stats = computeExtendedStats(activeEvents, players, activeGames, baseFilters);
     const pStat = stats.find(s => s.playerId === activePlayerId);
     return pStat || null;
-  }, [activeEvents, players, activeGames, activePlayerId, positionTab]);
+  }, [activeEvents, players, activeGames, activePlayerId, positionTab, baseFilters]);
 
   const dodgeSoloStats = useMemo(() => {
     if (positionTab !== 'dodgeball' || activeGames.length === 0) return null;
-    const stats = computeBeaterSoloStats(activeEvents, players, activeGames, {});
+    const stats = computeBeaterSoloStats(activeEvents, players, activeGames, baseFilters);
     return stats.find(s => s.playerId === activePlayerId) || null;
-  }, [activeEvents, players, activeGames, activePlayerId, positionTab]);
+  }, [activeEvents, players, activeGames, activePlayerId, positionTab, baseFilters]);
 
   const dodgePairStats = useMemo(() => {
     if (positionTab !== 'dodgeball' || activeGames.length === 0) return [];
-    const stats = computeBeaterPairStats(activeEvents, players, activeGames, {});
+    const stats = computeBeaterPairStats(activeEvents, players, activeGames, baseFilters);
     const pairs = stats.filter(p => p.player1Id === activePlayerId || p.player2Id === activePlayerId);
     return sortBy(pairs, pairSortKey, pairSortDir);
-  }, [activeEvents, players, activeGames, activePlayerId, positionTab, pairSortKey, pairSortDir]);
+  }, [activeEvents, players, activeGames, activePlayerId, positionTab, pairSortKey, pairSortDir, baseFilters]);
 
   const flagStats = useMemo(() => {
     if (positionTab !== 'flag' || activeGames.length === 0) return null;
-    const stats = computeSeekerStats(activeEvents, players, activeGames, {});
+    const stats = computeSeekerStats(activeEvents, players, activeGames, baseFilters);
     return stats.find(s => s.playerId === activePlayerId) || null;
-  }, [activeEvents, players, activeGames, activePlayerId, positionTab]);
+  }, [activeEvents, players, activeGames, activePlayerId, positionTab, baseFilters]);
 
   const handlePairSort = (k: string) => {
     if (pairSortKey === k) setPairSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -97,7 +113,7 @@ export default function PlayerProfileView({
        const fn = getStatsFn(positionTab);
        return filteredGames.map(g => {
          const gEvents = events.filter(e => e.gameId === g.id);
-         const stat = fn(gEvents, players, [g], {});
+         const stat = fn(gEvents, players, [g], baseFilters);
          const pStat = stat.find((st: any) => st.playerId === activePlayerId);
          
          const playerTeamId = gEvents.find(e => e.playerId === activePlayerId && e.teamId && e.teamId !== 'null')?.teamId;
@@ -116,7 +132,7 @@ export default function PlayerProfileView({
        }).filter(s => s !== null);
     }
     return [];
-  }, [playedGames, activeSeasonId, events, players, activePlayerId, teams, positionTab]);
+  }, [playedGames, activeSeasonId, events, players, activePlayerId, teams, positionTab, baseFilters]);
 
   const sortedPerGame = useMemo(() => sortBy(perGameStats as any[], sortKey, sortDir), [perGameStats, sortKey, sortDir]);
 
@@ -127,12 +143,12 @@ export default function PlayerProfileView({
       const sGames = playedGames.filter(g => g.seasonId === s.id);
       if (sGames.length === 0) return;
       const sEvents = events.filter(e => sGames.some(g => g.id === e.gameId));
-      const stat = fn(sEvents, players, sGames, {});
+      const stat = fn(sEvents, players, sGames, baseFilters);
       const pStat = stat.find((st: any) => st.playerId === activePlayerId);
       if (pStat && ((pStat.gamesPlayed || 0) > 0 || (pStat.minutesPlayed || 0) > 0 || (pStat.totalMinutes || 0) > 0 || (pStat.stints || 0) > 0)) {
         const l = s.league || 'Other';
         if (!leagues[l]) leagues[l] = [];
-        leagues[l].push({ ...pStat, seasonLabel: s.description || s.name });
+        leagues[l].push({ ...pStat, seasonLabel: getSeasonLabel(s, leaguesList) });
       }
     });
 
@@ -140,16 +156,16 @@ export default function PlayerProfileView({
       leagues[k] = leagues[k].sort((a,b) => b.gamesPlayed - a.gamesPlayed).slice(0, 10);
     });
     return leagues;
-  }, [validSeasons, playedGames, events, players, activePlayerId, positionTab]);
+  }, [validSeasons, playedGames, events, players, activePlayerId, positionTab, baseFilters]);
 
   const careerTotal = useMemo(() => {
     if (playedGames.length === 0) return null;
     const cEvents = events.filter(e => playedGames.some(g => g.id === e.gameId));
     const fn = getStatsFn(positionTab);
-    const stat = fn(cEvents, players, playedGames, {});
+    const stat = fn(cEvents, players, playedGames, baseFilters);
     const pStat = stat.find((st: any) => st.playerId === activePlayerId);
     return pStat && ((pStat.gamesPlayed || 0) > 0 || (pStat.minutesPlayed || 0) > 0 || (pStat.totalMinutes || 0) > 0 || (pStat.stints || 0) > 0) ? pStat : null;
-  }, [playedGames, events, players, activePlayerId, positionTab]);
+  }, [playedGames, events, players, activePlayerId, positionTab, baseFilters]);
 
   const handleSort = (k: string) => {
     if (sortKey === k) { setSortDir(sortDir === 'asc' ? 'desc' : 'asc'); }
@@ -332,7 +348,7 @@ export default function PlayerProfileView({
       leaguesForTeam.forEach(league => {
         if (!leagues[league]) leagues[league] = [];
         if (!leagues[league].some(t => t.id === teamId)) {
-          leagues[league].push({ id: teamId, name: team.name, nickname: (team as any).nickname, colorPrimary: (team as any).colorPrimary });
+          leagues[league].push({ id: teamId, name: team.name, nickname: (team as any).nickname, colorPrimaryDark: (team as any).colorPrimaryDark || (team as any).colorPrimary });
         }
       });
     });
@@ -375,8 +391,8 @@ export default function PlayerProfileView({
                         onClick={() => onTeamSelect?.(t.id)}
                         className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-xs font-semibold bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors border border-gray-200"
                       >
-                        {t.colorPrimary && (
-                          <div className="w-2.5 h-2.5 rounded-full flex-shrink-0 border border-gray-300" style={{ backgroundColor: t.colorPrimary }} />
+                        {t.colorPrimaryDark && (
+                          <div className="w-2.5 h-2.5 rounded-full flex-shrink-0 border border-gray-300" style={{ backgroundColor: t.colorPrimaryDark }} />
                         )}
                         {t.nickname || t.name}
                       </button>
@@ -404,7 +420,7 @@ export default function PlayerProfileView({
           className="bg-gray-50 border text-xs font-medium tracking-wide shadow-sm border-gray-200 text-gray-700 rounded-lg px-3 py-2 outline-none focus:border-blue-500"
         >
           <option value="all">View All Championships...</option>
-          {validSeasons.map(s => <option key={s.id} value={s.id}>{s.description || s.name}</option>)}
+          {validSeasons.map(s => <option key={s.id} value={s.id}>{getSeasonLabel(s, leaguesList)}</option>)}
         </select>
       </div>
 

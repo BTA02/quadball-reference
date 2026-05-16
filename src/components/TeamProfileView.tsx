@@ -4,22 +4,37 @@ import { computeTeamQuadballStats, getScoreboardName } from '../lib/statsComputa
 
 interface Player { id: string; firstName: string; lastName: string; [k: string]: any; }
 interface GameEvent { id: string; videoId: string; gameId: string; type: string; videoTime: number; status: string; playerId?: string; teamId?: string; [k: string]: any; }
-interface Team { id: string; name: string; nickname?: string; colorPrimary?: string; [k: string]: any; }
+interface Team { id: string; name: string; nickname?: string; colorPrimaryDark?: string; colorPrimary?: string; [k: string]: any; }
 interface Game { id: string; isVerified?: boolean; seasonId: string; homeTeamId: string; awayTeamId: string; [k: string]: any; createdAt: any; }
-interface Season { id: string; name: string; description?: string; year?: string; league?: string; [k: string]: any; }
+interface Season { id: string; name: string; description?: string; year?: string; division?: string; league?: string; leagueId?: string; [k: string]: any; }
+interface League { id: string; name: string; [k: string]: any; }
+
+function getSeasonLabel(s: Season, leagues: League[]): string {
+  const league = s.leagueId ? leagues.find(l => l.id === s.leagueId) : null;
+  const parts: string[] = [];
+  if (league) {
+    const words = league.name.split(/\s+/);
+    parts.push(words.length > 1 ? words.map(w => w.length <= 3 ? w.toUpperCase() : w[0]?.toUpperCase()).join('') : league.name);
+  }
+  if (s.division) parts.push(s.division);
+  if (s.year) parts.push(s.year);
+  return parts.length > 0 ? parts.join(' ') : (s.name || s.id);
+}
 
 import { 
   cn, SortDir, sortBy, SortHeader, Cell
 } from './ui/StatsTable';
 
 export default function TeamProfileView({
-  players, events, games, seasons, teams, activeTeamId,
+  players, events, games, seasons, teams, leagues,
+  activeTeamId,
   onBack, onPlayerSelect, onGameSelect
 }: {
-  players: Player[]; events: GameEvent[]; games: Game[]; seasons: Season[]; teams: Team[];
+  players: Player[]; events: GameEvent[]; games: Game[]; seasons: Season[]; teams: Team[]; leagues?: League[];
   activeTeamId: string; onBack: () => void;
   onPlayerSelect?: (id: string) => void; onGameSelect?: (id: string) => void;
 }) {
+  const leaguesList = leagues || [];
   const team = teams.find(t => t.id === activeTeamId);
   const { playedGames, validSeasons } = useMemo(() => {
     const played = games.filter(g => g.homeTeamId === activeTeamId || g.awayTeamId === activeTeamId)
@@ -76,7 +91,7 @@ export default function TeamProfileView({
       if (tStat && tStat.gamesPlayed > 0) {
         const l = s.league || 'Other';
         if (!leagues[l]) leagues[l] = [];
-        leagues[l].push({ ...tStat, seasonLabel: s.description || s.name });
+        leagues[l].push({ ...tStat, seasonLabel: getSeasonLabel(s, leaguesList) });
       }
     });
 
@@ -101,7 +116,7 @@ export default function TeamProfileView({
 
   if (!team) return <div>Team not found</div>;
 
-  const teamColor = (team as any).colorPrimary || '#059669';
+  const teamColor = (team as any).colorPrimaryDark || (team as any).colorPrimary || '#059669';
   const hexToRgba = (hex: string, alpha: number) => {
     const r = parseInt(hex.slice(1, 3), 16);
     const g = parseInt(hex.slice(3, 5), 16);
@@ -177,7 +192,7 @@ export default function TeamProfileView({
               className="bg-white border text-xs font-medium tracking-wide shadow-sm border-gray-200 text-gray-700 rounded-lg px-3 py-1.5 outline-none focus:border-emerald-500"
             >
               <option value="all">View All Championships...</option>
-              {validSeasons.map(s => <option key={s.id} value={s.id}>{s.description || s.name}</option>)}
+              {validSeasons.map(s => <option key={s.id} value={s.id}>{getSeasonLabel(s, leaguesList)}</option>)}
             </select>
           </div>
           

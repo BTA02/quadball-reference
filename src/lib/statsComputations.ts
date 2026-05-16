@@ -99,12 +99,21 @@ export interface BasicPlayerStats {
   shotPct: number;     // goals / (shots+attempts) × 100
 }
 
+/** Build a Set of team IDs from filters for multi-team support */
+function buildTeamIdSet(filters: { teamId?: string; teamIds?: string[] }): Set<string> | null {
+  if (filters.teamIds && filters.teamIds.length > 0) return new Set(filters.teamIds);
+  if (filters.teamId) return new Set([filters.teamId]);
+  return null;
+}
+
 export function computeBasicStats(
   events: GameEvent[],
   players: Player[],
   games: Game[],
-  filters: { seasonId?: string; teamId?: string }
+  filters: { seasonId?: string; teamId?: string; teamIds?: string[] }
 ): BasicPlayerStats[] {
+  const teamIdSet = buildTeamIdSet(filters);
+
   // Build a player lookup by ID
   const playerMap = new Map<string, Player>();
   players.forEach(p => playerMap.set(p.id, p));
@@ -122,8 +131,8 @@ export function computeBasicStats(
   if (filters.seasonId) {
     filtered = filtered.filter(e => gameIdSet.has(e.gameId));
   }
-  if (filters.teamId) {
-    filtered = filtered.filter(e => e.teamId === filters.teamId);
+  if (teamIdSet) {
+    filtered = filtered.filter(e => e.teamId && teamIdSet.has(e.teamId));
   }
 
   // Accumulate per player
@@ -291,7 +300,13 @@ export interface AdvancedPlayerStats {
   minus: number;
   plusMinus: number;
   plusMinusRatio: number;
+  offPlus: number;
+  offMinus: number;
+  offPlusMinus: number;
+  onOffDt: number;
   offPlusMinusRatio: number;
+  offPlus: number;
+  offMinus: number;
   offPlusMinus: number;
   onOffDt: number;
   relPlusMinusRatio: number;
@@ -311,9 +326,9 @@ export interface AdvancedPlayerStats {
   goalsPerGame: number;
   assistsPerGame: number;
   pointsPerGame: number;
-  goalsPer100Possessions: number;
-  assistsPer100Possessions: number;
-  pointsPer100Possessions: number;
+  goalsPer25Possessions: number;
+  assistsPer25Possessions: number;
+  pointsPer25Possessions: number;
   shotPct: number;
   assistToTurnover: number;
   controlPctOnField: number;
@@ -567,13 +582,15 @@ export function computeAdvancedStats(
   events: GameEvent[],
   players: Player[],
   games: Game[],
-  filters: { seasonId?: string; teamId?: string; position?: 'chaser' | 'keeper'; controlFilter?: 'all' | 'with' | 'without'; flagFilter?: 'all' | 'on' | 'off'; outlierFilter?: 'include' | 'exclude' }
+  filters: { seasonId?: string; teamId?: string; teamIds?: string[]; position?: 'chaser' | 'keeper'; controlFilter?: 'all' | 'with' | 'without'; flagFilter?: 'all' | 'on' | 'off'; outlierFilter?: 'include' | 'exclude' }
 ): AdvancedPlayerStats[] {
+  const teamIdSet = buildTeamIdSet(filters);
   // Build player lookup by ID
   const playerMap = new Map<string, Player>();
   players.forEach(p => playerMap.set(p.id, p));
 
   const { eventsByGame, relevantGames } = groupEventsByGame(events, games, filters);
+  const rapmScores = computeRAPM(events, players, games, filters, 'beater');
 
   // Accumulators
   const statsAccum = new Map<string, {
@@ -677,8 +694,8 @@ export function computeAdvancedStats(
 
     // If filtering by team, only process that team's stats
     // Note: fallback to game.homeTeamId/awayTeamId to match the dropdown value 'unknown' if selected
-    const processHome = !filters.teamId || filters.teamId === resolvedHomeId || filters.teamId === game.homeTeamId;
-    const processAway = !filters.teamId || filters.teamId === resolvedAwayId || filters.teamId === game.awayTeamId;
+    const processHome = !teamIdSet || teamIdSet.has(resolvedHomeId) || teamIdSet.has(game.homeTeamId);
+    const processAway = !teamIdSet || teamIdSet.has(resolvedAwayId) || teamIdSet.has(game.awayTeamId);
 
     const gameEndEvent = sorted.find(e => e.type === 'gameEnd' || e.type === 'gameend');
     const gameEndTime = gameEndEvent?.videoTime ?? sorted[sorted.length - 1]?.videoTime ?? 0;
@@ -740,12 +757,13 @@ export function computeAdvancedStats(
       const isGoal = t === 'GOAL';
       const isShot = t === 'SHOT';
       const isAttempt = t === 'ATTEMPT';
+      const isMissKo = t === 'MISS_KO';
       const isTurnover = t === 'TURNOVER';
       const isExplicitOffense = t === 'OFFENSE';
       const isExplicitDefense = t === 'DEFENSE';
       const isStartEvent = t === 'CONTROL_START' || t === 'QUADBALL_START';
 
-      if (!isGoal && !isShot && !isAttempt && !isTurnover && !isExplicitOffense && !isExplicitDefense && !isStartEvent) continue;
+      if (!isGoal && !isShot && !isAttempt && !isMissKo && !isTurnover && !isExplicitOffense && !isExplicitDefense && !isStartEvent) continue;
 
       let eventTeamId = e.teamId || playerTeamMap.get(e.playerId);
       if (!eventTeamId && (playerTeamMap.size === 0 || (discHome === null && discAway))) {
@@ -757,15 +775,15 @@ export function computeAdvancedStats(
       let isEmptyTurnover = false;
 
       if (!hasExplicitPossessions) {
-        if (isGoal || isShot || isAttempt || isTurnover) {
+        if (isGoal || isShot || isAttempt || isMissKo || isTurnover) {
            isNewPossessionForEventTeam = (currentInferredPossTeam !== eventTeamId);
            if (isNewPossessionForEventTeam) {
              currentInferredPossTeam = eventTeamId;
-             didCurrentPossShoot = (isShot || isAttempt);
+             didCurrentPossShoot = (isShot || isAttempt || isMissKo);
              isEmptyTurnover = isTurnover && !didCurrentPossShoot;
            } else {
              isEmptyTurnover = isTurnover && !didCurrentPossShoot;
-             if (isShot || isAttempt) didCurrentPossShoot = true;
+             if (isShot || isAttempt || isMissKo) didCurrentPossShoot = true;
            }
         } else if (isStartEvent) {
            isNewPossessionForEventTeam = false;
@@ -897,7 +915,7 @@ export function computeAdvancedStats(
       let eTeam = e.teamId;
       if (!eTeam && e.playerId) eTeam = playerTeamMap.get(e.playerId);
       if (!eTeam && (playerTeamMap.size === 0 || (discHome === null && discAway))) eTeam = resolvedHomeId;
-      if (filters.teamId && eTeam !== filters.teamId && filters.teamId !== game.homeTeamId && filters.teamId !== game.awayTeamId) continue;
+      if (teamIdSet && eTeam && !teamIdSet.has(eTeam)) continue;
 
       if (isP_Home && processHome) homePlayersInGame.add(pid);
       if (!isP_Home && processAway) awayPlayersInGame.add(pid);
@@ -956,6 +974,8 @@ export function computeAdvancedStats(
       plusMinusRatio: accum.minus > 0
         ? Math.round((accum.plus / accum.minus) * 100) / 100
         : accum.plus > 0 ? Infinity : 0,
+      offPlus,
+      offMinus,
       offPlusMinusRatio: offMinus > 0
         ? Math.round((offPlus / offMinus) * 100) / 100
         : offPlus > 0 ? Infinity : 0,
@@ -974,9 +994,9 @@ export function computeAdvancedStats(
       goalsPerGame: accum.gameIds.size > 0 ? Math.round((accum.goals / accum.gameIds.size) * 100) / 100 : ('N/A' as any),
       assistsPerGame: accum.gameIds.size > 0 ? Math.round((accum.assists / accum.gameIds.size) * 100) / 100 : ('N/A' as any),
       pointsPerGame: accum.gameIds.size > 0 ? Math.round((points / accum.gameIds.size) * 100) / 100 : ('N/A' as any),
-      goalsPer100Possessions: accum.teamPossessions > 0 ? Math.round((accum.goals / accum.teamPossessions) * 100 * 100) / 100 : ('N/A' as any),
-      assistsPer100Possessions: accum.teamPossessions > 0 ? Math.round((accum.assists / accum.teamPossessions) * 100 * 100) / 100 : ('N/A' as any),
-      pointsPer100Possessions: accum.teamPossessions > 0 ? Math.round((points / accum.teamPossessions) * 100 * 100) / 100 : ('N/A' as any),
+      goalsPer25Possessions: accum.teamPossessions > 0 ? Math.round((accum.goals / accum.teamPossessions) * 25 * 100) / 100 : ('N/A' as any),
+      assistsPer25Possessions: accum.teamPossessions > 0 ? Math.round((accum.assists / accum.teamPossessions) * 25 * 100) / 100 : ('N/A' as any),
+      pointsPer25Possessions: accum.teamPossessions > 0 ? Math.round((points / accum.teamPossessions) * 25 * 100) / 100 : ('N/A' as any),
       shotPct: (accum.goals + accum.shots + accum.attempts + accum.missKo) > 0 ? Math.round((accum.goals / (accum.goals + accum.shots + accum.attempts + accum.missKo)) * 1000) / 10 : 0,
       assistToTurnover: accum.turnovers > 0
         ? Math.round((accum.assists / accum.turnovers) * 100) / 100
@@ -1018,6 +1038,10 @@ export interface ExtendedPlayerStats {
   minus: number;
   plusMinus: number;
   plusMinusRatio: number;
+  offPlus: number;
+  offMinus: number;
+  offPlusMinus: number;
+  onOffDt: number;
   offPlusMinusRatio: number;
   relPlusMinusRatio: number;
   // Basketball-inspired
@@ -1026,14 +1050,14 @@ export interface ExtendedPlayerStats {
   eOff: number;          // Expected Offense — possession score based on goals + shot generation
   eDef: number;          // Expected Defense — isolated expected opponent possession score
   gameScore: number;     // Game Score — Normalized Performance Rating per 20 min (includes +/- and individual stats)
-  oRtg: number;          // Offensive Rating — Team goals scored per 100 possessions while on pitch
-  dRtg: number;          // Defensive Rating — Opponent goals conceded per 100 possessions while on pitch
+  oRtg: number;          // Offensive Rating — Team goals scored per 25 possessions while on pitch
+  dRtg: number;          // Defensive Rating — Opponent goals conceded per 25 possessions while on pitch
   netRtg: number;        // Net Rating — oRtg - dRtg
   iORTG: number;         // Individual ORTG (Weighted plus)
   iDRTG: number;         // Individual DRTG (Weighted minus)
   iNet: number;          // Individual Net Rating
-  epr: number;           // Empty Possession Rate (Empty Turnovers / Possessions)
-  fEpr: number;          // Forced Empty Possession Rate
+  epr: number;           // Empty Possession Rate (Turnovers with no shot/attempt/KO in the possession / Possessions)
+  fEpr: number;          // Forced Empty Possession Rate (Opponent turnovers with no shot/attempt/KO / Opp Possessions)
   rapm: number;          // Regularized Adjusted Plus Minus
   // Per-20 rates
   turnoversPer20: number;
@@ -1057,9 +1081,9 @@ export interface ExtendedPlayerStats {
   goalsPerTwenty: number;
   assistsPerTwenty: number;
   pointsPerTwenty: number;
-  goalsPer100Possessions: number;
-  assistsPer100Possessions: number;
-  pointsPer100Possessions: number;
+  goalsPer25Possessions: number;
+  assistsPer25Possessions: number;
+  pointsPer25Possessions: number;
 }
 
 
@@ -1068,8 +1092,10 @@ function computeRAPM(
   events: GameEvent[],
   players: Player[],
   games: Game[],
-  filters: any
+  filters: any,
+  mode: 'quadball' | 'beater' = 'quadball'
 ): Map<string, number> {
+  if (filters.skipRapm) return new Map<string, number>();
   const { relevantGames: allRelevant, eventsByGame } = groupEventsByGame(events, games, filters);
   const relevantGames = allRelevant.filter(g => g.isVerified);
   const matchups = new Map<string, { offPlayers: string[], defPlayers: string[], poss: number, goals: number }>();
@@ -1104,8 +1130,10 @@ function computeRAPM(
 
     const gameEndEvent = sorted.find(e => e.type === 'gameEnd' || e.type === 'gameend');
     const gameEndTime = gameEndEvent?.videoTime ?? sorted[sorted.length - 1]?.videoTime ?? 0;
-    const homeStints = computePlayerStints(sorted, resolvedHomeId, homePlayerIds, gameEndTime).filter(s => s.position !== 'beater' && s.position !== 'seeker');
-    const awayStints = computePlayerStints(sorted, resolvedAwayId, awayPlayerIds, gameEndTime).filter(s => s.position !== 'beater' && s.position !== 'seeker');
+    const homeStintsFull = computePlayerStints(sorted, resolvedHomeId, homePlayerIds, gameEndTime);
+    const awayStintsFull = computePlayerStints(sorted, resolvedAwayId, awayPlayerIds, gameEndTime);
+    const homeStints = homeStintsFull.filter(s => mode === 'beater' ? s.position === 'beater' : (s.position !== 'seeker'));
+    const awayStints = awayStintsFull.filter(s => mode === 'beater' ? s.position === 'beater' : (s.position !== 'seeker'));
     const controlPeriods = computeControlPeriodsFromEvents(sorted);
     const flagReleaseTime = sorted.find(ev => ev.type === 'flag_released')?.videoTime ?? Infinity;
 
@@ -1122,12 +1150,13 @@ function computeRAPM(
       const isGoal = t === 'GOAL';
       const isShot = t === 'SHOT';
       const isAttempt = t === 'ATTEMPT';
+      const isMissKo = t === 'MISS_KO';
       const isTurnover = t === 'TURNOVER';
       const isExplicitOffense = t === 'OFFENSE';
       const isExplicitDefense = t === 'DEFENSE';
       const isStartEvent = t === 'CONTROL_START' || t === 'QUADBALL_START';
 
-      if (!isGoal && !isShot && !isAttempt && !isTurnover && !isExplicitOffense && !isExplicitDefense && !isStartEvent) continue;
+      if (!isGoal && !isShot && !isAttempt && !isMissKo && !isTurnover && !isExplicitOffense && !isExplicitDefense && !isStartEvent) continue;
 
       let eventTeamId = e.teamId || playerTeamMap.get(e.playerId);
       if (!eventTeamId && (playerTeamMap.size === 0 || (discHome === null && discAway))) eventTeamId = resolvedHomeId;
@@ -1136,13 +1165,13 @@ function computeRAPM(
       let isNewPossessionForEventTeam = false;
 
       if (!hasExplicitPossessions) {
-        if (isGoal || isShot || isAttempt || isTurnover) {
+        if (isGoal || isShot || isAttempt || isMissKo || isTurnover) {
            isNewPossessionForEventTeam = (currentInferredPossTeam !== eventTeamId);
            if (isNewPossessionForEventTeam) {
              currentInferredPossTeam = eventTeamId;
-             didCurrentPossShoot = (isShot || isAttempt);
+             didCurrentPossShoot = (isShot || isAttempt || isMissKo);
            } else {
-             if (isShot || isAttempt) didCurrentPossShoot = true;
+             if (isShot || isAttempt || isMissKo) didCurrentPossShoot = true;
            }
         } else if (isStartEvent) {
            isNewPossessionForEventTeam = false;
@@ -1193,7 +1222,7 @@ function computeRAPM(
 
   // SGD Ridge Regression Solver
   const rapmScores = new Map<string, number>();
-  let intercept = 40; // baseline 40 points per 100 poss
+  let intercept = 40; // baseline 40 points per 25 poss
   const lr = 0.0005;
   const lambda = 0.05;
 
@@ -1234,11 +1263,11 @@ export function computeExtendedStats(
   events: GameEvent[],
   players: Player[],
   games: Game[],
-  filters: { seasonId?: string; teamId?: string; position?: 'chaser' | 'keeper'; controlFilter?: 'all' | 'with' | 'without'; flagFilter?: 'all' | 'on' | 'off'; outlierFilter?: 'include' | 'exclude' }
+  filters: { seasonId?: string; teamId?: string; teamIds?: string[]; position?: 'chaser' | 'keeper'; controlFilter?: 'all' | 'with' | 'without'; flagFilter?: 'all' | 'on' | 'off'; outlierFilter?: 'include' | 'exclude' }
 ): ExtendedPlayerStats[] {
   // Reuse advanced stats computation for the heavy lifting
   const advanced = computeAdvancedStats(events, players, games, filters);
-  const rapmScores = computeRAPM(events, players, games, filters);
+  const rapmScores = computeRAPM(events, players, games, filters, 'quadball');
   const playerMap = new Map<string, Player>();
   players.forEach(p => playerMap.set(p.id, p));
 
@@ -1258,11 +1287,11 @@ export function computeExtendedStats(
       ? Math.round(((a.goals + 0.5 * a.assists) / totalAttempts) * 1000) / 10
       : 0;
 
-    // Offensive Rating: team goals generated per 100 offensive possessions
-    const oRtg = teamPoss > 0 ? Math.round((a.plus / teamPoss) * 100 * 10) / 10 : 0;
+    // Offensive Rating: team goals generated per 25 offensive possessions
+    const oRtg = teamPoss > 0 ? Math.round((a.plus / teamPoss) * 25 * 10) / 10 : 0;
 
-    // Defensive Rating: opponent goals allowed per 100 defensive possessions
-    const dRtg = oppPoss > 0 ? Math.round((a.minus / oppPoss) * 100 * 10) / 10 : 0;
+    // Defensive Rating: opponent goals allowed per 25 defensive possessions
+    const dRtg = oppPoss > 0 ? Math.round((a.minus / oppPoss) * 25 * 10) / 10 : 0;
 
     // Net Rating
     const netRtg = Math.round((oRtg - dRtg) * 10) / 10;
@@ -1328,6 +1357,8 @@ export function computeExtendedStats(
       plusMinusRatio: a.minus > 0
         ? Math.round((a.plus / a.minus) * 100) / 100
         : a.plus > 0 ? Infinity : 0,
+      offPlus: a.offPlus,
+      offMinus: a.offMinus,
       offPlusMinusRatio: a.offPlusMinusRatio,
       offPlusMinus: a.offPlusMinus,
       onOffDt: a.onOffDt,
@@ -1372,9 +1403,9 @@ export function computeExtendedStats(
       goalsPerTwenty: a.goalsPerTwenty,
       assistsPerTwenty: a.assistsPerTwenty,
       pointsPerTwenty: a.pointsPerTwenty,
-      goalsPer100Possessions: a.goalsPer100Possessions,
-      assistsPer100Possessions: a.assistsPer100Possessions,
-      pointsPer100Possessions: a.pointsPer100Possessions,
+      goalsPer25Possessions: a.goalsPer25Possessions,
+      assistsPer25Possessions: a.assistsPer25Possessions,
+      pointsPer25Possessions: a.pointsPer25Possessions,
     };
   });
 }
@@ -1400,8 +1431,7 @@ export interface TeamQuadballStats {
   oRtg: number;
   dRtg: number;
   netRtg: number;
-  eOff: number;
-  eDef: number;
+  rapm: number;
   epr: number;
   fEpr: number;
 }
@@ -1411,8 +1441,9 @@ export function computeTeamQuadballStats(
   players: Player[],
   teams: { id: string; name: string; [k: string]: any }[],
   games: Game[],
-  filters: { seasonId?: string; teamId?: string }
+  filters: { seasonId?: string; teamId?: string; teamIds?: string[] }
 ): TeamQuadballStats[] {
+  const teamIdSet = buildTeamIdSet(filters);
   const extended = computeExtendedStats(events, players, games, filters);
   const teamMap = new Map<string, typeof teams[0]>();
   teams.forEach(t => teamMap.set(t.id, t));
@@ -1437,7 +1468,7 @@ export function computeTeamQuadballStats(
   const teamGameIds = new Map<string, Set<string>>();
   const { relevantGames } = groupEventsByGame(events, games, filters as any);
   const validGamesForParams = relevantGames.map(x => x.id);
-  const filteredGames = games.filter(g => validGamesForParams.includes(g.id) && (!filters.teamId || g.homeTeamId === filters.teamId || g.awayTeamId === filters.teamId));
+  const filteredGames = games.filter(g => validGamesForParams.includes(g.id) && (!teamIdSet || teamIdSet.has(g.homeTeamId) || teamIdSet.has(g.awayTeamId)));
 
   for (const g of filteredGames) {
     if (!teamGameIds.has(g.homeTeamId)) teamGameIds.set(g.homeTeamId, new Set());
@@ -1491,11 +1522,11 @@ export function computeTeamQuadballStats(
           getTA(e.teamId).teamPoss++;
           getTA(oppId).oppPoss++;
           currentInferredPossTeam = e.teamId;
-          const isShotOrAttempt = (t === 'shot' || t === 'attempt');
+          const isShotOrAttempt = (t === 'shot' || t === 'attempt' || t === 'miss_ko');
           didCurrentPossShoot = isShotOrAttempt;
           isEmptyTurnover = t === 'turnover' && !didCurrentPossShoot;
         } else {
-          const isShotOrAttempt = (t === 'shot' || t === 'attempt');
+          const isShotOrAttempt = (t === 'shot' || t === 'attempt' || t === 'miss_ko');
           isEmptyTurnover = t === 'turnover' && !didCurrentPossShoot;
           if (isShotOrAttempt) didCurrentPossShoot = true;
         }
@@ -1538,7 +1569,7 @@ export function computeTeamQuadballStats(
   for (const [tid, acc] of teamEventAccum) {
     const team = teamMap.get(tid);
     if (!team) continue;
-    if (filters.teamId && tid !== filters.teamId) continue;
+    if (teamIdSet && !teamIdSet.has(tid)) continue;
     
     const gp = acc.gameIds.size;
     const totalMissT = acc.shots + acc.attempts + acc.missKo; // Total shots + drives + KO
@@ -1582,15 +1613,14 @@ export function computeTeamQuadballStats(
       goalsPerGame: gp > 0 ? Math.round((acc.goals / gp) * 100) / 100 : 0,
       assistsPerGame: gp > 0 ? Math.round((acc.assists / gp) * 100) / 100 : 0,
       pointsPerGame: gp > 0 ? Math.round(((acc.goals + acc.assists) / gp) * 100) / 100 : 0,
-      oRtg: teamPoss > 0 ? Math.round((acc.goals / teamPoss) * 100 * 10) / 10 : 0,
-      dRtg: oppPoss > 0 ? Math.round((acc.goalsAgainst / oppPoss) * 100 * 10) / 10 : 0,
+      oRtg: teamPoss > 0 ? Math.round((acc.goals / teamPoss) * 25 * 10) / 10 : 0,
+      dRtg: oppPoss > 0 ? Math.round((acc.goalsAgainst / oppPoss) * 25 * 10) / 10 : 0,
       netRtg: (() => {
-        const o = teamPoss > 0 ? (acc.goals / teamPoss) * 100 : 0;
-        const d = oppPoss > 0 ? (acc.goalsAgainst / oppPoss) * 100 : 0;
+        const o = teamPoss > 0 ? (acc.goals / teamPoss) * 25 : 0;
+        const d = oppPoss > 0 ? (acc.goalsAgainst / oppPoss) * 25 : 0;
         return Math.round((o - d) * 10) / 10;
       })(),
-      eOff,
-      eDef,
+      rapm: 0, // Team-level RAPM could be calculated, but defaulting to 0 for now
       epr: teamPoss > 0 ? Math.round((acc.emptyTurnovers / teamPoss) * 1000) / 10 : 0,
       fEpr: oppPoss > 0 ? Math.round((acc.oppEmptyTurnovers / oppPoss) * 1000) / 10 : 0,
     });
@@ -1617,8 +1647,9 @@ export function computeTeamBeaterStats(
   players: Player[],
   teams: { id: string; name: string; [k: string]: any }[],
   games: Game[],
-  filters: { seasonId?: string; teamId?: string; controlFilter?: 'all' | 'with' | 'without'; flagFilter?: 'all' | 'on' | 'off'; outlierFilter?: 'include' | 'exclude' }
+  filters: { seasonId?: string; teamId?: string; teamIds?: string[]; controlFilter?: 'all' | 'with' | 'without'; flagFilter?: 'all' | 'on' | 'off'; outlierFilter?: 'include' | 'exclude' }
 ): TeamBeaterStats[] {
+  const teamIdSet = buildTeamIdSet(filters);
   const soloStats = computeBeaterSoloStats(events, players, games, filters);
   const teamMap = new Map<string, typeof teams[0]>();
   teams.forEach(t => teamMap.set(t.id, t));
@@ -1656,7 +1687,7 @@ export function computeTeamBeaterStats(
     const flagReleaseTime = flagReleaseEvent?.videoTime ?? Infinity;
 
     for (const teamId of [game.homeTeamId, game.awayTeamId]) {
-      if (filters.teamId && teamId !== filters.teamId) continue;
+      if (teamIdSet && !teamIdSet.has(teamId)) continue;
       if (!teamAccum.has(teamId)) {
         teamAccum.set(teamId, { controlSeconds: 0, totalSeconds: 0, gameIds: new Set() });
       }
@@ -1910,15 +1941,20 @@ export interface BeaterSoloStats {
   minus: number;
   plusMinus: number;
   plusMinusRatio: number;
+  offPlus: number;
+  offMinus: number;
+  offPlusMinus: number;
+  onOffDt: number;
   offPlusMinusRatio: number;
+  offPlus: number;
+  offMinus: number;
   offPlusMinus: number;
   onOffDt: number;
   relPlusMinusRatio: number;
   controlMinutes: number;      // minutes their team had control while on field
   totalMinutes: number;        // total game-clock minutes on field
   controlPct: number;          // controlMinutes / totalMinutes × 100
-  eOff: number;
-  eDef: number;
+  rapm: number;
   epr: number;
   fEpr: number;
 }
@@ -1927,10 +1963,12 @@ export function computeBeaterSoloStats(
   events: GameEvent[],
   players: Player[],
   games: Game[],
-  filters: { seasonId?: string; teamId?: string; controlFilter?: 'all' | 'with' | 'without'; flagFilter?: 'all' | 'on' | 'off'; outlierFilter?: 'include' | 'exclude' }
+  filters: { seasonId?: string; teamId?: string; teamIds?: string[]; controlFilter?: 'all' | 'with' | 'without'; flagFilter?: 'all' | 'on' | 'off'; outlierFilter?: 'include' | 'exclude' }
 ): BeaterSoloStats[] {
+  const teamIdSet = buildTeamIdSet(filters);
   const playerMap = buildPlayerMap(events, players);
   const { eventsByGame, relevantGames } = groupEventsByGame(events, games, filters);
+  const rapmScores = computeRAPM(events, players, games, filters, 'beater');
 
   const accum = new Map<string, {
     plus: number; minus: number;
@@ -1963,7 +2001,7 @@ export function computeBeaterSoloStats(
     const resolvedAwayId = discAway || game.awayTeamId;
 
     // Filters check original OR resolved
-    if (filters.teamId && filters.teamId !== resolvedHomeId && filters.teamId !== resolvedAwayId && filters.teamId !== game.homeTeamId && filters.teamId !== game.awayTeamId) continue;
+    if (teamIdSet && !teamIdSet.has(resolvedHomeId) && !teamIdSet.has(resolvedAwayId) && !teamIdSet.has(game.homeTeamId) && !teamIdSet.has(game.awayTeamId)) continue;
 
     const playerTeamMap = buildPlayerTeamMap(sorted);
     const homeStints = computeBeaterStints(sorted, resolvedHomeId, gameId, gameEndTime, playerTeamMap);
@@ -1974,7 +2012,7 @@ export function computeBeaterSoloStats(
     const flagReleaseTime = flagReleaseEvent?.videoTime ?? Infinity;
 
     for (const stint of beaterStints) {
-      if (filters.teamId && stint.teamId !== filters.teamId && filters.teamId !== game.homeTeamId && filters.teamId !== game.awayTeamId) continue;
+      if (teamIdSet && !teamIdSet.has(stint.teamId)) continue;
       const acc = getAcc(stint.playerId);
       acc.gameIds.add(gameId);
 
@@ -2009,26 +2047,27 @@ export function computeBeaterSoloStats(
       const isGoal = t === 'GOAL';
       const isShot = t === 'SHOT';
       const isAttempt = t === 'ATTEMPT';
+      const isMissKo = t === 'MISS_KO';
       const isTurnover = t === 'TURNOVER';
       const isStartEvent = t === 'CONTROL_START' || t === 'QUADBALL_START';
       const isExplicitOffense = t === 'OFFENSE';
       const isExplicitDefense = t === 'DEFENSE';
 
-      if (!isGoal && !isShot && !isAttempt && !isTurnover && !isExplicitOffense && !isExplicitDefense && !isStartEvent) continue;
+      if (!isGoal && !isShot && !isAttempt && !isMissKo && !isTurnover && !isExplicitOffense && !isExplicitDefense && !isStartEvent) continue;
 
       let isNewPossessionForEventTeam = false;
       let isEmptyTurnover = false;
 
       if (!hasExplicitPossessions) {
-        if (isGoal || isShot || isAttempt || isTurnover) {
+        if (isGoal || isShot || isAttempt || isMissKo || isTurnover) {
            isNewPossessionForEventTeam = (currentInferredPossTeam !== eventTeamId);
            if (isNewPossessionForEventTeam) {
              currentInferredPossTeam = eventTeamId;
-             didCurrentPossShoot = (isShot || isAttempt);
+             didCurrentPossShoot = (isShot || isAttempt || isMissKo);
              isEmptyTurnover = isTurnover && !didCurrentPossShoot;
            } else {
              isEmptyTurnover = isTurnover && !didCurrentPossShoot;
-             if (isShot || isAttempt) didCurrentPossShoot = true;
+             if (isShot || isAttempt || isMissKo) didCurrentPossShoot = true;
            }
         } else if (isStartEvent) {
            isNewPossessionForEventTeam = false;
@@ -2043,7 +2082,7 @@ export function computeBeaterSoloStats(
       }
 
       for (const stint of beaterStints) {
-        if (filters.teamId && stint.teamId !== filters.teamId && stint.teamId !== game.homeTeamId && stint.teamId !== game.awayTeamId) continue;
+        if (teamIdSet && !teamIdSet.has(stint.teamId)) continue;
         if (e.videoTime >= stint.startTime && e.videoTime <= stint.endTime) {
           if (!isStateActiveForTeam(stint.teamId, e.videoTime, controlPeriods, flagReleaseTime, filters)) continue;
           
@@ -2091,7 +2130,7 @@ export function computeBeaterSoloStats(
     const homePlayersWithStints = new Set<string>();
     for (const stint of homeStints) homePlayersWithStints.add(stint.playerId);
     for (const pid of homePlayersWithStints) {
-      if (filters.teamId && filters.teamId !== resolvedHomeId && filters.teamId !== game.homeTeamId && filters.teamId !== game.awayTeamId) continue;
+      if (teamIdSet && !teamIdSet.has(resolvedHomeId)) continue;
       const acc = getAcc(pid);
       acc.teamGoalsTotal += homeGoalsThisGame;
       acc.oppGoalsTotal += awayGoalsThisGame;
@@ -2100,7 +2139,7 @@ export function computeBeaterSoloStats(
     const awayPlayersWithStints = new Set<string>();
     for (const stint of awayStints) awayPlayersWithStints.add(stint.playerId);
     for (const pid of awayPlayersWithStints) {
-      if (filters.teamId && filters.teamId !== resolvedAwayId && filters.teamId !== game.homeTeamId && filters.teamId !== game.awayTeamId) continue;
+      if (teamIdSet && !teamIdSet.has(resolvedAwayId)) continue;
       const acc = getAcc(pid);
       acc.teamGoalsTotal += awayGoalsThisGame;
       acc.oppGoalsTotal += homeGoalsThisGame;
@@ -2122,23 +2161,7 @@ export function computeBeaterSoloStats(
     const offPlusMinusRatio = offMinus > 0 ? Math.round((offPlus / offMinus) * 100) / 100 : (offPlus > 0 ? Infinity : 0);
     const relPlusMinusRatio = Math.round(((a.minus > 0 ? a.plus / a.minus : a.plus > 0 ? 5 : 0) - (offMinus > 0 ? offPlus / offMinus : offPlus > 0 ? 5 : 0)) * 100) / 100;
 
-    const eOff = (() => {
-      const teamPoss = a.teamPoss;
-      const missedChances = a.shots + a.attempts;
-      const nonGoalPoss = Math.max(0, teamPoss - a.plus);
-      let nonGoalScore = 0;
-      if (nonGoalPoss > 0) nonGoalScore = (1 - Math.pow(0.7, missedChances / nonGoalPoss)) * 100;
-      return teamPoss > 0 ? Math.round((((a.plus * 100) + (nonGoalPoss * nonGoalScore)) / teamPoss) * 10) / 10 : 0;
-    })();
 
-    const eDef = (() => {
-      const oppPoss = a.oppPoss;
-      const oppMissedChances = a.oppShotsOn + a.oppAttemptsOn;
-      const oppNonGoalPoss = Math.max(0, oppPoss - a.minus);
-      let oppNonGoalScore = 0;
-      if (oppNonGoalPoss > 0) oppNonGoalScore = (1 - Math.pow(0.7, oppMissedChances / oppNonGoalPoss)) * 100;
-      return oppPoss > 0 ? Math.round((((a.minus * 100) + (oppNonGoalPoss * oppNonGoalScore)) / oppPoss) * 10) / 10 : 0;
-    })();
 
     results.push({
       playerId: pid,
@@ -2149,6 +2172,10 @@ export function computeBeaterSoloStats(
       plus: a.plus,
       minus: a.minus,
       plusMinus: a.plus - a.minus,
+      offPlus,
+
+      offMinus,
+
       plusMinusRatio,
       offPlusMinusRatio,
       relPlusMinusRatio,
@@ -2157,8 +2184,7 @@ export function computeBeaterSoloStats(
       controlMinutes: Math.round(controlMin * 10) / 10,
       totalMinutes: Math.round(totalMin * 10) / 10,
       controlPct: totalMin > 0 ? Math.round((controlMin / totalMin) * 1000) / 10 : 0,
-      eOff,
-      eDef,
+      rapm: rapmScores.get(pid) || 0,
       epr: a.teamPoss > 0 ? Math.round((a.emptyTurnovers / a.teamPoss) * 1000) / 10 : 0,
       fEpr: a.oppPoss > 0 ? Math.round((a.oppEmptyTurnovers / a.oppPoss) * 1000) / 10 : 0,
     });
@@ -2181,15 +2207,20 @@ export interface BeaterPairStats {
   minus: number;
   plusMinus: number;
   plusMinusRatio: number;
+  offPlus: number;
+  offMinus: number;
+  offPlusMinus: number;
+  onOffDt: number;
   offPlusMinusRatio: number;
+  offPlus: number;
+  offMinus: number;
   offPlusMinus: number;
   onOffDt: number;
   relPlusMinusRatio: number;
   controlMinutes: number;
   totalMinutes: number;
   controlPct: number;
-  eOff: number;
-  eDef: number;
+  rapm: number;
   epr: number;
   fEpr: number;
 }
@@ -2233,10 +2264,12 @@ export function computeBeaterPairStats(
   events: GameEvent[],
   players: Player[],
   games: Game[],
-  filters: { seasonId?: string; teamId?: string; controlFilter?: 'all' | 'with' | 'without'; flagFilter?: 'all' | 'on' | 'off'; outlierFilter?: 'include' | 'exclude' }
+  filters: { seasonId?: string; teamId?: string; teamIds?: string[]; controlFilter?: 'all' | 'with' | 'without'; flagFilter?: 'all' | 'on' | 'off'; outlierFilter?: 'include' | 'exclude' }
 ): BeaterPairStats[] {
+  const teamIdSet = buildTeamIdSet(filters);
   const playerMap = buildPlayerMap(events, players);
   const { eventsByGame, relevantGames } = groupEventsByGame(events, games, filters);
+  const rapmScores = computeRAPM(events, players, games, filters, 'beater');
 
   const accum = new Map<string, {
     player1Id: string; player2Id: string;
@@ -2280,7 +2313,7 @@ export function computeBeaterPairStats(
     const resolvedHomeId = (discHome === null && discAway) ? 'home_inferred' : (discHome || game.homeTeamId);
     const resolvedAwayId = discAway || game.awayTeamId;
 
-    if (filters.teamId && filters.teamId !== resolvedHomeId && filters.teamId !== resolvedAwayId && filters.teamId !== game.homeTeamId && filters.teamId !== game.awayTeamId) continue;
+    if (teamIdSet && !teamIdSet.has(resolvedHomeId) && !teamIdSet.has(resolvedAwayId) && !teamIdSet.has(game.homeTeamId) && !teamIdSet.has(game.awayTeamId)) continue;
 
     const playerTeamMap = buildPlayerTeamMap(sorted);
     const homeStints = computeBeaterStints(sorted, resolvedHomeId, gameId, gameEndTime, playerTeamMap);
@@ -2293,7 +2326,7 @@ export function computeBeaterPairStats(
     const pairOverlaps = computePairOverlaps(beaterStints);
 
     for (const overlap of pairOverlaps) {
-      if (filters.teamId && overlap.teamId !== filters.teamId && filters.teamId !== game.homeTeamId && filters.teamId !== game.awayTeamId) continue;
+      if (teamIdSet && !teamIdSet.has(overlap.teamId)) continue;
       const acc = getPairAcc(overlap.player1, overlap.player2, overlap.teamId);
       acc.gameIds.add(gameId);
 
@@ -2328,26 +2361,27 @@ export function computeBeaterPairStats(
       const isGoal = t === 'GOAL';
       const isShot = t === 'SHOT';
       const isAttempt = t === 'ATTEMPT';
+      const isMissKo = t === 'MISS_KO';
       const isTurnover = t === 'TURNOVER';
       const isStartEvent = t === 'CONTROL_START' || t === 'QUADBALL_START';
       const isExplicitOffense = t === 'OFFENSE';
       const isExplicitDefense = t === 'DEFENSE';
 
-      if (!isGoal && !isShot && !isAttempt && !isTurnover && !isExplicitOffense && !isExplicitDefense && !isStartEvent) continue;
+      if (!isGoal && !isShot && !isAttempt && !isMissKo && !isTurnover && !isExplicitOffense && !isExplicitDefense && !isStartEvent) continue;
 
       let isNewPossessionForEventTeam = false;
       let isEmptyTurnover = false;
 
       if (!hasExplicitPossessions) {
-        if (isGoal || isShot || isAttempt || isTurnover) {
+        if (isGoal || isShot || isAttempt || isMissKo || isTurnover) {
            isNewPossessionForEventTeam = (currentInferredPossTeam !== eventTeamId);
            if (isNewPossessionForEventTeam) {
              currentInferredPossTeam = eventTeamId;
-             didCurrentPossShoot = (isShot || isAttempt);
+             didCurrentPossShoot = (isShot || isAttempt || isMissKo);
              isEmptyTurnover = isTurnover && !didCurrentPossShoot;
            } else {
              isEmptyTurnover = isTurnover && !didCurrentPossShoot;
-             if (isShot || isAttempt) didCurrentPossShoot = true;
+             if (isShot || isAttempt || isMissKo) didCurrentPossShoot = true;
            }
         } else if (isStartEvent) {
            isNewPossessionForEventTeam = false;
@@ -2413,7 +2447,7 @@ export function computeBeaterPairStats(
       if (overlap.teamId === resolvedHomeId) homePairsWithStints.add(`${overlap.player1}|${overlap.player2}`);
     }
     for (const pairKey of homePairsWithStints) {
-      if (filters.teamId && filters.teamId !== resolvedHomeId && filters.teamId !== game.homeTeamId && filters.teamId !== game.awayTeamId) continue;
+      if (teamIdSet && !teamIdSet.has(resolvedHomeId)) continue;
       const [p1, p2] = pairKey.split('|');
       const acc = getPairAcc(p1, p2, game.homeTeamId);
       acc.teamGoalsTotal += homeGoalsThisGame;
@@ -2425,7 +2459,7 @@ export function computeBeaterPairStats(
       if (overlap.teamId === resolvedAwayId) awayPairsWithStints.add(`${overlap.player1}|${overlap.player2}`);
     }
     for (const pairKey of awayPairsWithStints) {
-      if (filters.teamId && filters.teamId !== resolvedAwayId && filters.teamId !== game.homeTeamId && filters.teamId !== game.awayTeamId) continue;
+      if (teamIdSet && !teamIdSet.has(resolvedAwayId)) continue;
       const [p1, p2] = pairKey.split('|');
       const acc = getPairAcc(p1, p2, game.awayTeamId);
       acc.teamGoalsTotal += awayGoalsThisGame;
@@ -2449,23 +2483,7 @@ export function computeBeaterPairStats(
     const offPlusMinusRatio = offMinus > 0 ? Math.round((offPlus / offMinus) * 100) / 100 : (offPlus > 0 ? Infinity : 0);
     const relPlusMinusRatio = Math.round(((a.minus > 0 ? a.plus / a.minus : a.plus > 0 ? 5 : 0) - (offMinus > 0 ? offPlus / offMinus : offPlus > 0 ? 5 : 0)) * 100) / 100;
 
-    const eOff = (() => {
-      const teamPoss = a.teamPoss;
-      const missedChances = a.shots + a.attempts;
-      const nonGoalPoss = Math.max(0, teamPoss - a.plus);
-      let nonGoalScore = 0;
-      if (nonGoalPoss > 0) nonGoalScore = (1 - Math.pow(0.7, missedChances / nonGoalPoss)) * 100;
-      return teamPoss > 0 ? Math.round((((a.plus * 100) + (nonGoalPoss * nonGoalScore)) / teamPoss) * 10) / 10 : 0;
-    })();
 
-    const eDef = (() => {
-      const oppPoss = a.oppPoss;
-      const oppMissedChances = a.oppShotsOn + a.oppAttemptsOn;
-      const oppNonGoalPoss = Math.max(0, oppPoss - a.minus);
-      let oppNonGoalScore = 0;
-      if (oppNonGoalPoss > 0) oppNonGoalScore = (1 - Math.pow(0.7, oppMissedChances / oppNonGoalPoss)) * 100;
-      return oppPoss > 0 ? Math.round((((a.minus * 100) + (oppNonGoalPoss * oppNonGoalScore)) / oppPoss) * 10) / 10 : 0;
-    })();
 
     results.push({
       pairKey: key,
@@ -2478,6 +2496,10 @@ export function computeBeaterPairStats(
       plus: a.plus,
       minus: a.minus,
       plusMinus: a.plus - a.minus,
+      offPlus,
+
+      offMinus,
+
       plusMinusRatio,
       offPlusMinusRatio,
       relPlusMinusRatio,
@@ -2486,8 +2508,7 @@ export function computeBeaterPairStats(
       controlMinutes: Math.round(controlMin * 10) / 10,
       totalMinutes: Math.round(totalMin * 10) / 10,
       controlPct: totalMin > 0 ? Math.round((controlMin / totalMin) * 1000) / 10 : 0,
-      eOff,
-      eDef,
+      rapm: Math.round(((rapmScores.get(a.player1Id) || 0) + (rapmScores.get(a.player2Id) || 0)) * 10) / 10,
       epr: a.teamPoss > 0 ? Math.round((a.emptyTurnovers / a.teamPoss) * 1000) / 10 : 0,
       fEpr: a.oppPoss > 0 ? Math.round((a.oppEmptyTurnovers / a.oppPoss) * 1000) / 10 : 0,
     });
@@ -2518,7 +2539,7 @@ function buildPlayerMap(events: GameEvent[], players: Player[]): Map<string, Pla
 function groupEventsByGame(
   events: GameEvent[],
   games: Game[],
-  filters: { seasonId?: string; teamId?: string; outlierFilter?: 'include' | 'exclude' }
+  filters: { seasonId?: string; teamId?: string; teamIds?: string[]; outlierFilter?: 'include' | 'exclude' }
 ): { eventsByGame: Map<string, GameEvent[]>; relevantGames: Game[] } {
   let relevantGames = games;
   if (filters.seasonId) {
@@ -2627,8 +2648,9 @@ export function computeSeekerStats(
   events: GameEvent[],
   players: Player[],
   games: Game[],
-  filters: { seasonId?: string; teamId?: string; controlFilter?: 'all' | 'with' | 'without'; flagFilter?: 'all' | 'on' | 'off'; outlierFilter?: 'include' | 'exclude' }
+  filters: { seasonId?: string; teamId?: string; teamIds?: string[]; controlFilter?: 'all' | 'with' | 'without'; flagFilter?: 'all' | 'on' | 'off'; outlierFilter?: 'include' | 'exclude' }
 ): SeekerStats[] {
+  const teamIdSet = buildTeamIdSet(filters);
   const playerMap = buildPlayerMap(events, players);
   const { eventsByGame, relevantGames } = groupEventsByGame(events, games, filters);
 
@@ -2721,7 +2743,7 @@ export function computeSeekerStats(
 
     // Compute time stats for each seeker stint
     for (const stint of seekerStints) {
-      if (filters.teamId && stint.teamId !== filters.teamId) continue;
+      if (teamIdSet && !teamIdSet.has(stint.teamId)) continue;
       const acc = getTimeAcc(stint.playerId);
       acc.gameIds.add(gameId);
       
@@ -2877,7 +2899,7 @@ export function computeSeekerStats(
     const processedIds = new Set(allResults.filter(r => r.gameId === gameId).map(r => r.playerId));
     for (const [seekerId, teamId] of seekerPlayers) {
       if (processedIds.has(seekerId)) continue;
-      if (filters.teamId && teamId !== filters.teamId) continue;
+      if (teamIdSet && !teamIdSet.has(teamId)) continue;
 
       const isHome = teamId === game.homeTeamId;
       const ownAtRelease = isHome ? homeAtRelease : awayAtRelease;
@@ -2901,8 +2923,8 @@ export function computeSeekerStats(
   }
 
   // Apply team filter 
-  const filteredResults = filters.teamId
-    ? allResults.filter(r => r.teamId === filters.teamId)
+  const filteredResults = teamIdSet
+    ? allResults.filter(r => r.teamId && teamIdSet.has(r.teamId))
     : allResults;
 
   // Aggregate per player — deduplicate by gameId

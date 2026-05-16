@@ -32,22 +32,20 @@ interface BeaterStatsViewProps {
   teams: Team[];
   games: Game[];
   seasons: Season[];
-  statsFilter?: 'all' | 'verified' | 'legacy';
-  seasonId?: string;
-  teamId?: string;
+  statsFilter?: 'all' | 'verified' | 'verified_events' | 'legacy';
+  teamIds?: string[];
   search?: string;
   minGames?: number;
   bludgerControlMode?: 'all' | 'separate';
   flagFilter?: 'all' | 'on' | 'off';
-  outlierFilter?: 'include' | 'exclude';
   onPlayerSelect?: (playerId: string) => void;
   onTeamSelect?: (teamId: string) => void;
 }
 
 export default function BeaterStatsView({ 
   players, events, teams, games, seasons, statsFilter = 'all',
-  seasonId: seasonFilter = '', teamId: teamFilter = '', search = '',
-  minGames = 1, bludgerControlMode = 'all', flagFilter = 'all', outlierFilter = 'include',
+  teamIds: teamFilterIds = [], search = '',
+  minGames = 1, bludgerControlMode = 'all', flagFilter = 'all',
   onPlayerSelect, onTeamSelect
 }: BeaterStatsViewProps) {
   const [tab, setTab] = useState<'pairs' | 'solo' | 'team'>('pairs');
@@ -56,7 +54,7 @@ export default function BeaterStatsView({
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const perPage = 25;
 
-  useEffect(() => { setPage(1); }, [search, seasonFilter, teamFilter, minGames, bludgerControlMode, flagFilter, outlierFilter]);
+  useEffect(() => { setPage(1); }, [search, teamFilterIds, minGames, bludgerControlMode, flagFilter]);
 
   const handleSort = (key: string) => {
     if (key === sortKey) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -90,12 +88,12 @@ export default function BeaterStatsView({
   }, [teams, games, filteredSeasons, statsFilter]);
 
   const filters = useMemo(() => ({
-    seasonId: seasonFilter || undefined,
-    teamId: teamFilter || undefined,
+    teamId: teamFilterIds.length === 1 ? teamFilterIds[0] : undefined,
+    teamIds: teamFilterIds.length > 0 ? teamFilterIds : undefined,
     controlFilter: bludgerControlMode === 'all' ? undefined : undefined,
     flagFilter: flagFilter === 'all' ? undefined : flagFilter,
-    outlierFilter
-  }), [seasonFilter, teamFilter, bludgerControlMode, flagFilter, outlierFilter]);
+    skipRapm: statsFilter === 'verified_events'
+  }), [teamFilterIds, bludgerControlMode, flagFilter, statsFilter]);
 
   const soloStats = useMemo(() => computeBeaterSoloStats(events, players, games, filters), [events, players, games, filters]);
   const pairStats = useMemo(() => computeBeaterPairStats(events, players, games, filters), [events, players, games, filters]);
@@ -181,8 +179,7 @@ export default function BeaterStatsView({
                   <SortHeader label="+:−" sortKey="plusMinusRatio" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Ratio of Plus to Minus" />
                   <SortHeader label="Off+:−" sortKey="offPlusMinusRatio" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Ratio of Plus to Minus while off the field" />
                   <SortHeader label="REL +:−" sortKey="relPlusMinusRatio" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Relative Value (Your +:− Ratio vs. your team's when you are off)" />
-                  <SortHeader label="eOff" sortKey="eOff" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Expected Offense" />
-                  <SortHeader label="eDef" sortKey="eDef" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Expected Defense" />
+                  <SortHeader label="RAPM" sortKey="rapm" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Regularized Adjusted Plus-Minus" />
                   <SortHeader label="EPR" sortKey="epr" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Empty Possession Rate (while on field)" />
                   <SortHeader label="fEPR" sortKey="fEpr" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Forced Empty Possession Rate (while on field)" />
                 </>)}
@@ -227,8 +224,7 @@ export default function BeaterStatsView({
                       <Cell value={row.plusMinusRatio === Infinity ? '∞' : row.plusMinusRatio} />
                       <Cell value={row.offPlusMinusRatio === Infinity ? '∞' : row.offPlusMinusRatio} />
                       <Cell value={row.relPlusMinusRatio > 0 ? `+${row.relPlusMinusRatio}` : row.relPlusMinusRatio || 'E'} highlight={row.relPlusMinusRatio > 0 ? 'pos' : row.relPlusMinusRatio < 0 ? 'neg' : undefined} />
-                      <Cell value={row.eOff} highlight={row.eOff > 45 ? 'pos' : undefined} />
-                      <Cell value={row.eDef} highlight={row.eDef < 30 ? 'pos' : row.eDef > 50 ? 'neg' : undefined} />
+                      <Cell value={row.rapm} bold highlight={row.rapm > 0 ? 'pos' : row.rapm < 0 ? 'neg' : undefined} />
                       <Cell value={`${row.epr}%`} highlight={row.epr < 40 ? 'pos' : row.epr > 55 ? 'neg' : undefined} />
                       <Cell value={`${row.fEpr}%`} highlight={row.fEpr > 55 ? 'pos' : undefined} />
                     </>)}

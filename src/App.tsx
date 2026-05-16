@@ -39,7 +39,9 @@ import {
   Rewind,
   FastForward,
   MapPin,
-  X
+  RefreshCcw,
+  X,
+  Maximize2
 } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
 import {
@@ -56,6 +58,7 @@ import {
   getDoc,
   deleteDoc,
   Timestamp,
+  deleteField,
   serverTimestamp,
   increment,
   writeBatch,
@@ -92,24 +95,74 @@ interface Player {
   createdAt: any;
 }
 
+interface League {
+  id: string;
+  name: string;
+  divisions?: string[];
+  createdAt: any;
+}
+
+export interface Tournament {
+  id: string;
+  name: string;
+  seasonId?: string;
+  leagueId?: string;
+  division?: string;
+  year?: string;
+  startDate?: string;
+  endDate?: string;
+  location?: string;
+  createdAt: any;
+}
 interface Team {
   id: string;
   name: string;
   nickname?: string;
-  colorPrimary?: string;
-  colorDark?: string;
-  colorLight?: string;
+  colorPrimaryDark?: string;
+  colorPrimaryLight?: string;
+  colorAccent?: string;
+  colorPrimary?: string; // legacy
+  colorDark?: string; // legacy
+  colorLight?: string; // legacy
   emails?: string[];
+  leagueId?: string;
+  division?: string;
   [k: string]: any;
 }
 
 interface Season {
   id: string;
   name: string;
-  league?: string;
+  leagueId?: string;
+  division?: string;
   year?: string;
   description?: string;
   createdAt: any;
+}
+
+/** Format a season for display: "<league> <division?> <year>"
+ *  e.g. "MLQ 2024", "USQ Club 2022", "IQA 2023"
+ *  Falls back to season.name if league info is unavailable. */
+function getSeasonDisplayName(
+  season: Season,
+  leagues: League[]
+): string {
+  const league = season.leagueId ? leagues.find(l => l.id === season.leagueId) : null;
+  const parts: string[] = [];
+  
+  if (league) {
+    // Abbreviate: keep short words (≤3 chars like "US") intact, take first letter of longer words
+    // "US Quadball" → "USQ", "Major League Quadball" → "MLQ", "IQA" stays "IQA"
+    const words = league.name.split(/\s+/);
+    const abbrev = words.length > 1
+      ? words.map(w => w.length <= 3 ? w.toUpperCase() : w[0]?.toUpperCase()).join('')
+      : league.name;
+    parts.push(abbrev);
+  }
+  if (season.division) parts.push(season.division);
+  if (season.year) parts.push(season.year);
+  
+  return parts.length > 0 ? parts.join(' ') : (season.name || season.id);
 }
 
 interface Roster {
@@ -177,9 +230,14 @@ interface Game {
   id: string; // Unique Game ID
   isVerified?: boolean;
   seasonId: string;
+  leagueId?: string;
+  division?: string;
+  tournamentId?: string;
+  division?: string;
   homeTeamId: string;
   awayTeamId: string;
   tag?: string;
+  date?: string;
   createdAt: any;
   authorId?: string;
   authorTeamId?: string;
@@ -723,13 +781,21 @@ export const serializeTimestamp = (ts: any): string => {
 // --- Management View ---
 
 interface ManagementViewProps {
+  leagues: League[];
+  tournaments: Tournament[];
   teams: Team[];
   seasons: Season[];
   players: Player[];
   videos: Video[];
   games: Game[];
-  onAddTeam: (name: string) => Promise<string | void | null>;
-  onAddSeason: (name: string, league: string, year: string, description: string) => Promise<string | void | null>;
+  onAddLeague: (name: string, divisions?: string[]) => Promise<string | void | null>;
+  onEditLeague: (id: string, newName: string, newDivisions?: string[]) => Promise<void>;
+  onDeleteLeague: (id: string) => void;
+  onAddTournament: (name: string, leagueId?: string, division?: string, year?: string, startDate?: string, endDate?: string, location?: string) => Promise<string | void | null>;
+  onEditTournament: (id: string, name: string, leagueId?: string, division?: string, year?: string, startDate?: string, endDate?: string, location?: string) => Promise<void>;
+  onDeleteTournament: (id: string) => void;
+  onAddTeam: (name: string, leagueId?: string, division?: string) => Promise<string | void | null>;
+  onAddSeason: (name: string, leagueId: string, division: string | undefined, year: string, description: string) => Promise<string | void | null>;
   onAddPlayer: (firstName: string, lastName: string, preferredName?: string, nickname?: string) => Promise<string | void | null>;
   onAddPlayerToRoster: (rosterId: string, playerId: string, number: string) => void;
   onRemovePlayerFromRoster: (rosterId: string, playerId: string) => void;
@@ -739,7 +805,7 @@ interface ManagementViewProps {
   onDeleteGame: (id: string, tag?: string | null) => void;
   onDeleteVideo: (id: string) => void;
   onDeleteSeason: (id: string) => void;
-  onEditSeason: (id: string, newName: string, newLeague: string, newYear: string, newDescription: string) => Promise<void>;
+  onEditSeason: (id: string, newName: string, newLeagueId: string, newDivision: string | undefined, newYear: string, newDescription: string) => Promise<void>;
   onDeletePlayer: (id: string) => void;
   onEditPlayer: (id: string, newFirst: string, newLast: string) => Promise<void>;
   onDeleteRoster: (id: string) => void;
@@ -753,8 +819,8 @@ interface ManagementViewProps {
   userRoles?: { authors: string[], trusted: string[], moderators: string[] };
 }
 
-function GameEditRow({ game: g, seasons, teams, videos, onDeleteGame, onRefreshData, isAdmin }: {
-  game: any; seasons: any[]; teams: any[]; videos: any[];
+function GameEditRow({ game: g, seasons, teams, videos, leagues, tournaments, onDeleteGame, onRefreshData, isAdmin }: {
+  game: any; seasons: any[]; teams: any[]; videos: any[]; leagues?: any[]; tournaments?: any[];
   onDeleteGame: (id: string, tag?: string | null) => void;
   onRefreshData?: () => void;
   isAdmin?: boolean;
@@ -763,29 +829,74 @@ function GameEditRow({ game: g, seasons, teams, videos, onDeleteGame, onRefreshD
   const [seasonId, setSeasonId] = useState(g.seasonId);
   const [homeTeamId, setHomeTeamId] = useState(g.homeTeamId);
   const [awayTeamId, setAwayTeamId] = useState(g.awayTeamId);
+  const [leagueId, setLeagueId] = useState(g.leagueId || '');
+  const [division, setDivision] = useState(g.division || '');
+  const [tournamentId, setTournamentId] = useState(g.tournamentId || '');
   const [tag, setTag] = useState(g.tag || '');
+  const [date, setDate] = useState(g.date || '');
   const [saving, setSaving] = useState(false);
 
-  const hasChanges = seasonId !== g.seasonId || homeTeamId !== g.homeTeamId || awayTeamId !== g.awayTeamId || tag !== (g.tag || '');
+  const handleTournamentChange = (tId: string) => {
+    setTournamentId(tId);
+    if (!tId) return;
+    const t = tournaments?.find(x => x.id === tId);
+    if (t) {
+      if (t.leagueId) setLeagueId(t.leagueId);
+      if (t.division) setDivision(t.division);
+      const matchedSeason = seasons.find(s => s.leagueId === t.leagueId && s.year === t.year && s.division === t.division);
+      if (matchedSeason) setSeasonId(matchedSeason.id);
+    }
+  };
+
+  const hasChanges = seasonId !== g.seasonId || leagueId !== (g.leagueId || '') || division !== (g.division || '') || tournamentId !== (g.tournamentId || '') || homeTeamId !== g.homeTeamId || awayTeamId !== g.awayTeamId || tag !== (g.tag || '') || date !== (g.date || '');
 
   const handleSave = async () => {
     setSaving(true);
     try {
       // 1. Update the individual game document
-      await updateDoc(doc(db, 'games', g.id), {
-        seasonId, homeTeamId, awayTeamId, tag: tag || null
-      });
+      const updatePayload: any = {
+        homeTeamId, awayTeamId, tag: tag || null, date: date || null, tournamentId: tournamentId || null
+      };
+      
+      if (tournamentId) {
+         updatePayload.seasonId = deleteField();
+         updatePayload.leagueId = deleteField();
+         updatePayload.division = deleteField();
+      } else if (seasonId) {
+         updatePayload.seasonId = seasonId;
+         updatePayload.leagueId = deleteField();
+         updatePayload.division = deleteField();
+      } else {
+         updatePayload.seasonId = deleteField();
+         updatePayload.leagueId = leagueId || null;
+         updatePayload.division = division || null;
+      }
+
+      await updateDoc(doc(db, 'games', g.id), updatePayload);
 
       // 2. Update the aggregated games array safely: read → find by id → replace → write back
       const aggRef = doc(db, 'aggregated', 'games');
       const aggSnap = await getDoc(aggRef);
       if (aggSnap.exists()) {
         const aggData = aggSnap.data().data || [];
-        const updatedAgg = aggData.map((entry: any) =>
-          entry.id === g.id
-            ? { ...entry, seasonId, homeTeamId, awayTeamId, ...(tag ? { tag } : {}) }
-            : entry
-        );
+        const updatedAgg = aggData.map((entry: any) => {
+          if (entry.id !== g.id) return entry;
+          const newEntry = { ...entry, homeTeamId, awayTeamId, tag: tag || null, date: date || null, tournamentId: tournamentId || null };
+          if (tournamentId) {
+             delete newEntry.seasonId;
+             delete newEntry.leagueId;
+             delete newEntry.division;
+          } else if (seasonId) {
+             newEntry.seasonId = seasonId;
+             delete newEntry.leagueId;
+             delete newEntry.division;
+          } else {
+             delete newEntry.seasonId;
+             newEntry.leagueId = leagueId || null;
+             newEntry.division = division || null;
+          }
+          return newEntry;
+        });
         await updateDoc(aggRef, { data: updatedAgg });
       }
 
@@ -830,17 +941,60 @@ function GameEditRow({ game: g, seasons, teams, videos, onDeleteGame, onRefreshD
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-8 gap-3">
         <div className="flex flex-col gap-1">
-          <label className="text-[10px] uppercase font-bold text-gray-400">Season</label>
+          <label className="text-[10px] uppercase font-bold text-gray-400 pl-1">Tournament</label>
           <select
-            value={seasonId}
-            onChange={(e) => setSeasonId(e.target.value)}
-            className={cn("bg-white border rounded p-1.5 text-xs outline-none focus:border-red-500", seasonId !== g.seasonId ? 'border-amber-400 bg-amber-50/30' : 'border-gray-200')}
+            value={tournamentId}
+            onChange={(e) => handleTournamentChange(e.target.value)}
+            className={cn("bg-white border rounded p-1.5 text-xs outline-none focus:border-red-500", tournamentId !== (g.tournamentId || '') ? 'border-amber-400 bg-amber-50/30' : 'border-gray-200')}
           >
-            {seasons.map((s: any) => <option key={s.id} value={s.id}>{s.name || s.id}</option>)}
+            <option value="">None</option>
+            {tournaments?.map((t: any) => <option key={t.id} value={t.id}>{t.division ? `(${t.division}) ` : ''}{t.name}</option>)}
           </select>
         </div>
+        {!tournamentId && (
+          <>
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] uppercase font-bold text-gray-400">Season</label>
+              <select
+                value={seasonId}
+                onChange={(e) => setSeasonId(e.target.value)}
+                className={cn("bg-white border rounded p-1.5 text-xs outline-none focus:border-red-500", seasonId !== g.seasonId ? 'border-amber-400 bg-amber-50/30' : 'border-gray-200')}
+              >
+                {seasons.map((s: any) => <option key={s.id} value={s.id}>{getSeasonDisplayName(s, leagues)}</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] uppercase font-bold text-gray-400 pl-1">League</label>
+              <select
+                value={leagueId}
+                onChange={(e) => {
+                  setLeagueId(e.target.value);
+                  setDivision('');
+                }}
+                className={cn("bg-white border rounded p-1.5 text-xs outline-none focus:border-red-500", leagueId !== (g.leagueId || '') ? 'border-amber-400 bg-amber-50/30' : 'border-gray-200')}
+              >
+                <option value="">None</option>
+                {leagues?.map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] uppercase font-bold text-gray-400 pl-1">Div</label>
+              <select
+                value={division}
+                onChange={(e) => setDivision(e.target.value)}
+                className={cn("bg-white border rounded p-1.5 text-xs outline-none focus:border-red-500", division !== (g.division || '') ? 'border-amber-400 bg-amber-50/30' : 'border-gray-200')}
+              >
+                <option value="">None</option>
+                {leagues?.find(l => l.id === leagueId)?.divisions?.map((d: string) => (
+                  <option key={d} value={d}>{d}</option>
+                ))}
+              </select>
+            </div>
+          </>
+        )}
+
         <div className="flex flex-col gap-1">
           <label className="text-[10px] uppercase font-bold text-gray-400 pl-1">Home Team</label>
           <select
@@ -848,7 +1002,7 @@ function GameEditRow({ game: g, seasons, teams, videos, onDeleteGame, onRefreshD
             onChange={(e) => setHomeTeamId(e.target.value)}
             className={cn("bg-white border rounded p-1.5 text-xs outline-none focus:border-red-500", homeTeamId !== g.homeTeamId ? 'border-amber-400 bg-amber-50/30' : 'border-gray-200')}
           >
-            {teams.map((t: any) => <option key={t.id} value={t.id}>{t.name || t.id}</option>)}
+            {teams.map((t: any) => <option key={t.id} value={t.id}>{t.name || t.id}{t.division ? ` (${t.division})` : ''}</option>)}
           </select>
         </div>
         <div className="flex flex-col gap-1">
@@ -858,7 +1012,7 @@ function GameEditRow({ game: g, seasons, teams, videos, onDeleteGame, onRefreshD
             onChange={(e) => setAwayTeamId(e.target.value)}
             className={cn("bg-white border rounded p-1.5 text-xs outline-none focus:border-red-500", awayTeamId !== g.awayTeamId ? 'border-amber-400 bg-amber-50/30' : 'border-gray-200')}
           >
-            {teams.map((t: any) => <option key={t.id} value={t.id}>{t.name || t.id}</option>)}
+            {teams.map((t: any) => <option key={t.id} value={t.id}>{t.name || t.id}{t.division ? ` (${t.division})` : ''}</option>)}
           </select>
         </div>
         <div className="flex flex-col gap-1">
@@ -869,6 +1023,15 @@ function GameEditRow({ game: g, seasons, teams, videos, onDeleteGame, onRefreshD
             value={tag}
             onChange={(e) => setTag(e.target.value)}
             className={cn("bg-white border rounded p-1.5 text-xs outline-none focus:border-red-500 font-medium w-full", tag !== (g.tag || '') ? 'border-amber-400 bg-amber-50/30' : 'border-gray-200')}
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] uppercase font-bold text-gray-400 pl-1">Date</label>
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            className={cn("bg-white border rounded p-1.5 text-xs outline-none focus:border-red-500 font-medium w-full", date !== (g.date || '') ? 'border-amber-400 bg-amber-50/30' : 'border-gray-200')}
           />
         </div>
       </div>
@@ -883,25 +1046,25 @@ function TeamEditRow({ team: t, onDeleteTeam, onRefreshData }: {
 }) {
   const [name, setName] = useState(t.name || '');
   const [nickname, setNickname] = useState(t.nickname || '');
-  const [colorPrimary, setColorPrimary] = useState(t.colorPrimary || '#dc2626');
-  const [colorDark, setColorDark] = useState(t.colorDark || '#000000');
-  const [colorLight, setColorLight] = useState(t.colorLight || '#ffffff');
+  const [colorPrimaryDark, setColorPrimaryDark] = useState(t.colorPrimaryDark || t.colorPrimary || '#dc2626');
+  const [colorAccent, setColorAccent] = useState(t.colorAccent || t.colorDark || '#000000');
+  const [colorPrimaryLight, setColorPrimaryLight] = useState(t.colorPrimaryLight || t.colorLight || '#ffffff');
   const [emails, setEmails] = useState((t.emails || []).join(', '));
   const [saving, setSaving] = useState(false);
 
   const hasChanges =
     name !== (t.name || '') ||
     nickname !== (t.nickname || '') ||
-    colorPrimary !== (t.colorPrimary || '#dc2626') ||
-    colorDark !== (t.colorDark || '#000000') ||
-    colorLight !== (t.colorLight || '#ffffff') ||
+    colorPrimaryDark !== (t.colorPrimaryDark || t.colorPrimary || '#dc2626') ||
+    colorAccent !== (t.colorAccent || t.colorDark || '#000000') ||
+    colorPrimaryLight !== (t.colorPrimaryLight || t.colorLight || '#ffffff') ||
     emails !== (t.emails || []).join(', ');
 
   const handleSave = async () => {
     setSaving(true);
     try {
       const emailList = emails.split(',').map(e => e.trim()).filter(e => e);
-      const updates: any = { name, nickname: nickname || null, colorPrimary, colorDark, colorLight, emails: emailList };
+      const updates: any = { name, nickname: nickname || null, colorPrimaryDark, colorAccent, colorPrimaryLight, emails: emailList };
 
       await updateDoc(doc(db, 'teams', t.id), updates);
 
@@ -931,9 +1094,9 @@ function TeamEditRow({ team: t, onDeleteTeam, onRefreshData }: {
           <span className="font-bold text-sm text-gray-900">{t.name}</span>
           {t.nickname && <span className="text-[10px] text-gray-400 bg-gray-50 px-2 py-0.5 rounded border border-gray-200">"{t.nickname}"</span>}
           <div className="flex items-center gap-0.5 ml-1">
-            <div className="w-3.5 h-3.5 rounded-sm border border-gray-300 shadow-inner" style={{ backgroundColor: t.colorPrimary || '#dc2626' }} title="Primary" />
-            <div className="w-3.5 h-3.5 rounded-sm border border-gray-300 shadow-inner" style={{ backgroundColor: t.colorDark || '#000000' }} title="Dark" />
-            <div className="w-3.5 h-3.5 rounded-sm border border-gray-300 shadow-inner" style={{ backgroundColor: t.colorLight || '#ffffff' }} title="Light" />
+            <div className="w-3.5 h-3.5 rounded-sm border border-gray-300 shadow-inner" style={{ backgroundColor: t.colorPrimaryDark || t.colorPrimary || '#dc2626' }} title="Primary Dark" />
+            <div className="w-3.5 h-3.5 rounded-sm border border-gray-300 shadow-inner" style={{ backgroundColor: t.colorAccent || t.colorDark || '#000000' }} title="Accent" />
+            <div className="w-3.5 h-3.5 rounded-sm border border-gray-300 shadow-inner" style={{ backgroundColor: t.colorPrimaryLight || t.colorLight || '#ffffff' }} title="Primary Light" />
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -960,16 +1123,16 @@ function TeamEditRow({ team: t, onDeleteTeam, onRefreshData }: {
           <label className="text-[10px] uppercase font-bold text-gray-400">Colors</label>
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-1.5">
-              <input type="color" value={colorPrimary} onChange={(e) => setColorPrimary(e.target.value)} className="w-8 h-8 rounded cursor-pointer border border-gray-200 p-0.5" title="Primary Color" />
-              <span className="text-[10px] text-gray-400 font-medium">Primary</span>
+              <input type="color" value={colorPrimaryDark} onChange={(e) => setColorPrimaryDark(e.target.value)} className="w-8 h-8 rounded cursor-pointer border border-gray-200 p-0.5" title="Primary Dark Color" />
+              <span className="text-[10px] text-gray-400 font-medium">Primary Dark</span>
             </div>
             <div className="flex items-center gap-1.5">
-              <input type="color" value={colorDark} onChange={(e) => setColorDark(e.target.value)} className="w-8 h-8 rounded cursor-pointer border border-gray-200 p-0.5" title="Dark Color" />
-              <span className="text-[10px] text-gray-400 font-medium">Dark</span>
+              <input type="color" value={colorAccent} onChange={(e) => setColorAccent(e.target.value)} className="w-8 h-8 rounded cursor-pointer border border-gray-200 p-0.5" title="Accent Color" />
+              <span className="text-[10px] text-gray-400 font-medium">Accent</span>
             </div>
             <div className="flex items-center gap-1.5">
-              <input type="color" value={colorLight} onChange={(e) => setColorLight(e.target.value)} className="w-8 h-8 rounded cursor-pointer border border-gray-200 p-0.5" title="Light Color" />
-              <span className="text-[10px] text-gray-400 font-medium">Light</span>
+              <input type="color" value={colorPrimaryLight} onChange={(e) => setColorPrimaryLight(e.target.value)} className="w-8 h-8 rounded cursor-pointer border border-gray-200 p-0.5" title="Primary Light Color" />
+              <span className="text-[10px] text-gray-400 font-medium">Primary Light</span>
             </div>
           </div>
         </div>
@@ -982,50 +1145,326 @@ function TeamEditRow({ team: t, onDeleteTeam, onRefreshData }: {
   );
 }
 
+function SeasonEditRow({ season: s, leagues, tournaments, onEditSeason, onDeleteSeason }: any) {
+  const [tournamentId, setTournamentId] = useState(s.tournamentId || '');
+  const [year, setYear] = useState(s.year || '');
+  const [leagueId, setLeagueId] = useState(s.leagueId || '');
+  const [division, setDivision] = useState(s.division || '');
+  const [saving, setSaving] = useState(false);
+
+  const hasChanges = 
+    tournamentId !== (s.tournamentId || '') ||
+    year !== (s.year || '') ||
+    leagueId !== (s.leagueId || '') ||
+    division !== (s.division || '');
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const selectedLeagueName = leagues.find((l: any) => l.id === leagueId)?.name || 'Unknown';
+      const divStr = division.trim() ? ` (${division.trim()})` : '';
+      const newName = `${selectedLeagueName}${divStr} ${year}`;
+      await onEditSeason(s.id, newName, leagueId, division.trim() || undefined, year, tournamentId);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const leagueName = leagues.find((l: any) => l.id === s.leagueId)?.name || 'Unknown';
+
+  return (
+    <div className="p-4 flex flex-col gap-3 hover:bg-gray-50/50 transition-colors group border-b border-gray-100 last:border-0">
+      <div className="flex items-center justify-between border-b border-gray-200/50 pb-2">
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-xs bg-gray-100 px-2 py-1 rounded border border-gray-200 text-gray-600">{s.id}</span>
+          <span className="font-bold text-sm text-gray-900">{getSeasonDisplayName(s, leagues)}</span>
+          <span className="text-[10px] text-gray-400 uppercase">League: {leagueName} | Div: {s.division || 'None'} | Year: {s.year || 'Unknown'}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {hasChanges && (
+            <button onClick={handleSave} disabled={saving} className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-md transition-all shadow-sm flex items-center gap-1.5 text-[10px] uppercase font-bold disabled:opacity-50">
+              <CheckCircle2 className="w-3 h-3" /> {saving ? 'Saving...' : 'Save'}
+            </button>
+          )}
+          <button onClick={() => { if (confirm(`Delete season ${s.name}?`)) onDeleteSeason(s.id); }} className="px-2 py-1 bg-white border border-gray-200 text-gray-400 hover:text-red-500 hover:border-red-500 hover:bg-red-50 rounded-md transition-all shadow-sm flex items-center gap-1 text-[10px] uppercase font-bold">
+            <Trash2 className="w-3 h-3" /> Delete
+          </button>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] uppercase font-bold text-gray-400">Championship Tournament</label>
+          <select value={tournamentId} onChange={(e) => setTournamentId(e.target.value)} className={cn("bg-white border rounded p-1.5 text-xs outline-none focus:border-red-500", tournamentId !== (s.tournamentId || '') ? 'border-amber-400 bg-amber-50/30' : 'border-gray-200')}>
+            <option value="">None</option>
+            {tournaments?.map((t: any) => <option key={t.id} value={t.id}>{t.division ? `(${t.division}) ` : ''}{t.name}</option>)}
+          </select>
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] uppercase font-bold text-gray-400">Year</label>
+          <input type="text" placeholder="e.g. 2024" value={year} onChange={(e) => setYear(e.target.value)} className={cn("bg-white border rounded p-1.5 text-xs outline-none focus:border-red-500 font-medium", year !== (s.year || '') ? 'border-amber-400 bg-amber-50/30' : 'border-gray-200')} />
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] uppercase font-bold text-gray-400">League</label>
+          <select value={leagueId} onChange={(e) => { setLeagueId(e.target.value); setDivision(''); }} className={cn("bg-white border rounded p-1.5 text-xs outline-none focus:border-red-500", leagueId !== (s.leagueId || '') ? 'border-amber-400 bg-amber-50/30' : 'border-gray-200')}>
+            <option value="">None</option>
+            {leagues.map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}
+          </select>
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] uppercase font-bold text-gray-400">Division</label>
+          <select value={division} onChange={(e) => setDivision(e.target.value)} className={cn("bg-white border rounded p-1.5 text-xs outline-none focus:border-red-500", division !== (s.division || '') ? 'border-amber-400 bg-amber-50/30' : 'border-gray-200')}>
+            <option value="">None</option>
+            {leagues.find((l: any) => l.id === leagueId)?.divisions?.map((d: string) => <option key={d} value={d}>{d}</option>)}
+          </select>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PlayerEditRow({
+  player: p,
+  allRosterPlayers,
+  rosters,
+  teams,
+  seasons,
+  leagues: leaguesProp = [],
+  onEditPlayer,
+  onDeletePlayer
+}: {
+  player: any;
+  allRosterPlayers: any[];
+  rosters: any[];
+  teams: any[];
+  seasons: any[];
+  leagues?: any[];
+  onEditPlayer: (id: string, f: string, l: string) => void;
+  onDeletePlayer: (id: string) => void;
+}) {
+  const [firstName, setFirstName] = useState(p.firstName || '');
+  const [lastName, setLastName] = useState(p.lastName || '');
+  const [saving, setSaving] = useState(false);
+
+  const hasChanges = firstName !== (p.firstName || '') || lastName !== (p.lastName || '');
+
+  const pRosters = allRosterPlayers.filter((rp: any) => rp.playerId === p.id);
+
+  return (
+    <div className="p-4 flex flex-col gap-3 hover:bg-gray-50/50 transition-colors group border-b border-gray-100 last:border-0">
+      <div className="flex items-center justify-between border-b border-gray-200/50 pb-2">
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-[10px] bg-gray-100 px-2 py-1 rounded border border-gray-200 text-gray-600">ID: {p.id}</span>
+          <span className="font-bold text-sm text-gray-900">{p.firstName} {p.lastName}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {hasChanges && (
+            <button 
+              onClick={async () => {
+                setSaving(true);
+                await onEditPlayer(p.id, firstName, lastName);
+                setSaving(false);
+              }} 
+              disabled={saving} 
+              className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-md transition-all shadow-sm flex items-center gap-1.5 text-[10px] uppercase font-bold disabled:opacity-50"
+            >
+              <CheckCircle2 className="w-3 h-3" /> {saving ? 'Saving...' : 'Save'}
+            </button>
+          )}
+          <button 
+            onClick={() => { if (confirm(`Delete player ${p.firstName} ${p.lastName}?`)) onDeletePlayer(p.id); }} 
+            className="px-2 py-1 bg-white border border-gray-200 text-gray-400 hover:text-red-500 hover:border-red-500 hover:bg-red-50 rounded-md transition-all shadow-sm flex items-center gap-1 text-[10px] uppercase font-bold"
+          >
+            <Trash2 className="w-3 h-3" /> Delete
+          </button>
+        </div>
+      </div>
+      
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] uppercase font-bold text-gray-400">First Name</label>
+          <input type="text" value={firstName} onChange={(e) => setFirstName(e.target.value)} className={cn("bg-white border rounded p-1.5 text-xs outline-none focus:border-red-500 font-medium", firstName !== (p.firstName || '') ? 'border-amber-400 bg-amber-50/30' : 'border-gray-200')} />
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] uppercase font-bold text-gray-400">Last Name</label>
+          <input type="text" value={lastName} onChange={(e) => setLastName(e.target.value)} className={cn("bg-white border rounded p-1.5 text-xs outline-none focus:border-red-500 font-medium", lastName !== (p.lastName || '') ? 'border-amber-400 bg-amber-50/30' : 'border-gray-200')} />
+        </div>
+      </div>
+
+      {pRosters.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 pt-1">
+          {pRosters.map((rp: any) => {
+            const r = rosters.find((ro: any) => ro.id === rp.rosterId);
+            const t = teams.find((tm: any) => tm.id === r?.teamId);
+            const s = seasons.find((se: any) => se.id === r?.seasonId);
+            if (!t || !s) return null;
+            return (
+              <span key={rp.rosterId} className="text-[10px] bg-amber-50 text-amber-700 px-2 py-0.5 rounded border border-amber-200 font-medium">
+                {t.name} ({getSeasonDisplayName(s, leaguesProp)})
+              </span>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function UnifiedRosterEditor({
-  teams, seasons, players, rosters, rosterPlayers,
+  teams, seasons, players, rosters, rosterPlayers, leagues: leaguesProp = [],
   selectedRosterId, setSelectedRosterId,
   onAddTeam, onAddPlayer, onAddPlayerToRoster, onRemovePlayerFromRoster,
   onCreateRoster, onDeleteRoster
 }: any) {
   const [teamSelection, setTeamSelection] = useState('');
   const [seasonSelection, setSeasonSelection] = useState('');
-  const [newTeamName, setNewTeamName] = useState('');
+  
+  // Upsert Flow State
+  const [searchName, setSearchName] = useState('');
+  const [searchJersey, setSearchJersey] = useState('');
+  const [stagedPlayerId, setStagedPlayerId] = useState<string | null>(null);
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [focusedIndex, setFocusedIndex] = useState(-1);
 
-  const [searchPlayer, setSearchPlayer] = useState('');
-  const [stagedPlayerId, setStagedPlayerId] = useState('');
-  const [stagedPlayerNumber, setStagedPlayerNumber] = useState('');
-
-  const [newPlayerFirst, setNewPlayerFirst] = useState('');
-  const [newPlayerLast, setNewPlayerLast] = useState('');
-  const [newPlayerNumber, setNewPlayerNumber] = useState('');
-  const [newPlayerPreferredName, setNewPlayerPreferredName] = useState('');
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const jerseyInputRef = useRef<HTMLInputElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
   const selectedRoster = rosters.find((r: any) => r.id === selectedRosterId);
 
+  // Compute matching players for the dropdown
+  const matchingPlayers = useMemo(() => {
+    if (!searchName.trim()) return [];
+    const query = searchName.toLowerCase().trim();
+    return players
+      .filter((p: any) => `${p.firstName} ${p.lastName}`.toLowerCase().includes(query))
+      .slice(0, 8);
+  }, [searchName, players]);
+
+  // Handle keyboard navigation in the name input / dropdown
+  const handleNameKeyDown = (e: React.KeyboardEvent) => {
+    if (!isDropdownOpen) return;
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setFocusedIndex(prev => Math.min(prev + 1, matchingPlayers.length)); // +1 for "Create new" option
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setFocusedIndex(prev => Math.max(prev - 1, -1));
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (focusedIndex === matchingPlayers.length) {
+        // "Create new" selected
+        setStagedPlayerId(null);
+        setIsDropdownOpen(false);
+        jerseyInputRef.current?.focus();
+      } else if (focusedIndex >= 0 && focusedIndex < matchingPlayers.length) {
+        // Existing player selected
+        const p = matchingPlayers[focusedIndex];
+        setSearchName(`${p.firstName} ${p.lastName}`);
+        setStagedPlayerId(p.id);
+        setIsDropdownOpen(false);
+        jerseyInputRef.current?.focus();
+      } else if (matchingPlayers.length > 0) {
+         // Default to first match if they hit enter without arrowing
+        const p = matchingPlayers[0];
+        setSearchName(`${p.firstName} ${p.lastName}`);
+        setStagedPlayerId(p.id);
+        setIsDropdownOpen(false);
+        jerseyInputRef.current?.focus();
+      } else {
+        // No matches, implicitly "Create new"
+        setStagedPlayerId(null);
+        setIsDropdownOpen(false);
+        jerseyInputRef.current?.focus();
+      }
+    } else if (e.key === 'Tab') {
+       if (focusedIndex >= 0 && focusedIndex < matchingPlayers.length) {
+          const p = matchingPlayers[focusedIndex];
+          setSearchName(`${p.firstName} ${p.lastName}`);
+          setStagedPlayerId(p.id);
+       } else if (focusedIndex === -1 && matchingPlayers.length > 0) {
+          // Default to first match on tab if nothing selected
+          const p = matchingPlayers[0];
+          setSearchName(`${p.firstName} ${p.lastName}`);
+          setStagedPlayerId(p.id);
+       } else {
+         setStagedPlayerId(null); // Explicitly create new
+       }
+       setIsDropdownOpen(false);
+       // Browser handles moving focus to jersey
+    } else if (e.key === 'Escape') {
+      setIsDropdownOpen(false);
+    }
+  };
+
+  const handleUpsertSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedRoster) return;
+    if (!searchName.trim()) {
+      toast.error('Player name is required');
+      return;
+    }
+
+    let activePlayerId = stagedPlayerId;
+
+    // If no existing player selected, create a new one
+    if (!activePlayerId) {
+      const parts = searchName.trim().split(/\s+/);
+      const fName = parts[0];
+      const lName = parts.slice(1).join(' ');
+      if (!fName || !lName) {
+        toast.error('Please enter both a first and last name to create a new player');
+        nameInputRef.current?.focus();
+        return;
+      }
+      const newId = await onAddPlayer(fName, lName);
+      if (!newId) return; // Error handled inside onAddPlayer
+      activePlayerId = newId;
+      toast.success(`Created new player: ${fName} ${lName}`);
+    }
+
+    // Add to roster
+    await onAddPlayerToRoster(selectedRoster.id, activePlayerId, searchJersey.trim());
+    
+    // Reset and refocus
+    setSearchName('');
+    setSearchJersey('');
+    setStagedPlayerId(null);
+    setFocusedIndex(-1);
+    nameInputRef.current?.focus();
+  };
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node) &&
+          nameInputRef.current && !nameInputRef.current.contains(event.target as Node)) {
+        setIsDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   return (
-    <>
-      <div className="lg:col-span-1 space-y-6">
-        <div className="bg-gray-50 border border-gray-200 rounded-2xl p-6">
-          <h3 className="text-lg font-bold mb-4">Select or Create Roster</h3>
-          <div className="space-y-4">
-            <select className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3" value={teamSelection} onChange={e => setTeamSelection(e.target.value)}>
-              <option value="">-- Select Existing Team --</option>
-              {teams.map((t: any) => <option key={t.id} value={t.id}>{t.name}</option>)}
+    <div className="lg:col-span-3 grid grid-cols-1 lg:grid-cols-3 gap-6 w-full">
+      {/* Left Column: Selector & List */}
+      <div className="lg:col-span-1 flex flex-col gap-6 max-h-[calc(100vh-200px)]">
+        
+        {/* Selector */}
+        <div className="bg-gray-50 border border-gray-200 rounded-2xl p-5 shrink-0">
+          <h3 className="text-base font-bold mb-3">Select / Create Roster</h3>
+          <div className="space-y-3">
+            <select className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-red-500" value={teamSelection} onChange={e => setTeamSelection(e.target.value)}>
+              <option value="">-- Select Team --</option>
+              {teams.map((t: any) => <option key={t.id} value={t.id}>{t.name}{t.division ? ` (${t.division})` : ''}</option>)}
             </select>
-            <div className="flex gap-2 items-center">
-              <span className="text-xs font-bold text-gray-400 uppercase">OR</span>
-              <input placeholder="New Team Name..." className="flex-1 bg-white border border-gray-200 rounded-xl px-3 py-2 text-sm" value={newTeamName} onChange={e => setNewTeamName(e.target.value)} />
-              <button onClick={async () => { if (newTeamName) { const id = await onAddTeam(newTeamName); if (id) setTeamSelection(id); setNewTeamName(''); } }} className="bg-gray-900 hover:bg-black text-white px-3 py-2 rounded-xl text-sm font-bold transition-colors">Add</button>
-            </div>
-
-            <select className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 mt-4" value={seasonSelection} onChange={e => setSeasonSelection(e.target.value)}>
+            <select className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-red-500" value={seasonSelection} onChange={e => setSeasonSelection(e.target.value)}>
               <option value="">-- Select Season --</option>
-              {seasons.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              {seasons.map((s: any) => <option key={s.id} value={s.id}>{getSeasonDisplayName(s, leaguesProp)}</option>)}
             </select>
-
             <button
-              className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2 rounded-lg text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               disabled={!teamSelection || !seasonSelection}
               onClick={async () => {
                 if (teamSelection && seasonSelection) {
@@ -1034,124 +1473,170 @@ function UnifiedRosterEditor({
                 }
               }}
             >
-              Create / Select Roster
+              Select Roster
             </button>
           </div>
         </div>
 
-        <div className="bg-gray-50 border border-gray-200 rounded-2xl overflow-hidden flex flex-col max-h-[500px]">
-          <div className="p-4 bg-gray-100 font-bold border-b border-gray-200 shrink-0">Existing Rosters</div>
+        {/* Existing Rosters List */}
+        <div className="bg-gray-50 border border-gray-200 rounded-2xl overflow-hidden flex flex-col flex-1 min-h-[300px]">
+          <div className="p-3 bg-gray-100 text-sm font-bold border-b border-gray-200 shrink-0">Existing Rosters</div>
           <div className="overflow-y-auto custom-scrollbar flex-1 divide-y divide-gray-200">
             {rosters.map((r: any) => {
               const team = teams.find((t: any) => t.id === r.teamId);
               const season = seasons.find((s: any) => s.id === r.seasonId);
               return (
-                <div key={r.id} className={cn("p-4 flex justify-between items-center cursor-pointer transition-colors group", selectedRosterId === r.id ? "bg-white border-l-4 border-red-500 shadow-sm" : "hover:bg-white")} onClick={() => setSelectedRosterId(r.id)}>
+                <div key={r.id} className={cn("p-3 flex justify-between items-center cursor-pointer transition-colors group text-sm", selectedRosterId === r.id ? "bg-white border-l-4 border-red-500 shadow-sm" : "hover:bg-white")} onClick={() => setSelectedRosterId(r.id)}>
                   <div className={selectedRosterId === r.id ? "-ml-1" : ""}>
-                    <p className="font-bold">{team?.name || 'Unknown Team'}</p>
-                    <p className="text-xs text-gray-500">{season?.name || 'Unknown Season'}</p>
+                    <p className="font-bold text-gray-900">{team?.name || 'Unknown Team'}</p>
+                    <p className="text-xs text-gray-500">{season ? getSeasonDisplayName(season, leaguesProp) : 'Unknown Season'}</p>
                   </div>
-                  <button onClick={(e) => { e.stopPropagation(); if (confirm('Delete roster?')) onDeleteRoster(r.id); }} className="p-2 text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"><XCircle className="w-5 h-5" /></button>
+                  <button onClick={(e) => { e.stopPropagation(); if (confirm('Delete roster?')) onDeleteRoster(r.id); }} className="p-1.5 text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all rounded hover:bg-red-50"><XCircle className="w-4 h-4" /></button>
                 </div>
               )
             })}
-            {rosters.length === 0 && <div className="p-8 text-center text-gray-400">No rosters found.</div>}
+            {rosters.length === 0 && <div className="p-6 text-center text-sm text-gray-400">No rosters found.</div>}
           </div>
         </div>
       </div>
 
-      <div className="lg:col-span-2 space-y-6">
+      {/* Right Column: Editor & Players */}
+      <div className="lg:col-span-2 flex flex-col gap-6 max-h-[calc(100vh-200px)]">
         {selectedRoster ? (
           <>
-            <div className="bg-gray-50 border border-gray-200 rounded-2xl p-6 flex flex-col md:flex-row gap-8">
-              <div className="flex-1 space-y-4">
-                <h3 className="text-lg font-bold flex items-center gap-2"><User className="w-5 h-5 text-red-500" /> Add Existing Player</h3>
-                <div className="relative">
-                  <input placeholder="Search Database..." value={searchPlayer} onChange={e => { setSearchPlayer(e.target.value); setStagedPlayerId(''); }} className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 pl-10 focus:border-red-500 outline-none" />
-                  <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
-                </div>
-                {searchPlayer && !stagedPlayerId && (
-                  <div className="max-h-48 overflow-y-auto custom-scrollbar border border-gray-200 rounded-xl divide-y divide-gray-100 bg-white shadow-lg relative z-10">
-                    {players.filter((p: any) => `${p.firstName} ${p.lastName}`.toLowerCase().includes(searchPlayer.toLowerCase())).slice(0, 10).map((p: any) => (
-                      <div key={p.id} className="w-full text-left px-4 py-2 hover:bg-gray-50 text-sm flex items-center justify-between cursor-pointer" onClick={() => { setStagedPlayerId(p.id); setSearchPlayer(`${p.firstName} ${p.lastName}`); }}>
-                        <span className="font-medium">{p.firstName} {p.lastName}</span>
+            {/* Keyboard Upsert Flow */}
+            <div className="bg-white border-2 border-red-100 rounded-2xl p-5 shadow-sm shrink-0">
+              <h3 className="text-sm font-bold text-red-900 mb-3 flex items-center gap-2 uppercase tracking-wider">
+                <Zap className="w-4 h-4" /> Quick Add Player
+              </h3>
+              
+              <form onSubmit={handleUpsertSubmit} className="flex gap-3 relative">
+                <div className="flex-1 relative">
+                  <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none">
+                    <Search className="h-4 w-4 text-gray-400" />
+                  </div>
+                  <input 
+                    ref={nameInputRef}
+                    type="text"
+                    placeholder="Type name (e.g., John Smith)..." 
+                    value={searchName} 
+                    onChange={e => {
+                      setSearchName(e.target.value);
+                      setStagedPlayerId(null);
+                      setIsDropdownOpen(true);
+                      setFocusedIndex(-1);
+                    }}
+                    onFocus={() => setIsDropdownOpen(true)}
+                    onKeyDown={handleNameKeyDown}
+                    className="w-full bg-gray-50 border border-gray-200 rounded-xl py-3 pl-10 pr-4 outline-none focus:border-red-500 focus:bg-white focus:ring-2 focus:ring-red-100 transition-all font-medium" 
+                  />
+                  
+                  {/* Autocomplete Dropdown */}
+                  {isDropdownOpen && searchName.trim().length > 0 && (
+                    <div ref={dropdownRef} className="absolute z-20 top-full left-0 right-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden divide-y divide-gray-100">
+                      {matchingPlayers.map((p: any, idx: number) => (
+                        <div 
+                          key={p.id} 
+                          onClick={() => {
+                            setSearchName(`${p.firstName} ${p.lastName}`);
+                            setStagedPlayerId(p.id);
+                            setIsDropdownOpen(false);
+                            jerseyInputRef.current?.focus();
+                          }}
+                          className={cn(
+                            "px-4 py-3 cursor-pointer text-sm flex items-center justify-between transition-colors",
+                            focusedIndex === idx ? "bg-red-50" : "hover:bg-gray-50"
+                          )}
+                        >
+                          <span className="font-bold text-gray-900">{p.firstName} {p.lastName}</span>
+                          <span className="text-[10px] uppercase font-bold text-gray-400 bg-gray-100 px-2 py-0.5 rounded">Existing</span>
+                        </div>
+                      ))}
+                      
+                      <div 
+                        onClick={() => {
+                          setStagedPlayerId(null);
+                          setIsDropdownOpen(false);
+                          jerseyInputRef.current?.focus();
+                        }}
+                        className={cn(
+                          "px-4 py-3 cursor-pointer text-sm flex items-center gap-2 transition-colors",
+                          focusedIndex === matchingPlayers.length ? "bg-red-50" : "hover:bg-gray-50"
+                        )}
+                      >
+                        <Plus className="w-4 h-4 text-emerald-500" />
+                        <span className="font-bold text-emerald-700">Create new player: "{searchName}"</span>
                       </div>
-                    ))}
-                    {players.filter((p: any) => `${p.firstName} ${p.lastName}`.toLowerCase().includes(searchPlayer.toLowerCase())).length === 0 && (
-                      <div className="p-4 text-sm text-gray-500 text-center">No players found matching "{searchPlayer}"</div>
-                    )}
-                  </div>
-                )}
-                {stagedPlayerId && (
-                  <div className="space-y-3 mt-4 p-4 border border-red-100 bg-red-50 rounded-xl">
-                    <div className="flex justify-between items-center">
-                      <span className="font-bold text-red-900">{searchPlayer}</span>
-                      <button onClick={() => { setStagedPlayerId(''); setSearchPlayer(''); }} className="text-xs text-red-500 hover:text-red-700 font-bold uppercase tracking-wider">Clear</button>
                     </div>
-                    <input type="text" placeholder="Jersey Number (Optional)" value={stagedPlayerNumber} onChange={e => setStagedPlayerNumber(e.target.value)} className="w-full bg-white border border-red-200 rounded-xl px-4 py-3 font-mono focus:border-red-500 outline-none" />
-                    <button onClick={async () => {
-                      await onAddPlayerToRoster(selectedRoster.id, stagedPlayerId, stagedPlayerNumber);
-                      setStagedPlayerId(''); setSearchPlayer(''); setStagedPlayerNumber('');
-                    }} className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-xl transition-all shadow-md hover:shadow-lg">Add to Roster</button>
-                  </div>
-                )}
-              </div>
-
-              <div className="flex-1 space-y-4 pt-6 md:pt-0 md:pl-8 border-t md:border-t-0 md:border-l border-gray-200 relative">
-                <div className="absolute -top-3 left-1/2 md:-left-3 md:top-1/2 -translate-x-1/2 md:-translate-y-1/2 bg-gray-50 px-2 md:py-2 text-[10px] font-bold text-gray-400 uppercase">OR</div>
-                <h3 className="text-lg font-bold flex items-center gap-2"><Plus className="w-5 h-5 text-gray-500" /> Create New Player</h3>
-                <div className="grid grid-cols-2 gap-3">
-                  <input placeholder="First Name" value={newPlayerFirst} onChange={e => setNewPlayerFirst(e.target.value)} className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 focus:border-gray-500 outline-none" />
-                  <input placeholder="Last Name" value={newPlayerLast} onChange={e => setNewPlayerLast(e.target.value)} className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 focus:border-gray-500 outline-none" />
-                  <input placeholder="Preferred Name (Optional)" value={newPlayerPreferredName ?? ''} onChange={e => setNewPlayerPreferredName(e.target.value)} className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 focus:border-gray-500 outline-none" />
-                  <input type="text" placeholder="Jersey # (Optional)" value={newPlayerNumber} onChange={e => setNewPlayerNumber(e.target.value)} className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 font-mono focus:border-gray-500 outline-none" />
+                  )}
                 </div>
-                <button onClick={async () => {
-                  if (!newPlayerFirst || !newPlayerLast) { alert("Enter first name and last name."); return; }
-                  const newId = await onAddPlayer(newPlayerFirst, newPlayerLast, newPlayerPreferredName || undefined);
-                  if (newId) {
-                    await onAddPlayerToRoster(selectedRoster.id, newId, newPlayerNumber);
-                    setNewPlayerFirst(''); setNewPlayerLast(''); setNewPlayerNumber(''); setNewPlayerPreferredName('');
-                  }
-                }} className="w-full bg-gray-900 text-white font-bold py-3 rounded-xl hover:bg-black transition-all">Create & Add to Roster</button>
+
+                <div className="w-24 relative shrink-0">
+                  <input 
+                    ref={jerseyInputRef}
+                    type="text" 
+                    placeholder="Jersey #" 
+                    value={searchJersey} 
+                    onChange={e => setSearchJersey(e.target.value)}
+                    className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 font-mono outline-none focus:border-red-500 focus:bg-white focus:ring-2 focus:ring-red-100 transition-all text-center" 
+                  />
+                </div>
+
+                <button 
+                  type="submit"
+                  className="bg-red-600 hover:bg-red-700 text-white font-bold px-6 py-3 rounded-xl transition-all shadow-md hover:shadow-lg shrink-0 flex items-center gap-2"
+                >
+                  Save <span className="text-red-200 font-normal text-xs ml-1 font-mono">↵</span>
+                </button>
+              </form>
+              <div className="mt-3 text-[10px] text-gray-400 font-medium flex items-center gap-4">
+                <span><kbd className="bg-gray-100 px-1.5 py-0.5 rounded border border-gray-200">Tab</kbd> to jump between fields</span>
+                <span><kbd className="bg-gray-100 px-1.5 py-0.5 rounded border border-gray-200">↑</kbd> <kbd className="bg-gray-100 px-1.5 py-0.5 rounded border border-gray-200">↓</kbd> to select existing</span>
+                <span><kbd className="bg-gray-100 px-1.5 py-0.5 rounded border border-gray-200">Enter</kbd> to save</span>
               </div>
             </div>
 
-            <div className="bg-gray-50 border border-gray-200 rounded-2xl overflow-hidden flex flex-col max-h-[600px]">
+            {/* Current Roster */}
+            <div className="bg-gray-50 border border-gray-200 rounded-2xl overflow-hidden flex flex-col flex-1">
               <div className="p-4 bg-gray-100 font-bold border-b border-gray-200 flex items-center justify-between shrink-0">
                 <span>Players in Roster</span>
                 <span className="text-xs bg-gray-200 text-gray-600 px-2 py-1 rounded-full">{rosterPlayers.length}</span>
               </div>
               <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3 overflow-y-auto custom-scrollbar flex-1">
                 {rosterPlayers.map((rp: any) => (
-                  <div key={rp.id} className="flex items-center justify-between p-3 bg-white rounded-xl border border-gray-200 group hover:border-gray-300 transition-colors">
+                  <div key={rp.id} className="flex items-center justify-between p-3 bg-white rounded-xl border border-gray-200 group hover:border-gray-300 transition-colors shadow-sm">
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 bg-red-600/10 rounded-lg flex items-center justify-center text-sm font-bold text-red-600 font-mono">
+                      <div className="w-8 h-8 bg-gray-100 rounded-lg flex items-center justify-center text-sm font-bold text-gray-700 font-mono border border-gray-200">
                         {rp.number || '-'}
                       </div>
-                      <span className="font-bold">{rp.player?.firstName} {rp.player?.lastName}</span>
+                      <span className="font-bold text-sm text-gray-900">{rp.player?.firstName} {rp.player?.lastName}</span>
                     </div>
                     <button
                       onClick={() => { if (confirm('Remove player from roster?')) onRemovePlayerFromRoster(selectedRosterId, rp.playerId); }}
-                      className="p-2 text-gray-300 hover:bg-red-50 hover:text-red-500 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
+                      className="p-1.5 text-gray-300 hover:bg-red-50 hover:text-red-500 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
                     >
                       <XCircle className="w-4 h-4" />
                     </button>
                   </div>
                 ))}
-                {rosterPlayers.length === 0 && <p className="col-span-full py-12 text-center text-gray-400">No players currently in this roster.</p>}
+                {rosterPlayers.length === 0 && (
+                  <div className="col-span-full py-12 text-center text-gray-400 flex flex-col items-center">
+                    <User className="w-8 h-8 mb-3 opacity-20" />
+                    <p>No players currently in this roster.</p>
+                  </div>
+                )}
               </div>
             </div>
           </>
         ) : (
-          <div className="bg-gray-50 border border-gray-200 rounded-2xl h-[400px] flex flex-col items-center justify-center text-center text-gray-400 p-12">
+          <div className="bg-gray-50 border border-gray-200 rounded-2xl flex-1 flex flex-col items-center justify-center text-center text-gray-400 p-12">
             <User className="w-16 h-16 mx-auto mb-4 text-gray-200" />
             <p className="text-xl font-bold text-gray-400 mb-2">No Roster Selected</p>
-            <p>Select a roster from the list, or create a new one to start adding players and jersey numbers.</p>
+            <p>Select a roster from the list, or create a new one to start adding players.</p>
           </div>
         )}
       </div>
-    </>
+    </div>
   );
 }
 
@@ -1431,13 +1916,19 @@ function EventsManagementTab({ games, teams, players, videos }: { games: Game[];
 }
 
 function ManagementView({
-
+  leagues,
+  tournaments,
   teams,
-
   seasons,
   players,
   videos,
   games,
+  onAddLeague,
+  onEditLeague,
+  onDeleteLeague,
+  onAddTournament,
+  onEditTournament,
+  onDeleteTournament,
   onAddTeam,
   onAddSeason,
   onAddPlayer,
@@ -1462,16 +1953,29 @@ function ManagementView({
   onAddRole,
   onRemoveRole
 }: ManagementViewProps) {
-  const [activeTab, setActiveTab] = useState<'teams' | 'seasons' | 'players' | 'rosters' | 'games' | 'import' | 'roles' | 'events'>('teams');
+  const [activeTab, setActiveTab] = useState<'leagues' | 'tournaments' | 'teams' | 'seasons' | 'players' | 'rosters' | 'games' | 'import' | 'roles' | 'events'>('teams');
   const [newItemFirstName, setNewItemFirstName] = useState('');
   const [newItemLastName, setNewItemLastName] = useState('');
   const [newPlayerPreferredName, setNewPlayerPreferredName] = useState('');
   const [newPlayerNickname, setNewPlayerNickname] = useState('');
+  
+  // League Creation State
+  const [newLeagueName, setNewLeagueName] = useState('');
+  const [newLeagueDivisionsStr, setNewLeagueDivisionsStr] = useState('');
+  
+  // Tournament Creation State
+  const [newTournamentName, setNewTournamentName] = useState('');
+  const [newTournamentSeasonId, setNewTournamentSeasonId] = useState('');
+  
+  // Team Creation State
+  const [newTeamLeagueId, setNewTeamLeagueId] = useState('');
+  const [newTeamDivision, setNewTeamDivision] = useState('');
 
   // Season Creation State
   const [newSeasonLeague, setNewSeasonLeague] = useState('USQ');
+  const [newSeasonDivision, setNewSeasonDivision] = useState('');
   const [newSeasonYear, setNewSeasonYear] = useState('');
-  const [newSeasonDescription, setNewSeasonDescription] = useState('');
+  const [newSeasonTournamentId, setNewSeasonTournamentId] = useState('');
 
   // Roster Management State
   const [selectedTeamId, setSelectedTeamId] = useState('');
@@ -1479,6 +1983,9 @@ function ManagementView({
   const [rosters, setRosters] = useState<Roster[]>([]);
   const [selectedRosterId, setSelectedRosterId] = useState('');
   const [rosterPlayers, setRosterPlayers] = useState<(RosterPlayer & { player?: Player })[]>([]);
+  const [allRosterPlayers, setAllRosterPlayers] = useState<(RosterPlayer & { rosterId: string })[]>([]);
+
+  const [playerSearchText, setPlayerSearchText] = useState('');
 
   const [searchPlayer, setSearchPlayer] = useState('');
   const [playerNumber, setPlayerNumber] = useState('');
@@ -1494,7 +2001,7 @@ function ManagementView({
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [isImporting, setIsImporting] = useState(false);
   const [importProgress, setImportProgress] = useState(0);
-  const [importType, setImportType] = useState<'stats' | 'players' | 'teams' | 'rosters' | 'videos' | 'local_sim' | 'deduplicator'>('stats');
+  const [importType, setImportType] = useState<'stats' | 'players' | 'teams' | 'rosters' | 'videos' | 'local_sim' | 'deduplicator'>('local_sim');
   const [useLocalSimMode, setUseLocalSimMode] = useState<boolean>(true);
   const [uploadSimToLive, setUploadSimToLive] = useState<boolean>(false);
   const [filterTeamId, setFilterTeamId] = useState('');
@@ -1523,6 +2030,22 @@ function ManagementView({
       }));
     }, (error) => handleFirestoreError(error, OperationType.LIST, `rosters/${selectedRosterId}/players`));
   }, [selectedRosterId, players]);
+
+  useEffect(() => {
+    if (activeTab === 'players') {
+      const q = query(collectionGroup(db, 'players'));
+      return onSnapshot(q, (snap) => {
+        const results: (RosterPlayer & { rosterId: string })[] = [];
+        snap.docs.forEach(doc => {
+          const rosterId = doc.ref.parent.parent?.id;
+          if (rosterId) {
+            results.push({ ...(doc.data() as RosterPlayer), id: doc.id, rosterId });
+          }
+        });
+        setAllRosterPlayers(results);
+      }, (error) => handleFirestoreError(error, OperationType.LIST, 'allRosterPlayers'));
+    }
+  }, [activeTab]);
 
   const getPlayerFullName = (p?: Player) => {
     if (!p) return 'Unknown Player';
@@ -1578,7 +2101,7 @@ function ManagementView({
           </button>
         </div>
         <div className="flex bg-gray-50 p-1 rounded-xl border border-gray-200">
-          {(['search', 'teams', 'seasons', 'players', 'rosters', 'games', 'videos', 'roles', 'events', 'import'] as const).map(tab => (
+          {(['leagues', 'tournaments', 'search', 'teams', 'seasons', 'players', 'rosters', 'games', 'videos', 'roles', 'events', 'import'] as const).map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -1609,68 +2132,25 @@ function ManagementView({
                 </div>
               </div>
 
-              <div className="flex gap-4 mb-8 overflow-x-auto pb-2">
-                {(['stats', 'players', 'teams', 'rosters', 'videos', 'local_sim', 'deduplicator'] as const).map(type => (
-                  <button
-                    key={type}
-                    onClick={() => {
-                      setImportType(type);
-                      setCsvData([]);
-                      setMapping({});
-                    }}
-                    className={cn(
-                      "px-6 py-2 rounded-xl text-sm font-bold capitalize transition-all border whitespace-nowrap",
-                      importType === type
-                        ? "bg-red-600 border-red-500 text-white shadow-lg"
-                        : "bg-white border-gray-200 text-gray-500 hover:text-gray-900"
-                    )}
-                  >
-                    {type}
-                  </button>
-                ))}
-              </div>
-
-              <div className="mb-8 p-6 bg-yellow-50/50 border border-yellow-200 rounded-2xl flex items-center justify-between">
-                <div>
-                  <h4 className="font-bold text-yellow-900">Database Administration</h4>
-                  <p className="text-sm text-yellow-700">Run Migration to consolidate fast-read documents to save on Firebase reads.</p>
-                </div>
-                <button
-                  onClick={async () => {
-                    if (!confirm('Run the Data Aggregation Migration? This will read all players, teams, and seasons and write them to the `aggregated` collection.')) return;
-                    toast.promise(onRunMigration(), {
-                      loading: 'Running migration...',
-                      success: 'Migration complete!',
-                      error: 'Migration failed'
-                    });
+              <div className="mb-6">
+                <select
+                  value={importType}
+                  onChange={e => {
+                    setImportType(e.target.value as any);
+                    setCsvData([]); // Reset when changing type
                   }}
-                  className="px-4 py-2 bg-yellow-600/90 text-white rounded-xl font-bold hover:bg-yellow-700 transition"
+                  className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3"
                 >
-                  Run Migration
-                </button>
+                  <option value="local_sim">Sandbox Local Simulator</option>
+                  <option value="team_roster_builder">Team Roster Builder (CSV)</option>
+                  <option value="deduplicator">Targeted Team Game Extractor</option>
+                  <option value="stats">Legacy: Import Stats</option>
+                  <option value="players">Legacy: Import Players</option>
+                  <option value="teams">Legacy: Import Teams</option>
+                  <option value="rosters">Legacy: Import Rosters</option>
+                  <option value="videos">Legacy: Import Videos</option>
+                </select>
               </div>
-
-              {isAdmin && onBackfillAuthorId && (
-                <div className="mb-8 p-6 bg-orange-50/50 border border-orange-200 rounded-2xl flex items-center justify-between">
-                  <div>
-                    <h4 className="font-bold text-orange-900">Backfill Author ID</h4>
-                    <p className="text-sm text-orange-700">Stamp your user ID as the author on all existing games that don't have one yet.</p>
-                  </div>
-                  <button
-                    onClick={async () => {
-                      if (!confirm('Set yourself as the author of all existing games without an author? This cannot be undone.')) return;
-                      toast.promise(onBackfillAuthorId().then(n => `${n} games updated`), {
-                        loading: 'Backfilling author IDs...',
-                        success: (msg) => msg as string,
-                        error: 'Backfill failed'
-                      });
-                    }}
-                    className="px-4 py-2 bg-orange-600/90 text-white rounded-xl font-bold hover:bg-orange-700 transition"
-                  >
-                    Backfill
-                  </button>
-                </div>
-              )}
 
               {importType === 'deduplicator' ? (
                 <div className="border border-gray-200 rounded-2xl p-8 bg-white shadow-sm">
@@ -1683,7 +2163,7 @@ function ManagementView({
                       onChange={e => setFilterTeamId(e.target.value)}
                     >
                       <option value="">-- Select Team to Extract Games For --</option>
-                      {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                      {teams.map(t => <option key={t.id} value={t.id}>{t.name}{t.division ? ` (${t.division})` : ''}</option>)}
                     </select>
                   </div>
                   <div className={`border-2 border-dashed border-gray-200 rounded-2xl p-12 text-center transition-all group ${filterTeamId ? 'hover:border-red-500/50' : 'opacity-50 cursor-not-allowed'}`}>
@@ -1755,6 +2235,111 @@ function ManagementView({
                       <Database className="w-12 h-12 mx-auto mb-4 text-blue-500 group-hover:text-blue-400 transition-colors" />
                       <p className="text-lg font-bold mb-1">Select Old Events CSV</p>
                       <p className="text-sm text-gray-400">Extracts full games involving this team</p>
+                    </label>
+                  </div>
+                </div>
+              ) : importType === 'team_roster_builder' ? (
+                <div className="border border-gray-200 rounded-2xl p-8 bg-white shadow-sm">
+                  <div className="mb-6">
+                    <h4 className="font-bold text-lg mb-2">Team Roster CSV Builder</h4>
+                    <p className="text-sm text-gray-500 mb-4">Select a season and upload the team's registration sheet. We will automatically create the team (if missing), register the players (if missing), and assign them to the roster with their jersey numbers.</p>
+                    <select
+                      className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 mb-4"
+                      value={selectedSeasonId}
+                      onChange={e => setSelectedSeasonId(e.target.value)}
+                    >
+                      <option value="">-- Select Target Season --</option>
+                      {seasons.map(s => <option key={s.id} value={s.id}>{getSeasonDisplayName(s, leagues)}</option>)}
+                    </select>
+                  </div>
+                  <div className={`border-2 border-dashed border-gray-200 rounded-2xl p-12 text-center transition-all group ${selectedSeasonId ? 'hover:border-emerald-500/50' : 'opacity-50 cursor-not-allowed'}`}>
+                    <input
+                      type="file"
+                      accept=".csv"
+                      className="hidden"
+                      id="csv-roster-builder"
+                      disabled={!selectedSeasonId || isImporting}
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file || !selectedSeasonId) return;
+
+                        setIsImporting(true);
+                        toast.loading("Parsing roster sheet...", { id: 'roster-builder' });
+
+                        Papa.parse(file, {
+                          skipEmptyLines: true,
+                          complete: async (results) => {
+                            try {
+                              const rows = results.data as string[][];
+                              if (rows.length < 3) throw new Error("CSV does not match expected format.");
+                              
+                              const teamName = String(rows[0][1] || '').trim();
+                              if (!teamName) throw new Error("Could not find Team Name in cell B1.");
+                              
+                              // Find or create team
+                              let targetTeamId = teams.find(t => t.name.toLowerCase() === teamName.toLowerCase())?.id;
+                              if (!targetTeamId) {
+                                toast.loading(`Creating team: ${teamName}`, { id: 'roster-builder' });
+                                targetTeamId = await onAddTeam(teamName, '', '') || undefined;
+                                if (!targetTeamId) throw new Error("Failed to create team.");
+                              }
+
+                              // Ensure roster exists
+                              toast.loading(`Ensuring roster exists...`, { id: 'roster-builder' });
+                              let activeRosterId = await onCreateRoster(targetTeamId, selectedSeasonId);
+                              if (!activeRosterId) throw new Error("Failed to create or find roster.");
+
+                              // Process players
+                              let addedCount = 0;
+                              // The header is roughly row 2 (index 2). Data starts index 3.
+                              let dataStartIndex = 3;
+                              for (let i = 0; i < rows.length; i++) {
+                                if (String(rows[i][0]).trim() === 'First Name' || String(rows[i][0]).trim() === 'First Name ') {
+                                  dataStartIndex = i + 1;
+                                  break;
+                                }
+                              }
+
+                              for (let i = dataStartIndex; i < rows.length; i++) {
+                                const row = rows[i];
+                                const fName = String(row[0] || '').trim();
+                                const lName = String(row[1] || '').trim();
+                                const jerseyNum = String(row[2] || '').trim();
+
+                                // Stop processing if we hit "Registered Coach" or empty rows without jersey numbers
+                                if (!jerseyNum || !fName || !lName) {
+                                  continue;
+                                }
+
+                                toast.loading(`Processing ${fName} ${lName}...`, { id: 'roster-builder' });
+                                
+                                // Find or create player
+                                let playerId = players.find(p => p.firstName.toLowerCase() === fName.toLowerCase() && p.lastName.toLowerCase() === lName.toLowerCase())?.id;
+                                if (!playerId) {
+                                  playerId = await onAddPlayer(fName, lName) || undefined;
+                                }
+                                
+                                if (playerId) {
+                                  await onAddPlayerToRoster(activeRosterId, playerId, jerseyNum);
+                                  addedCount++;
+                                }
+                              }
+                              
+                              toast.success(`Roster Builder Complete: Processed ${addedCount} players for ${teamName}.`, { id: 'roster-builder' });
+                            } catch (err: any) {
+                              toast.error(`Roster Build Failed: ${err.message}`, { id: 'roster-builder' });
+                            } finally {
+                              setIsImporting(false);
+                              e.target.value = '';
+                            }
+                          }
+                        });
+                      }}
+                    />
+                    <label htmlFor={selectedSeasonId ? "csv-roster-builder" : ""} className={selectedSeasonId ? "cursor-pointer" : ""}>
+                      <Database className="w-12 h-12 mx-auto mb-4 text-emerald-500 group-hover:text-emerald-400 transition-colors" />
+                      <p className="text-lg font-bold mb-1">Select Roster CSV</p>
+                      <p className="text-sm text-gray-400">Creates teams and rosters automatically</p>
                     </label>
                   </div>
                 </div>
@@ -1844,16 +2429,16 @@ function ManagementView({
                                 // AWAY_SNITCH_CATCH is a mirror of SNITCH_CATCH
                                 // OFFENSE/DEFENSE are bludger-count metadata, not discrete game events
                                 // SWAP is a legacy positional notation
-                                const DROP_TYPES = new Set(['away_snitch_catch', 'offense', 'defense', 'swap', 'seekers_released']);
+                                const DROP_TYPES = new Set(['offense', 'defense', 'swap', 'seekers_released']);
                                 if (DROP_TYPES.has(normType)) return null;
 
                                 // If the raw event specifies away/home, strip it and apply correct team ID
                                 if (normType.startsWith('away_')) {
                                   normType = normType.replace(/^away_/, '');
-                                  if (!resolvedTeamId && gameContext) resolvedTeamId = gameContext.awayTeamId;
+                                  if (gameContext) resolvedTeamId = gameContext.awayTeamId;
                                 } else if (normType.startsWith('home_')) {
                                   normType = normType.replace(/^home_/, '');
-                                  if (!resolvedTeamId && gameContext) resolvedTeamId = gameContext.homeTeamId;
+                                  if (gameContext) resolvedTeamId = gameContext.homeTeamId;
                                 }
 
                                 // Apply user logic for goals without team IDs
@@ -1868,6 +2453,18 @@ function ManagementView({
                                 if (normType === 'gain_control') normType = 'control_change';
                                 if (normType === 'lose_control') return null;
                                 if (normType === 'yellow_card' || normType === 'red_card') normType = 'card';
+                                
+                                if (normType === 'takeaway') {
+                                  normType = 'turnover';
+                                  if (resolvedTeamId === gameContext?.homeTeamId && gameContext?.awayTeamId) {
+                                    resolvedTeamId = gameContext.awayTeamId;
+                                  } else if (resolvedTeamId === gameContext?.awayTeamId && gameContext?.homeTeamId) {
+                                    resolvedTeamId = gameContext.homeTeamId;
+                                  }
+                                  // For takeaway, drop player attribution since we don't know who turned it over
+                                  r.player_id = undefined;
+                                  r.playerId = undefined;
+                                }
 
                                 // Clock event normalization
                                 if (['game_start', 'start_clock', 'clock_start'].includes(normType)) normType = 'gameStart';
@@ -2121,15 +2718,6 @@ function ManagementView({
                     <p className="text-sm text-gray-400">Loads fully in-memory without affecting Firestore</p>
                   </label>
 
-                  <div className="mt-6 inline-flex flex-col items-center justify-center p-4 bg-red-500/5 border border-red-500/20 rounded-xl relative z-20">
-                    <label className="flex items-center gap-3 cursor-pointer group">
-                      <input type="checkbox" checked={uploadSimToLive} onChange={e => setUploadSimToLive(e.target.checked)} className="w-5 h-5 text-red-600 rounded focus:ring-red-500" />
-                      <div className="text-left">
-                        <p className="font-bold text-red-600 group-hover:text-red-500 transition-colors">Upload Directly to Live Firestore</p>
-                        <p className="text-[10px] text-red-500/80 uppercase tracking-widest mt-0.5">WARNING: Overwrites live data & clears events!</p>
-                      </div>
-                    </label>
-                  </div>
 
                   {isImporting && (
                     <div className="mt-8 flex items-center justify-center gap-4">
@@ -3419,6 +4007,7 @@ function ManagementView({
             players={players}
             rosters={rosters}
             rosterPlayers={rosterPlayers}
+            leagues={leagues}
             selectedRosterId={selectedRosterId}
             setSelectedRosterId={setSelectedRosterId}
             onAddTeam={onAddTeam}
@@ -3428,202 +4017,17 @@ function ManagementView({
             onCreateRoster={onCreateRoster}
             onDeleteRoster={onDeleteRoster}
           />
-        ) : (
+        ) : activeTab === 'players' ? (
           <>
-            {/* Creation Form */}
-            <div className="lg:col-span-1 space-y-6">
-              <div className="bg-gray-50 border border-gray-200 rounded-2xl p-6">
-                <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
-                  <Plus className="w-5 h-5 text-red-400" />
-                  {activeTab === 'games' ? 'Track New Video' : `Add New ${activeTab.slice(0, -1)}`}
-                </h3>
-
-                {activeTab === 'games' ? (
-                  <div className="flex flex-col items-center justify-center text-center p-8 bg-gray-100 rounded-xl border border-dashed border-gray-300">
-                    <Activity className="w-12 h-12 text-gray-300 mb-4" />
-                    <p className="text-gray-500 text-sm">Return to the <strong className="text-gray-700 font-bold">Tracker</strong> view and click <strong className="text-red-500 font-bold">Create New Game Link</strong> to add a game.</p>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {activeTab === 'players' ? (
-                      <>
-                        <input
-                          type="text"
-                          placeholder="First Name (Legal/Roster)... *"
-                          className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500"
-                          value={newItemFirstName}
-                          onChange={e => setNewItemFirstName(e.target.value)}
-                        />
-                        <input
-                          type="text"
-                          placeholder="Last Name... *"
-                          className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500"
-                          value={newItemLastName}
-                          onChange={e => setNewItemLastName(e.target.value)}
-                        />
-                        <div className="pt-2 pb-1 text-xs font-semibold text-gray-500 uppercase">Optional Identity Fields</div>
-                        <input
-                          type="text"
-                          placeholder="Preferred First Name"
-                          className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500"
-                          value={newPlayerPreferredName}
-                          onChange={e => setNewPlayerPreferredName(e.target.value)}
-                        />
-                        <input
-                          type="text"
-                          placeholder="Nickname"
-                          className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500"
-                          value={newPlayerNickname}
-                          onChange={e => setNewPlayerNickname(e.target.value)}
-                        />
-                      </>
-                    ) : activeTab === 'seasons' ? (
-                      <>
-                        <select
-                          className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500"
-                          value={newSeasonLeague}
-                          onChange={e => setNewSeasonLeague(e.target.value)}
-                        >
-                          <option value="USQ">USQ</option>
-                          <option value="MLQ">MLQ</option>
-                          <option value="IQA">IQA</option>
-                          <option value="Other">Other</option>
-                        </select>
-                        <input
-                          type="text"
-                          placeholder="Year (e.g., 2024)"
-                          className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500"
-                          value={newSeasonYear}
-                          onChange={e => setNewSeasonYear(e.target.value)}
-                        />
-                        <input type="text"
-                          placeholder="Championship Name (Optional)"
-                          className="w-full p-2 lg:p-3 border border-gray-200 rounded-lg lg:rounded-xl text-sm outline-none focus:border-red-400 focus:ring-1 focus:ring-red-400"
-                          value={newSeasonDescription}
-                          onChange={e => setNewSeasonDescription(e.target.value)}
-                        />
-                      </>
-                    ) : (
-                      <input
-                        type="text"
-                        placeholder={`${activeTab.slice(0, -1)} Name...`}
-                        className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500"
-                        value={newItemFirstName}
-                        onChange={e => setNewItemFirstName(e.target.value)}
-                      />
-                    )}
-                    <button
-                      onClick={() => {
-                        if (activeTab === 'players') {
-                          if (!newItemFirstName || !newItemLastName) return;
-                          onAddPlayer(newItemFirstName, newItemLastName, newPlayerPreferredName, newPlayerNickname);
-                          setNewItemFirstName('');
-                          setNewItemLastName('');
-                          setNewPlayerPreferredName('');
-                          setNewPlayerNickname('');
-                        } else if (activeTab === 'seasons') {
-                          if (!newSeasonLeague || !newSeasonYear) return;
-                          const name = `${newSeasonLeague} ${newSeasonYear}${newSeasonDescription ? ` - ${newSeasonDescription}` : ''}`;
-                          onAddSeason(name, newSeasonLeague, newSeasonYear, newSeasonDescription);
-                          setNewSeasonYear('');
-                          setNewSeasonDescription('');
-                        } else {
-                          if (!newItemFirstName) return;
-                          if (activeTab === 'teams') onAddTeam(newItemFirstName);
-                          setNewItemFirstName('');
-                        }
-                      }}
-                      className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-xl transition-all"
-                    >
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* List View */}
             <div className="lg:col-span-2 space-y-4">
-              <div className="bg-gray-50 border border-gray-200 rounded-2xl overflow-hidden">
-                <div className="p-4 border-b border-gray-200 bg-gray-50/50 flex items-center justify-between">
-                  <h3 className="font-bold capitalize">{activeTab} List</h3>
-                  <span className="text-xs text-gray-400">
-                    {activeTab === 'teams' && teams.length}
-                    {activeTab === 'seasons' && seasons.length}
-                    {activeTab === 'players' && players.length}
-                    {activeTab === 'games' && games.length}
-                    {activeTab === 'videos' && videos.length}
-                    {' items'}
-                  </span>
-                </div>
-
-                <div className="divide-y divide-neutral-800 max-h-[600px] overflow-y-auto custom-scrollbar">
-                  {activeTab === 'teams' && teams.map(t => (
-                    <TeamEditRow
-                      key={t.id}
-                      team={t}
-                      onDeleteTeam={onDeleteTeam}
-                      onRefreshData={onRefreshData}
-                    />
-                  ))}
-                  {activeTab === 'seasons' && seasons.map(s => (
-                    <div key={s.id} className="p-4 flex items-center justify-between hover:bg-gray-200/50 transition-colors group">
-                      <div>
-                        <p className="font-bold">{s.description || s.name}</p>
-                        <p className="text-[10px] text-gray-400 uppercase">League: {s.league || 'Unknown'} | Year: {s.year || 'Unknown'} | ID: {s.id}</p>
-                      </div>
-                      <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-all">
-                        <button
-                          onClick={() => {
-                            const newDesc = prompt(`Edit Championship Name for ${s.name}:`, `${s.description || ''}`);
-                            if (newDesc === null) return;
-                            const newYear = prompt(`Edit Start Year mapping for this season (Used for fallback):`, `${s.year || ''}`);
-                            if (newYear === null) return;
-                            const newName = `${s.league || 'League'} ${newYear}${newDesc.trim() ? ` - ${newDesc.trim()}` : ''}`;
-                            onEditSeason(s.id, newName, s.league || '', newYear, newDesc);
-                          }}
-                          className="p-2 text-gray-400 hover:text-amber-500 rounded-full hover:bg-white"
-                          title="Edit Season"
-                        >
-                          <Edit2 className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => { if (confirm(`Delete season ${s.name}?`)) onDeleteSeason(s.id); }}
-                          className="p-2 text-gray-400 hover:text-red-500 rounded-full hover:bg-white"
-                          title="Delete Season"
-                        >
-                          <XCircle className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                  {activeTab === 'players' && (
-                    <div className="p-3 border-b border-gray-200 bg-amber-50/50 flex items-center gap-2 flex-wrap">
-                      <button
-                        onClick={async () => {
-                          if (!confirm(`Delete ALL ${players.length} players? This cannot be undone.`)) return;
-                          try {
-                            const batchSize = 400;
-                            let deleted = 0;
-                            while (true) {
-                              const snap = await getDocs(query(collection(db, 'players'), limit(batchSize)));
-                              if (snap.empty) break;
-                              const batch = writeBatch(db);
-                              snap.docs.forEach(d => batch.delete(d.ref));
-                              await batch.commit();
-                              deleted += snap.size;
-                            }
-                            toast.success(`Cleared ${deleted} players`);
-                            onRefreshData();
-                          } catch (error) {
-                            handleFirestoreError(error, OperationType.DELETE, 'players');
-                          }
-                        }}
-                        className="px-3 py-1.5 text-xs font-medium bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
-                      >
-                        Clear All Players
-                      </button>
-                      <label className="px-3 py-1.5 text-xs font-medium bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors cursor-pointer">
-                        Upload Players CSV
+              <div className="bg-gray-50 border border-gray-200 rounded-2xl overflow-hidden flex flex-col max-h-[800px]">
+                <div className="p-4 border-b border-gray-200 bg-gray-50/50 flex flex-col gap-3 shrink-0">
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-bold capitalize">Existing Players</h3>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-gray-400 font-medium">{players.length} items</span>
+                      <label className="px-3 py-1.5 text-xs font-medium bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors cursor-pointer border border-gray-300">
+                        Upload CSV
                         <input type="file" accept=".csv" className="hidden" onChange={async (ev) => {
                           const file = ev.target.files?.[0];
                           if (!file) return;
@@ -3654,12 +4058,10 @@ function ManagementView({
                                   const firstName = colFirst ? String(row[colFirst] || '').trim() : '';
                                   const lastName = colLast ? String(row[colLast] || '').trim() : '';
                                   if (!firstName && !lastName) continue;
-                                  // Use CSV's playerId as the Firestore doc ID so it matches event.playerId
                                   const pid = colId ? String(row[colId] || '').trim() : '';
                                   if (pid) {
                                     batch.set(doc(db, 'players', pid), { firstName, lastName, createdAt: serverTimestamp() });
                                   } else {
-                                    // Fallback: generate ID from name
                                     const generatedId = `${firstName}_${lastName}`.toLowerCase().replace(/[^a-z0-9]/g, '_');
                                     batch.set(doc(db, 'players', generatedId), { firstName, lastName, createdAt: serverTimestamp() });
                                   }
@@ -3673,39 +4075,370 @@ function ManagementView({
                           });
                         }} />
                       </label>
-                      <span className="text-[10px] text-gray-400">CSV should have: playerId, firstName, lastName</span>
+                    </div>
+                  </div>
+                  <div className="relative">
+                    <input 
+                      placeholder="Search existing players..." 
+                      value={playerSearchText}
+                      onChange={e => setPlayerSearchText(e.target.value)}
+                      className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 pl-11 focus:border-red-500 outline-none text-sm shadow-sm"
+                    />
+                    <Search className="w-5 h-5 text-gray-400 absolute left-4 top-3" />
+                  </div>
+                </div>
+                <div className="overflow-y-auto custom-scrollbar flex-1 divide-y divide-gray-100 bg-white">
+                  {players
+                    .filter(p => !playerSearchText || `${p.firstName} ${p.lastName}`.toLowerCase().includes(playerSearchText.toLowerCase()))
+                    .map(p => (
+                      <PlayerEditRow
+                        key={p.id}
+                        player={p}
+                        allRosterPlayers={allRosterPlayers}
+                        rosters={rosters}
+                        teams={teams}
+                        seasons={seasons}
+                        leagues={leagues}
+                        onEditPlayer={onEditPlayer}
+                        onDeletePlayer={onDeletePlayer}
+                      />
+                    ))}
+                  {players.filter(p => !playerSearchText || `${p.firstName} ${p.lastName}`.toLowerCase().includes(playerSearchText.toLowerCase())).length === 0 && (
+                    <div className="p-12 text-center text-gray-400 flex flex-col items-center">
+                      <User className="w-8 h-8 mb-2 opacity-50" />
+                      <p>No matching players found.</p>
                     </div>
                   )}
-                  {activeTab === 'players' && players.map(p => (
-                    <div key={p.id} className="p-4 flex items-center justify-between hover:bg-gray-200/50 transition-colors group">
+                </div>
+              </div>
+            </div>
+            
+            <div className="lg:col-span-1 space-y-6">
+              <div className="bg-gray-50 border border-gray-200 rounded-2xl p-6 sticky top-6">
+                <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+                  <Plus className="w-5 h-5 text-red-500" />
+                  Add New Player
+                </h3>
+                <div className="space-y-4">
+                  <input
+                    type="text"
+                    placeholder="First Name (Legal/Roster)... *"
+                    className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500"
+                    value={newItemFirstName}
+                    onChange={e => setNewItemFirstName(e.target.value)}
+                  />
+                  <input
+                    type="text"
+                    placeholder="Last Name... *"
+                    className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500"
+                    value={newItemLastName}
+                    onChange={e => setNewItemLastName(e.target.value)}
+                  />
+                  <div className="pt-2 pb-1 text-xs font-bold text-gray-400 uppercase tracking-wider">Optional Identity Fields</div>
+                  <input
+                    type="text"
+                    placeholder="Preferred First Name"
+                    className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500"
+                    value={newPlayerPreferredName}
+                    onChange={e => setNewPlayerPreferredName(e.target.value)}
+                  />
+                  <input
+                    type="text"
+                    placeholder="Nickname"
+                    className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500"
+                    value={newPlayerNickname}
+                    onChange={e => setNewPlayerNickname(e.target.value)}
+                  />
+                  <button
+                    onClick={() => {
+                      if (!newItemFirstName || !newItemLastName) return;
+                      onAddPlayer(newItemFirstName, newItemLastName, newPlayerPreferredName, newPlayerNickname);
+                      setNewItemFirstName('');
+                      setNewItemLastName('');
+                      setNewPlayerPreferredName('');
+                      setNewPlayerNickname('');
+                    }}
+                    className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-xl transition-all shadow-sm hover:shadow-md"
+                  >
+                    Create Player
+                  </button>
+                </div>
+              </div>
+            </div>
+          </>
+        ) : (
+          <>
+            {/* Creation Form */}
+            <div className="lg:col-span-1 space-y-6">
+              <div className="bg-gray-50 border border-gray-200 rounded-2xl p-6">
+                <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+                  <Plus className="w-5 h-5 text-red-400" />
+                  {activeTab === 'games' ? 'Track New Video' : `Add New ${activeTab.slice(0, -1)}`}
+                </h3>
+
+                {activeTab === 'games' ? (
+                  <div className="flex flex-col items-center justify-center text-center p-8 bg-gray-100 rounded-xl border border-dashed border-gray-300">
+                    <Activity className="w-12 h-12 text-gray-300 mb-4" />
+                    <p className="text-gray-500 text-sm">Return to the <strong className="text-gray-700 font-bold">Tracker</strong> view and click <strong className="text-red-500 font-bold">Create New Game Link</strong> to add a game.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {activeTab === 'seasons' ? (
+                      <>
+                        <select
+                          className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500"
+                          value={newSeasonLeague}
+                          onChange={e => {
+                            setNewSeasonLeague(e.target.value);
+                            setNewSeasonDivision('');
+                          }}
+                        >
+                          <option value="">-- Select League --</option>
+                          {leagues.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                        </select>
+                        {newSeasonLeague && leagues.find(l => l.id === newSeasonLeague)?.divisions?.length ? (
+                          <select
+                            className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500"
+                            value={newSeasonDivision}
+                            onChange={e => setNewSeasonDivision(e.target.value)}
+                          >
+                            <option value="">-- Select Division (Optional) --</option>
+                            {leagues.find(l => l.id === newSeasonLeague)?.divisions?.map(d => (
+                              <option key={d} value={d}>{d}</option>
+                            ))}
+                          </select>
+                        ) : null}
+                        <input
+                          type="text"
+                          placeholder="Year (e.g., 2024)"
+                          className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500"
+                          value={newSeasonYear}
+                          onChange={e => setNewSeasonYear(e.target.value)}
+                        />
+                        <select
+                          className="w-full p-2 lg:p-3 border border-gray-200 rounded-lg lg:rounded-xl text-sm outline-none focus:border-red-400 focus:ring-1 focus:ring-red-400"
+                          value={newSeasonTournamentId}
+                          onChange={e => setNewSeasonTournamentId(e.target.value)}
+                        >
+                          <option value="">-- Championship Tournament (Optional) --</option>
+                          {tournaments.map((t: any) => <option key={t.id} value={t.id}>{t.division ? `(${t.division}) ` : ''}{t.name}</option>)}
+                        </select>
+                      </>
+                    ) : activeTab === 'teams' ? (
+                      <>
+                        <input
+                          type="text"
+                          placeholder="Team Name..."
+                          className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500"
+                          value={newItemFirstName}
+                          onChange={e => setNewItemFirstName(e.target.value)}
+                        />
+                        <select
+                          className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500"
+                          value={newTeamLeagueId}
+                          onChange={e => {
+                            setNewTeamLeagueId(e.target.value);
+                            setNewTeamDivision(''); // Reset division when league changes
+                          }}
+                        >
+                          <option value="">-- Select League (Optional) --</option>
+                          {leagues.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                        </select>
+                        {newTeamLeagueId && leagues.find(l => l.id === newTeamLeagueId)?.divisions?.length ? (
+                          <select
+                            className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500"
+                            value={newTeamDivision}
+                            onChange={e => setNewTeamDivision(e.target.value)}
+                          >
+                            <option value="">-- Select Division (Optional) --</option>
+                            {leagues.find(l => l.id === newTeamLeagueId)?.divisions?.map(d => (
+                              <option key={d} value={d}>{d}</option>
+                            ))}
+                          </select>
+                        ) : null}
+                      </>
+                    ) : activeTab === 'leagues' ? (
+                      <>
+                        <input
+                          type="text"
+                          placeholder="League Name..."
+                          className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500"
+                          value={newLeagueName}
+                          onChange={e => setNewLeagueName(e.target.value)}
+                        />
+                        <input
+                          type="text"
+                          placeholder="Divisions (comma separated, Optional)"
+                          className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500"
+                          value={newLeagueDivisionsStr}
+                          onChange={e => setNewLeagueDivisionsStr(e.target.value)}
+                        />
+                      </>
+                    ) : activeTab === 'tournaments' ? (
+                      <>
+                        <input type="text" placeholder="Tournament Name..." className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500 mb-2" value={newTournamentName} onChange={e => setNewTournamentName(e.target.value)} />
+                        <select className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500 mb-2" value={newTournamentSeasonId} onChange={e => setNewTournamentSeasonId(e.target.value)}>
+                          <option value="">-- Select Season --</option>
+                          {seasons.map(s => <option key={s.id} value={s.id}>{getSeasonDisplayName(s, leagues)}</option>)}
+                        </select>
+                      </>
+                    ) : (
+                      <input
+                        type="text"
+                        placeholder={`${activeTab.slice(0, -1)} Name...`}
+                        className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500"
+                        value={newItemFirstName}
+                        onChange={e => setNewItemFirstName(e.target.value)}
+                      />
+                    )}
+                    <button
+                      onClick={() => {
+                        if (activeTab === 'seasons') {
+                          if (!newSeasonLeague || !newSeasonYear) return;
+                          const selectedLeagueName = leagues.find(l => l.id === newSeasonLeague)?.name || 'Unknown';
+                          const divStr = newSeasonDivision ? ` (${newSeasonDivision})` : '';
+                          const name = `${selectedLeagueName}${divStr} ${newSeasonYear}`;
+                          onAddSeason(name, newSeasonLeague, newSeasonDivision || undefined, newSeasonYear, newSeasonTournamentId);
+                          setNewSeasonYear('');
+                          setNewSeasonTournamentId('');
+                          setNewSeasonDivision('');
+                        } else if (activeTab === 'teams') {
+                          if (!newItemFirstName) return;
+                          onAddTeam(newItemFirstName, newTeamLeagueId || undefined, newTeamDivision || undefined);
+                          setNewItemFirstName('');
+                          setNewTeamLeagueId('');
+                          setNewTeamDivision('');
+                        } else if (activeTab === 'tournaments') {
+                          if (!newTournamentName || !newTournamentSeasonId) return;
+                          onAddTournament(newTournamentName, newTournamentSeasonId);
+                          setNewTournamentName('');
+                          setNewTournamentSeasonId('');
+                        } else if (activeTab === 'leagues') {
+                          if (!newLeagueName) return;
+                          const divs = newLeagueDivisionsStr.split(',').map(s => s.trim()).filter(Boolean);
+                          onAddLeague(newLeagueName, divs.length > 0 ? divs : undefined);
+                          setNewLeagueName('');
+                          setNewLeagueDivisionsStr('');
+                        } else {
+                          if (!newItemFirstName) return;
+                          setNewItemFirstName('');
+                        }
+                      }}
+                      className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-xl transition-all"
+                    >
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* List View */}
+            <div className="lg:col-span-2 space-y-4">
+              <div className="bg-gray-50 border border-gray-200 rounded-2xl overflow-hidden">
+                <div className="p-4 border-b border-gray-200 bg-gray-50/50 flex items-center justify-between">
+                  <h3 className="font-bold capitalize">{activeTab} List</h3>
+                  <span className="text-xs text-gray-400">
+                    {activeTab === 'leagues' && leagues.length}
+                    {activeTab === 'tournaments' && tournaments.length}
+                    {activeTab === 'teams' && teams.length}
+                    {activeTab === 'seasons' && seasons.length}
+                    {activeTab === 'games' && games.length}
+                    {activeTab === 'videos' && videos.length}
+                    {' items'}
+                  </span>
+                </div>
+
+                <div className="divide-y divide-neutral-800 max-h-[600px] overflow-y-auto custom-scrollbar">
+                  {activeTab === 'leagues' && leagues.map(l => (
+                    <div key={l.id} className="p-4 flex items-center justify-between hover:bg-gray-200/50 transition-colors group border-b border-gray-100 last:border-0">
                       <div>
-                        <p className="font-bold">{p.firstName} {p.lastName}</p>
-                        <p className="text-[10px] text-gray-400 uppercase">ID: {p.id}</p>
+                        <p className="font-bold">{l.name}</p>
+                        <p className="text-[10px] text-gray-400 uppercase">Divisions: {l.divisions?.join(', ') || 'None'} | ID: {l.id}</p>
                       </div>
                       <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-all">
                         <button
                           onClick={() => {
-                            const newRawName = prompt(`Edit name for ${p.firstName} ${p.lastName} (First Last):`, `${p.firstName} ${p.lastName}`);
-                            if (!newRawName) return;
-                            const parts = newRawName.trim().split(' ');
-                            const newFirst = parts[0] || '';
-                            const newLast = parts.slice(1).join(' ') || '';
-                            onEditPlayer(p.id, newFirst, newLast);
+                            const newName = prompt(`Edit Name for ${l.name}:`, `${l.name}`);
+                            if (!newName) return;
+                            const newDivs = prompt(`Edit Divisions (comma separated):`, `${l.divisions?.join(', ') || ''}`);
+                            if (newDivs === null) return;
+                            const divArr = newDivs.split(',').map(d => d.trim()).filter(Boolean);
+                            onEditLeague(l.id, newName, divArr.length > 0 ? divArr : undefined);
                           }}
-                          className="p-2 text-gray-400 hover:text-blue-500 rounded-full hover:bg-white"
-                          title="Edit Player"
+                          className="p-2 text-gray-400 hover:text-amber-500 rounded-full hover:bg-white"
+                          title="Edit League"
                         >
                           <Edit2 className="w-4 h-4" />
                         </button>
                         <button
-                          onClick={() => { if (confirm(`Delete player ${p.firstName} ${p.lastName}?`)) onDeletePlayer(p.id); }}
+                          onClick={() => { if (confirm(`Delete league ${l.name}?`)) onDeleteLeague(l.id); }}
                           className="p-2 text-gray-400 hover:text-red-500 rounded-full hover:bg-white"
-                          title="Delete Player"
+                          title="Delete League"
                         >
                           <XCircle className="w-4 h-4" />
                         </button>
                       </div>
                     </div>
+                  ))}
+                  {activeTab === 'tournaments' && tournaments.map(t => (
+                    <div key={t.id} className="p-4 flex items-center justify-between hover:bg-gray-200/50 transition-colors group border-b border-gray-100 last:border-0">
+                      <div>
+                        <p className="font-bold">{t.name}</p>
+                        <p className="text-[10px] text-gray-400 uppercase">Year: {t.year || 'N/A'} | League: {t.leagueId ? leagues.find(l => l.id === t.leagueId)?.name : 'None'} | Div: {t.division || 'None'} | ID: {t.id}</p>
+                      </div>
+                      <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-all">
+                        <button
+                          onClick={() => {
+                            const newName = prompt(`Edit Name for ${t.name}:`, `${t.name}`);
+                            if (!newName) return;
+                            
+                            // Native prompt doesn't easily support dropdowns, so we'll leave it simple for now,
+                            // or allow them to paste the season ID, but practically, we should find a better UI later.
+                            // For now, prompt for the exact Season ID (since they can copy it from the UI or just use the Add form).
+                            const currentSeasonStr = seasons.find(s => s.id === t.seasonId)?.name || 'None';
+                            const newSeasonName = prompt(`Edit Season for ${t.name} (Type exact Season Name below or cancel to keep ${currentSeasonStr}):`, `${currentSeasonStr}`);
+                            
+                            let newSeasonId = t.seasonId;
+                            if (newSeasonName && newSeasonName !== currentSeasonStr) {
+                               const matched = seasons.find(s => s.name.toLowerCase() === newSeasonName.toLowerCase());
+                               if (matched) newSeasonId = matched.id;
+                               else {
+                                  alert(`Could not find a season perfectly matching "${newSeasonName}". Season unchanged.`);
+                               }
+                            }
+                            onEditTournament(t.id, newName, newSeasonId || '');
+                          }}
+                          className="p-2 text-gray-400 hover:text-amber-500 rounded-full hover:bg-white"
+                          title="Edit Tournament"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => { if (confirm(`Delete tournament ${t.name}?`)) onDeleteTournament(t.id); }}
+                          className="p-2 text-gray-400 hover:text-red-500 rounded-full hover:bg-white"
+                          title="Delete Tournament"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  {activeTab === 'teams' && teams.map(t => (
+                    <TeamEditRow
+                      key={t.id}
+                      team={t}
+                      onDeleteTeam={onDeleteTeam}
+                      onRefreshData={onRefreshData}
+                    />
+                  ))}
+                  {activeTab === 'seasons' && seasons.map(s => (
+                    <SeasonEditRow
+                      key={s.id}
+                      season={s}
+                      leagues={leagues}
+                      onEditSeason={onEditSeason}
+                      onDeleteSeason={onDeleteSeason}
+                    />
                   ))}
                   {activeTab === 'games' && [...games].sort((a, b) => new Date(serializeTimestamp(b.createdAt)).getTime() - new Date(serializeTimestamp(a.createdAt)).getTime()).map(g => (
                     <GameEditRow
@@ -3714,6 +4447,8 @@ function ManagementView({
                       seasons={seasons}
                       teams={teams}
                       videos={videos}
+                      leagues={leagues}
+                      tournaments={tournaments}
                       onDeleteGame={onDeleteGame}
                       onRefreshData={onRefreshData}
                       isAdmin={isAdmin}
@@ -3929,14 +4664,34 @@ const getPlayerShortName = (p: Player | undefined | null, rosterPool: { player?:
 };
 
 function CreateView({
-  teams, seasons, players,
+  teams, seasons, players, leagues, tournaments,
+  searchQuery, setSearchQuery, newVideoData, setNewVideoData, isAddingGame, setIsAddingGame, onAddGame,
   onAddTeam, onAddPlayer, onAddPlayerToRoster, onRemovePlayerFromRoster,
-  onCreateRoster, onDeleteRoster
+  onCreateRoster, onDeleteRoster, onEditPlayer, onDeletePlayer
 }: any) {
-  const [activeTab, setActiveTab] = useState<'rosters' | 'teams' | 'players'>('rosters');
+  const [activeTab, setActiveTab] = useState<'rosters' | 'teams' | 'players' | 'games'>('rosters');
   const [selectedRosterId, setSelectedRosterId] = useState('');
   const [rosters, setRosters] = useState<Roster[]>([]);
   const [rosterPlayers, setRosterPlayers] = useState<(RosterPlayer & { player?: Player })[]>([]);
+  const [allRosterPlayers, setAllRosterPlayers] = useState<(RosterPlayer & { rosterId: string })[]>([]);
+  const [playerSearchText, setPlayerSearchText] = useState('');
+
+  useEffect(() => {
+    if (activeTab === 'players') {
+      const q = query(collectionGroup(db, 'players'));
+      return onSnapshot(q, (snap) => {
+        const results: (RosterPlayer & { rosterId: string })[] = [];
+        snap.docs.forEach(doc => {
+          const rosterId = doc.ref.parent.parent?.id;
+          if (rosterId) {
+            results.push({ ...(doc.data() as RosterPlayer), id: doc.id, rosterId });
+          }
+        });
+        setAllRosterPlayers(results);
+      });
+    }
+  }, [activeTab]);
+
 
   useEffect(() => {
     const q = query(collection(db, 'rosters'));
@@ -3958,12 +4713,14 @@ function CreateView({
     });
   }, [selectedRosterId, players]);
 
+
+
   return (
     <div className="space-y-8 -mx-4 px-4 -mt-8 pt-6 pb-8 min-h-[80vh]">
       <div className="flex items-center justify-between">
         <h2 className="text-3xl font-bold">Moderator - Creation Tools</h2>
         <div className="flex bg-gray-50 p-1 rounded-xl border border-gray-200">
-          {(['rosters', 'teams', 'players'] as const).map(tab => (
+          {(['rosters', 'teams', 'players', 'games'] as const).map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -3985,6 +4742,7 @@ function CreateView({
           players={players}
           rosters={rosters}
           rosterPlayers={rosterPlayers}
+          leagues={leagues}
           selectedRosterId={selectedRosterId}
           setSelectedRosterId={setSelectedRosterId}
           onAddTeam={onAddTeam}
@@ -4002,35 +4760,252 @@ function CreateView({
             e.preventDefault();
             const data = new FormData(e.target as HTMLFormElement);
             const teamName = data.get('teamName')?.toString().trim();
+            const league = data.get('league')?.toString().trim();
+            const division = data.get('division')?.toString().trim();
             if (teamName) {
-              await onAddTeam(teamName);
+              await onAddTeam(teamName, league, division);
               (e.target as HTMLFormElement).reset();
             }
-          }} className="flex gap-4">
-            <input name="teamName" type="text" placeholder="Austin Outlaws..." required className="flex-1 w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3" />
-            <button type="submit" className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold transition-colors hover:bg-red-700">Add Team</button>
+          }} className="flex flex-col gap-4">
+            <input name="teamName" type="text" placeholder="Team Name (e.g., Austin Outlaws)..." required className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3" />
+            <div className="flex gap-4">
+              <input name="league" type="text" placeholder="League (e.g., USQ)..." className="flex-1 w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3" />
+              <input name="division" type="text" placeholder="Division (e.g., College)..." className="flex-1 w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3" />
+            </div>
+            <button type="submit" className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold transition-colors hover:bg-red-700 w-full">Add Team</button>
           </form>
         </div>
-      ) : (
-        <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm max-w-xl">
-          <h3 className="text-xl font-bold mb-4">Create Global Player</h3>
-          <p className="text-sm text-gray-500 mb-6">Add a player to the global database. Ensure they don't already exist first!</p>
-          <form onSubmit={async (e) => {
-            e.preventDefault();
-            const data = new FormData(e.target as HTMLFormElement);
-            const fName = data.get('firstName')?.toString().trim();
-            const lName = data.get('lastName')?.toString().trim();
-            if (fName && lName) {
-              await onAddPlayer(fName, lName);
-              (e.target as HTMLFormElement).reset();
-            }
-          }} className="space-y-4">
-            <input name="firstName" type="text" placeholder="First Name..." required className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3" />
-            <input name="lastName" type="text" placeholder="Last Name..." required className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3" />
-            <button type="submit" className="w-full bg-red-600 text-white px-4 py-3 rounded-xl font-bold transition-colors hover:bg-red-700">Add Player</button>
+      ) : activeTab === 'players' ? (
+        <div className="grid lg:grid-cols-3 gap-8">
+            <div className="lg:col-span-2 space-y-4">
+              <div className="bg-gray-50 border border-gray-200 rounded-2xl overflow-hidden flex flex-col max-h-[800px]">
+                <div className="p-4 border-b border-gray-200 bg-gray-50/50 flex flex-col gap-3 shrink-0">
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-bold capitalize">Existing Players</h3>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-gray-400 font-medium">{players.length} items</span>
+                    </div>
+                  </div>
+                  <div className="relative">
+                    <input 
+                      placeholder="Search existing players..." 
+                      value={playerSearchText}
+                      onChange={e => setPlayerSearchText(e.target.value)}
+                      className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 pl-11 focus:border-red-500 outline-none text-sm shadow-sm"
+                    />
+                    <Search className="w-5 h-5 text-gray-400 absolute left-4 top-3" />
+                  </div>
+                </div>
+                <div className="overflow-y-auto custom-scrollbar flex-1 divide-y divide-gray-100 bg-white">
+                  {players
+                    .filter((p: any) => !playerSearchText || `${p.firstName} ${p.lastName}`.toLowerCase().includes(playerSearchText.toLowerCase()))
+                    .map((p: any) => (
+                      <PlayerEditRow
+                        key={p.id}
+                        player={p}
+                        allRosterPlayers={allRosterPlayers}
+                        rosters={rosters}
+                        teams={teams}
+                        seasons={seasons}
+                        leagues={leagues}
+                        onEditPlayer={onEditPlayer}
+                        onDeletePlayer={onDeletePlayer}
+                      />
+                    ))
+                  }
+                  {players.filter((p: any) => !playerSearchText || `${p.firstName} ${p.lastName}`.toLowerCase().includes(playerSearchText.toLowerCase())).length === 0 && (
+                    <div className="p-12 text-center text-gray-400 flex flex-col items-center">
+                      <User className="w-8 h-8 mb-2 opacity-50" />
+                      <p>No matching players found.</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+            
+            <div className="lg:col-span-1 space-y-6">
+              <div className="bg-gray-50 border border-gray-200 rounded-2xl p-6 sticky top-6">
+                <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+                  <Plus className="w-5 h-5 text-red-500" />
+                  Add New Player
+                </h3>
+                <form onSubmit={async (e) => {
+                  e.preventDefault();
+                  const data = new FormData(e.target as HTMLFormElement);
+                  const fName = data.get('firstName')?.toString().trim();
+                  const lName = data.get('lastName')?.toString().trim();
+                  const pName = data.get('preferredName')?.toString().trim();
+                  const nName = data.get('nickname')?.toString().trim();
+                  if (fName && lName) {
+                    await onAddPlayer(fName, lName, pName, nName);
+                    (e.target as HTMLFormElement).reset();
+                  }
+                }} className="space-y-4">
+                  <input
+                    name="firstName"
+                    type="text"
+                    placeholder="First Name (Legal/Roster)... *"
+                    required
+                    className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500"
+                  />
+                  <input
+                    name="lastName"
+                    type="text"
+                    placeholder="Last Name... *"
+                    required
+                    className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500"
+                  />
+                  <div className="pt-2 pb-1 text-xs font-bold text-gray-400 uppercase tracking-wider">Optional Identity Fields</div>
+                  <input
+                    name="preferredName"
+                    type="text"
+                    placeholder="Preferred First Name"
+                    className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500"
+                  />
+                  <input
+                    name="nickname"
+                    type="text"
+                    placeholder="Nickname"
+                    className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500"
+                  />
+                  <button
+                    type="submit"
+                    className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-xl transition-all shadow-sm hover:shadow-md"
+                  >
+                    Create Player
+                  </button>
+                </form>
+              </div>
+            </div>
+        </div>
+      ) : activeTab === 'games' ? (
+        <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm max-w-2xl mx-auto">
+          <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
+            <Plus className="w-5 h-5 text-red-500" />
+            Add New Game
+          </h3>
+          <p className="text-sm text-gray-500 mb-6">Create a new game by providing a YouTube URL and game metadata.</p>
+          <form onSubmit={onAddGame} className="space-y-4">
+            <input
+              type="text"
+              placeholder="YouTube URL or Video ID... *"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              required
+              className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 focus:border-red-500 outline-none"
+            />
+            <div className="grid grid-cols-2 gap-4">
+              <select
+                value={newVideoData.homeTeamId}
+                onChange={(e) => setNewVideoData({ ...newVideoData, homeTeamId: e.target.value })}
+                required
+                className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 focus:border-red-500 outline-none"
+              >
+                <option value="">Select Home Team... *</option>
+                {teams.map((t: any) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+              <select
+                value={newVideoData.awayTeamId}
+                onChange={(e) => setNewVideoData({ ...newVideoData, awayTeamId: e.target.value })}
+                required
+                className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 focus:border-red-500 outline-none"
+              >
+                <option value="">Select Away Team... *</option>
+                {teams.map((t: any) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            </div>
+            
+            <div className="grid grid-cols-2 gap-4">
+              <select
+                value={newVideoData.leagueId || ''}
+                onChange={(e) => setNewVideoData({ ...newVideoData, leagueId: e.target.value, division: '' })}
+                className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 focus:border-red-500 outline-none"
+              >
+                <option value="">Select League (Optional)...</option>
+                {leagues.map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}
+              </select>
+              
+              {newVideoData.leagueId && leagues.find((l: any) => l.id === newVideoData.leagueId)?.divisions ? (
+                <select
+                  value={newVideoData.division || ''}
+                  onChange={(e) => setNewVideoData({ ...newVideoData, division: e.target.value })}
+                  className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 focus:border-red-500 outline-none"
+                >
+                  <option value="">Select Division (Optional)...</option>
+                  {leagues.find((l: any) => l.id === newVideoData.leagueId)?.divisions?.map((d: string) => (
+                    <option key={d} value={d}>{d}</option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  placeholder="Division (Optional)..."
+                  value={newVideoData.division || ''}
+                  onChange={(e) => setNewVideoData({ ...newVideoData, division: e.target.value })}
+                  className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 focus:border-red-500 outline-none"
+                />
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <select
+                value={newVideoData.seasonId || ''}
+                onChange={(e) => setNewVideoData({ ...newVideoData, seasonId: e.target.value })}
+                className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 focus:border-red-500 outline-none"
+              >
+                <option value="">Select Season (Optional)...</option>
+                {seasons.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+              
+              <select
+                value={newVideoData.tournamentId || ''}
+                onChange={(e) => setNewVideoData({ ...newVideoData, tournamentId: e.target.value })}
+                className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 focus:border-red-500 outline-none"
+              >
+                <option value="">Select Tournament (Optional)...</option>
+                {tournaments.map((t: any) => (
+                  <option key={t.id} value={t.id}>
+                    {t.year ? `${t.year} ` : ''}{t.name}{t.division ? ` (${t.division})` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+            
+            <div className="grid grid-cols-2 gap-4">
+              <input
+                type="date"
+                value={newVideoData.date || ''}
+                onChange={(e) => setNewVideoData({ ...newVideoData, date: e.target.value })}
+                className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 focus:border-red-500 outline-none"
+              />
+              <input
+                type="text"
+                placeholder="Game Tag (e.g. Finals)..."
+                value={newVideoData.tag || ''}
+                onChange={(e) => setNewVideoData({ ...newVideoData, tag: e.target.value })}
+                className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 focus:border-red-500 outline-none"
+              />
+            </div>
+            
+            <input
+              type="text"
+              placeholder="Override Game ID (Optional, for advanced use)..."
+              value={newVideoData.gameId || ''}
+              onChange={(e) => setNewVideoData({ ...newVideoData, gameId: e.target.value })}
+              className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-xs font-mono focus:border-red-500 outline-none"
+            />
+            
+            <button
+              type="submit"
+              disabled={isAddingGame}
+              className="w-full bg-red-600 text-white font-bold py-3 rounded-xl transition-all hover:bg-red-700 disabled:opacity-50"
+            >
+              {isAddingGame ? 'Adding Game...' : 'Add Game'}
+            </button>
           </form>
         </div>
-      )}
+      ) : null}
+
     </div>
   );
 }
@@ -4063,7 +5038,9 @@ export default function App() {
 
   // Global Data
   const [allPlayers, setAllPlayers] = useState<Player[]>([]);
+  const [leagues, setLeagues] = useState<League[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
+  const [tournaments, setTournaments] = useState<Tournament[]>([]);
   const [seasons, setSeasons] = useState<Season[]>([]);
 
   // Roster Data for current video
@@ -4072,6 +5049,8 @@ export default function App() {
   const [manualActivePlayerIds, setManualActivePlayerIds] = useState<Set<string>>(new Set());
 
   const [player, setPlayer] = useState<any>(null);
+  const [isVideoPlaying, setIsVideoPlaying] = useState(false);
+  const [isExpandedLayout, setIsExpandedLayout] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const hasAutoSeekedRef = useRef<boolean>(false);
   const [isAuthReady, setIsAuthReady] = useState(false);
@@ -4124,10 +5103,26 @@ export default function App() {
     });
   };
 
+  // Stats Filter State
+  const [statsSubView, setStatsSubView] = useState<'quadball' | 'beaters' | 'seekers' | 'gamecast'>('quadball');
+  const [statsFilter, setStatsFilter] = useState<'all' | 'verified' | 'verified_events'>('all');
+  const [statsTeamIds, setStatsTeamIds] = useState<string[]>([]);
+  const [statsSearch, setStatsSearch] = useState<string>('');
+  const [statsMinGames, setStatsMinGames] = useState<number>(1);
+  const [bludgerControlMode, setBludgerControlMode] = useState<'all' | 'separate'>('all');
+  const [statsFlagFilter, setStatsFlagFilter] = useState<'all' | 'on' | 'off'>('all');
+  const [statsPositionFilter, setStatsPositionFilter] = useState<'all' | 'chaser' | 'keeper'>('all');
+  const [statsSelectedYears, setStatsSelectedYears] = useState<string[]>([]);
+  const [statsLeagueDivs, setStatsLeagueDivs] = useState<string[]>([]);
+  const [statsTournamentIds, setStatsTournamentIds] = useState<string[]>([]);
+
   // URL Deep Linking / Routing Sync
   useEffect(() => {
     const handleHashChange = () => {
-      const hash = window.location.hash;
+      const hashFull = window.location.hash;
+      const [hash, queryString] = hashFull.split('?');
+      const params = new URLSearchParams(queryString || '');
+
       if (hash.startsWith('#/game/')) {
         setActiveGameId(hash.replace('#/game/', ''));
         setView('gameProfile');
@@ -4139,6 +5134,17 @@ export default function App() {
         setView('playerProfile');
       } else if (hash === '#/stats' || hash === '') {
         setView('stats');
+        setStatsSubView((params.get('sport') as any) || 'quadball');
+        setStatsLeagueDivs(params.has('leagues') ? params.get('leagues')!.split(',').filter(Boolean) : []);
+        setStatsSelectedYears(params.has('years') ? params.get('years')!.split(',').filter(Boolean) : []);
+        setStatsTournamentIds(params.has('events') ? params.get('events')!.split(',').filter(Boolean) : []);
+        setStatsTeamIds(params.has('teams') ? params.get('teams')!.split(',').filter(Boolean) : []);
+        setStatsFilter((params.get('verify') as any) || 'all');
+        setStatsPositionFilter((params.get('pos') as any) || 'all');
+        setBludgerControlMode((params.get('bc') as any) || 'all');
+        setStatsFlagFilter((params.get('flag') as any) || 'all');
+        setStatsMinGames(parseInt(params.get('minGP') || '1') || 1);
+        setStatsSearch(params.get('q') || '');
       } else if (hash.startsWith('#/')) {
         const route = hash.replace('#/', '') as ViewState;
         if (['tracker', 'video', 'manage', 'create', 'review', 'help'].includes(route)) {
@@ -4157,18 +5163,39 @@ export default function App() {
     if (view === 'gameProfile' && activeGameId) newHash = `#/game/${activeGameId}`;
     else if (view === 'teamProfile' && activeTeamId) newHash = `#/team/${activeTeamId}`;
     else if (view === 'playerProfile' && activePlayerId) newHash = `#/player/${activePlayerId}`;
-    else if (view === 'stats') newHash = '#/stats';
+    else if (view === 'stats') {
+      newHash = '#/stats';
+      const params = new URLSearchParams();
+      if (statsSubView !== 'quadball') params.set('sport', statsSubView);
+      if (statsLeagueDivs.length > 0) params.set('leagues', statsLeagueDivs.join(','));
+      if (statsSelectedYears.length > 0) params.set('years', statsSelectedYears.join(','));
+      if (statsTournamentIds.length > 0) params.set('events', statsTournamentIds.join(','));
+      if (statsTeamIds.length > 0) params.set('teams', statsTeamIds.join(','));
+      if (statsFilter !== 'all') params.set('verify', statsFilter);
+      if (statsPositionFilter !== 'all') params.set('pos', statsPositionFilter);
+      if (bludgerControlMode !== 'all') params.set('bc', bludgerControlMode);
+      if (statsFlagFilter !== 'all') params.set('flag', statsFlagFilter);
+      if (statsMinGames > 1) params.set('minGP', statsMinGames.toString());
+      if (statsSearch) params.set('q', statsSearch);
+      
+      const qs = params.toString();
+      if (qs) newHash += `?${qs}`;
+    }
     else newHash = `#/${view}`;
 
-    if (window.location.hash !== newHash) {
-      window.history.pushState(null, '', newHash);
+    const currentHashFull = window.location.hash || '#/stats';
+    if (currentHashFull !== newHash) {
+      if (view === 'stats' && currentHashFull.startsWith('#/stats')) {
+        window.history.replaceState(null, '', newHash);
+      } else {
+        window.history.pushState(null, '', newHash);
+      }
     }
-  }, [view, activeGameId, activeTeamId, activePlayerId]);
+  }, [view, activeGameId, activeTeamId, activePlayerId, statsSubView, statsLeagueDivs, statsSelectedYears, statsTournamentIds, statsTeamIds, statsFilter, statsPositionFilter, bludgerControlMode, statsFlagFilter, statsMinGames, statsSearch]);
 
   const handlePlayerProfileClick = (id: string) => { pushProfile('playerProfile', { p: id }); };
   const handleTeamProfileClick = (id: string) => { pushProfile('teamProfile', { t: id }); };
   const handleGameProfileClick = (id: string) => { pushProfile('gameProfile', { g: id }); };
-  const [statsSubView, setStatsSubView] = useState<'quadball' | 'beaters' | 'seekers' | 'gamecast'>('quadball');
   const [allEvents, setAllEvents] = useState<GameEvent[]>([]);
   const ADMIN_EMAIL = 'andrew.axtell@gmail.com';
   const isAdmin = user?.email === ADMIN_EMAIL;
@@ -4189,7 +5216,14 @@ export default function App() {
     : userRoles.trusted.includes(user?.email || '') ? 'trusted'
     : userRoles.moderators.includes(user?.email || '') ? 'moderator'
     : user ? 'author' : 'voter';
-  const [statsFilter, setStatsFilter] = useState<'all' | 'verified'>('all');
+
+  // Protect /manage route
+  useEffect(() => {
+    if (view === 'manage' && !isAdmin) {
+      setView('stats');
+      toast.error('You must be an admin to access management tools.');
+    }
+  }, [view, isAdmin]);
 
   // Demo data for when Firestore is unavailable
   const [demoData, setDemoData] = useState<{
@@ -4203,37 +5237,45 @@ export default function App() {
   } | null>(null);
   const [rightPanelTab, setRightPanelTab] = useState<'live_events' | 'record' | 'momentum' | 'rosters'>('live_events');
   const [eventsListFilterMode, setEventsListFilterMode] = useState<'now' | 'all'>('now');
-  const [eventsListTeamFilter, setEventsListTeamFilter] = useState<string>('all');
-  const [eventsListEventFilter, setEventsListEventFilter] = useState<string>('all');
+  const [eventsFilterSet, setEventsFilterSet] = useState<string>('all');
   const [draftEvents, setDraftEvents] = useState<DraftEvent[]>([]);
   const [pins, setPins] = useState<Pin[]>([]);
   const [watchLeagueId, setWatchLeagueId] = useState<string>('all');
+  const [watchDivision, setWatchDivision] = useState<string>('all');
   const [trackerYearId, setTrackerYearId] = useState<string>('all');
   const [trackerTeamId, setTrackerTeamId] = useState<string>('all');
   const [trackerOpponentId, setTrackerOpponentId] = useState<string>('all');
   const [trackerGameId, setTrackerGameId] = useState<string>('');
   const [verifiedYearId, setVerifiedYearId] = useState<string>('all');
   const [verifiedTeamId, setVerifiedTeamId] = useState<string>('all');
-  const [statsTeamId, setStatsTeamId] = useState<string>('');
-  const [statsSearch, setStatsSearch] = useState<string>('');
-  const [statsMinGames, setStatsMinGames] = useState<number>(1);
-  const [bludgerControlMode, setBludgerControlMode] = useState<'all' | 'separate'>('all');
-  const [statsFlagFilter, setStatsFlagFilter] = useState<'all' | 'on' | 'off'>('all');
-  const [statsOutlierFilter, setStatsOutlierFilter] = useState<'include' | 'exclude'>('include');
-  const [statsPositionFilter, setStatsPositionFilter] = useState<'all' | 'chaser' | 'keeper'>('all');
 
   // Resolve which data to use for stats: demo data takes priority
   const statsPlayers = demoData ? demoData.players : allPlayers;
   const statsEventsRaw = demoData ? demoData.events : allEvents;
-  const statsGamesRaw = demoData ? demoData.games : games;
+  const statsGamesRaw = useMemo(() => {
+    const rawGames = demoData ? demoData.games : games;
+    return rawGames.map(g => {
+      if (g.tournamentId) {
+         const t = tournaments.find(x => x.id === g.tournamentId);
+         if (t) {
+            const matchedSeason = seasons.find(s => s.leagueId === t.leagueId && s.year === t.year && s.division === t.division);
+            return { ...g, leagueId: t.leagueId || undefined, division: t.division || undefined, seasonId: matchedSeason ? matchedSeason.id : (g.seasonId || undefined) };
+         }
+      } else if (g.seasonId) {
+         const s = seasons.find(x => x.id === g.seasonId);
+         if (s) {
+            return { ...g, leagueId: s.leagueId || undefined, division: s.division || undefined };
+         }
+      }
+      return g;
+    });
+  }, [demoData, games, tournaments, seasons]);
   const statsTeams = demoData ? demoData.teams : teams;
   
   const statsSeasons = useMemo(() => {
     const s = demoData ? demoData.seasons : seasons;
     return [...s].sort((a,b) => (b.description || b.name).localeCompare(a.description || a.name));
   }, [demoData, seasons]);
-
-  const [statsSeasonId, setStatsSeasonId] = useState<string>('');
   // No initialization needed — default '' means "All Seasons", which is correct
   // since dashboardGames already filters out legacy seasons via legacySeasonIds.
   const statsVideos = demoData && demoData.videos.length > 0 ? demoData.videos : videos;
@@ -4249,6 +5291,20 @@ export default function App() {
   const currentUserTeamId = useMemo(() => teams.find(t => t.emails?.includes(user?.email || ''))?.id, [teams, user]);
   const currentSeasonId = ''; // All stats public
 
+  const statsYears = useMemo(() => {
+    const ySet = new Set<string>();
+    statsSeasons.forEach(s => {
+      if (!legacySeasonIds.has(s.id)) {
+        if (s.year) ySet.add(s.year);
+        else if (s.name) {
+          const m = s.name.match(/\d{4}/);
+          if (m) ySet.add(m[0]);
+        }
+      }
+    });
+    return Array.from(ySet).sort((a, b) => b.localeCompare(a));
+  }, [statsSeasons, legacySeasonIds]);
+
   const statsGames = useMemo(() => {
     return statsGamesRaw.filter(g => !legacySeasonIds.has(g.seasonId));
   }, [statsGamesRaw, legacySeasonIds]);
@@ -4262,6 +5318,9 @@ export default function App() {
       // Both the event must be verified AND the game must be complete
       const verifiedGameIds = new Set(statsGames.filter(g => g.isVerified).map(g => g.id));
       evs = evs.filter(e => e.status === 'verified' && verifiedGameIds.has(e.gameId));
+    } else if (statsFilter === 'verified_events') {
+      // The event must be verified, regardless of game completeness
+      evs = evs.filter(e => e.status === 'verified');
     }
 
     return evs;
@@ -4269,17 +5328,47 @@ export default function App() {
 
   // Per-game access: current-season games visible on Stats page only to author, author's team, or players on either team
   const dashboardGames = useMemo(() => {
-    if (!currentSeasonId) return statsGames; // no current season configured = everything public
-    return statsGames.filter(g => {
-      // Non-current-season: always public
-      if (g.seasonId !== currentSeasonId) return true;
-      // Current season: author, author's team, or on the home/away roster
-      if (!user) return false;
-      if (g.authorId === user.uid) return true;
-      if (currentUserTeamId && (g.authorTeamId === currentUserTeamId || g.homeTeamId === currentUserTeamId || g.awayTeamId === currentUserTeamId)) return true;
-      return false;
-    });
-  }, [statsGames, currentSeasonId, user, currentUserTeamId]);
+    let filtered = statsGames;
+    
+    // Privacy filtering
+    if (currentSeasonId) {
+      filtered = filtered.filter(g => {
+        if (g.seasonId !== currentSeasonId) return true;
+        if (!user) return false;
+        if (g.authorId === user.uid) return true;
+        if (currentUserTeamId && (g.authorTeamId === currentUserTeamId || g.homeTeamId === currentUserTeamId || g.awayTeamId === currentUserTeamId)) return true;
+        return false;
+      });
+    }
+
+    // League Division filtering (multi-select)
+    if (statsLeagueDivs.length > 0) {
+      const comboSet = new Set(statsLeagueDivs);
+      filtered = filtered.filter(g => {
+        if (!g.leagueId) return false;
+        const combo = `${g.leagueId}|${g.division || ''}`;
+        return comboSet.has(combo);
+      });
+    }
+
+    // Year filtering (multi-select)
+    if (statsSelectedYears.length > 0) {
+      const yearSet = new Set(statsSelectedYears);
+      const validSeasonIds = new Set(statsSeasons.filter(s => {
+         const y = s.year || (s.name && s.name.match(/\d{4}/)?.[0]);
+         return y ? yearSet.has(y) : false;
+      }).map(s => s.id));
+      filtered = filtered.filter(g => validSeasonIds.has(g.seasonId) || (g.date && statsSelectedYears.some(y => g.date?.startsWith(y))));
+    }
+
+    // Tournament filtering (multi-select)
+    if (statsTournamentIds.length > 0) {
+      const tSet = new Set(statsTournamentIds);
+      filtered = filtered.filter(g => g.tournamentId && tSet.has(g.tournamentId));
+    }
+
+    return filtered;
+  }, [statsGames, currentSeasonId, user, currentUserTeamId, statsLeagueDivs, statsSelectedYears, statsTournamentIds, statsSeasons]);
 
   // True if the user can see at least SOME current-season data (hides the warning banner)
   const hasPrivilegedStatsAccess = useMemo(() => {
@@ -4311,7 +5400,7 @@ export default function App() {
     return statsTeams.filter(t => activeTeamIds.has(t.id));
   }, [statsTeams, dashboardGames]);
 
-  const [newVideoData, setNewVideoData] = useState({
+  const [newVideoData, setNewVideoData] = useState<{ gameId?: string; seasonId: string; homeTeamId: string; awayTeamId: string; tag?: string; date?: string; leagueId?: string; division?: string; tournamentId?: string; }>({
     seasonId: '',
     homeTeamId: '',
     awayTeamId: '',
@@ -4354,24 +5443,58 @@ export default function App() {
 
   const loadGlobalData = useCallback(async () => {
     try {
-      const [playersSnap, teamsSnap, seasonsSnap, gamesSnap, videosSnap, rolesSnap] = await Promise.all([
+      const [playersSnap, teamsSnap, seasonsSnap, gamesSnap, videosSnap, rolesSnap, leaguesSnap, tournamentsSnap] = await Promise.all([
         getDoc(doc(db, 'aggregated', 'players')),
         getDoc(doc(db, 'aggregated', 'teams')),
         getDoc(doc(db, 'aggregated', 'seasons')),
         getDoc(doc(db, 'aggregated', 'games')),
         getDoc(doc(db, 'aggregated', 'videos')),
-        getDoc(doc(db, 'appConfig', 'roles'))
+        getDoc(doc(db, 'appConfig', 'roles')),
+        getDoc(doc(db, 'aggregated', 'leagues')),
+        getDoc(doc(db, 'aggregated', 'tournaments'))
       ]);
       const pList = (playersSnap.data()?.data || []) as Player[];
       setAllPlayers(pList.sort((a, b) => String(a.firstName + ' ' + a.lastName).localeCompare(String(b.firstName + ' ' + b.lastName))));
 
-      const tList = (teamsSnap.data()?.data || []) as Team[];
-      setTeams(tList.sort((a, b) => String(a.name).localeCompare(String(b.name))));
+      const lList = (leaguesSnap.data()?.data || []) as League[];
+      setLeagues(lList.sort((a, b) => String(a.name).localeCompare(String(b.name))));
 
       const sList = (seasonsSnap.data()?.data || []) as Season[];
       setSeasons(sList.sort((a, b) => String(a.name).localeCompare(String(b.name))));
 
-      const gList = (gamesSnap.data()?.data || []) as Game[];
+      const tourneyListRaw = (tournamentsSnap.data()?.data || []) as Tournament[];
+      const tourneyList = tourneyListRaw.map(t => {
+         if (t.seasonId) {
+            const s = sList.find(x => x.id === t.seasonId);
+            if (s) {
+               return { ...t, leagueId: s.leagueId || undefined, division: s.division || undefined, year: s.year || undefined };
+            }
+         }
+         return t;
+      });
+      setTournaments(tourneyList.sort((a, b) => String(a.name).localeCompare(String(b.name))));
+
+      const tList = (teamsSnap.data()?.data || []) as Team[];
+      setTeams(tList.sort((a, b) => String(a.name).localeCompare(String(b.name))));
+
+
+
+      const gListRaw = (gamesSnap.data()?.data || []) as Game[];
+      const gList = gListRaw.map(g => {
+        if (g.tournamentId) {
+           const t = tourneyList.find(x => x.id === g.tournamentId);
+           if (t) {
+              const matchedSeason = sList.find(s => s.leagueId === t.leagueId && s.year === t.year && s.division === t.division);
+              return { ...g, leagueId: t.leagueId || undefined, division: t.division || undefined, seasonId: matchedSeason ? matchedSeason.id : (g.seasonId || undefined) };
+           }
+        } else if (g.seasonId) {
+           const s = sList.find(x => x.id === g.seasonId);
+           if (s) {
+              return { ...g, leagueId: s.leagueId || undefined, division: s.division || undefined };
+           }
+        }
+        return g;
+      });
       setGames(gList.sort((a, b) => new Date(serializeTimestamp(b.createdAt)).getTime() - new Date(serializeTimestamp(a.createdAt)).getTime()));
 
       const vList = (videosSnap.data()?.data || []) as Video[];
@@ -4500,6 +5623,86 @@ export default function App() {
     return () => clearInterval(interval);
   }, [player]);
 
+  const handleRegeneratePossessionPins = () => {
+    if (!currentVideo) return;
+    const possTypes = ['goal', 'shot', 'attempt', 'turnover', 'miss_ko'];
+    
+    // Sort events chronologically
+    const videoEvents = events
+      .filter(e => e.videoId === currentVideo.id && e.type && possTypes.includes(e.type))
+      .sort((a, b) => a.videoTime - b.videoTime);
+      
+    const newPins: Pin[] = [];
+    let lastTeamId: string | null = null;
+    let lastType: string | null = null;
+    let lastTime: number = 0;
+    
+    for (const e of videoEvents) {
+      if (!e.teamId) continue;
+      
+      // If the team changed, a transition occurred.
+      if (lastTeamId && lastTeamId !== e.teamId) {
+        if (lastType === 'shot' || lastType === 'attempt' || lastType === 'miss_ko') {
+          newPins.push({
+            id: crypto.randomUUID(),
+            videoId: currentVideo.id,
+            time: lastTime + 1,
+            type: 'possession'
+          });
+        }
+      }
+      
+      // Explicit possession ends
+      if (e.type === 'goal' || e.type === 'turnover') {
+        newPins.push({
+          id: crypto.randomUUID(),
+          videoId: currentVideo.id,
+          time: e.videoTime + 1,
+          type: 'possession'
+        });
+      }
+      
+      lastTeamId = e.teamId;
+      lastType = e.type;
+      lastTime = e.videoTime;
+    }
+
+    // Generate missing control pins
+    const controlTypes = ['control_change', 'control_start'];
+    const controlEvents = events
+      .filter(e => e.videoId === currentVideo.id && e.type && controlTypes.includes(e.type))
+      .sort((a, b) => a.videoTime - b.videoTime);
+
+    let lastControlTeamId: string | null = null;
+    let lastControlTime: number = 0;
+
+    for (const e of controlEvents) {
+      if (!e.teamId) continue;
+
+      if (lastControlTeamId && lastControlTeamId === e.teamId) {
+        // Missing control transition (same team retained control across two control events)
+        const midTime = (lastControlTime + e.videoTime) / 2;
+        newPins.push({
+          id: crypto.randomUUID(),
+          videoId: currentVideo.id,
+          time: midTime,
+          type: 'control'
+        });
+      }
+
+      lastControlTeamId = e.teamId;
+      lastControlTime = e.videoTime;
+    }
+    
+    // Replace only the possession and control pins for the current video, keeping others intact
+    setPins(prev => [
+      ...prev.filter(p => p.videoId !== currentVideo.id || (p.type !== 'possession' && p.type !== 'control')),
+      ...newPins
+    ]);
+    
+    toast.success(`Regenerated ${newPins.length} auto-pins`);
+  };
+
 
   const handleAddEvent = async (
     type: EventType,
@@ -4575,12 +5778,7 @@ export default function App() {
     if (!currentVideo || !user) return;
     const vTime = timeOverride !== undefined ? timeOverride : (player ? (function(){ try { return player.getCurrentTime(); } catch(e){ return 0; }})() : 0);
 
-    // Auto-pause video when entering draft mode
-    try {
-      if (player && player.getPlayerState() === 1) { // 1 = playing
-        player.pauseVideo();
-      }
-    } catch(e) {}
+
 
     let inferredTeamId = teamId || null;
     if (!inferredTeamId && currentGame && type) {
@@ -4630,15 +5828,7 @@ export default function App() {
       return;
     }
 
-    // If there's an existing incomplete draft (no player set) and the user clicks a new event type,
-    // replace it instead of stacking
-    if (type) {
-      const existingIncomplete = draftEvents.find(d => !d.playerId && d.type !== null);
-      if (existingIncomplete) {
-        setDraftEvents(prev => prev.map(d => d.id === existingIncomplete.id ? newDraft : d));
-        return;
-      }
-    }
+
 
     setDraftEvents(prev => [newDraft, ...prev]);
   };
@@ -4764,8 +5954,8 @@ export default function App() {
   };
 
   const handleVerifyGame = async (gameId: string) => {
-    if (effectiveRole === 'voter') {
-      toast.error('You do not have permission to mark games as complete.');
+    if (!isAdmin && effectiveRole !== 'moderator') {
+      toast.error('Only admins or moderators can mark games as complete.');
       return;
     }
     if (!gameId) return;
@@ -4793,8 +5983,8 @@ export default function App() {
   };
 
   const handleToggleAllEventsVerified = async (gameId: string) => {
-    if (effectiveRole === 'voter') {
-      toast.error('You do not have permission to verify events.');
+    if (!isAdmin && effectiveRole !== 'moderator') {
+      toast.error('Only admins or moderators can verify events.');
       return;
     }
     if (!gameId) return;
@@ -4845,13 +6035,37 @@ export default function App() {
       }
     }
 
-    if ((draft.type === 'goal' || draft.type === 'turnover' || draft.type === 'quadball_start') && currentVideo) {
+    if ((draft.type === 'goal' || draft.type === 'turnover') && currentVideo) {
       setPins(prev => [...prev, {
         id: crypto.randomUUID(),
         videoId: currentVideo.id,
-        time: draft.videoTime,
+        time: draft.videoTime + 1,
         type: 'possession'
       }]);
+    }
+
+    const possTypes = ['goal', 'shot', 'attempt', 'turnover', 'miss_ko'];
+    if (possTypes.includes(draft.type) && draft.teamId && currentVideo) {
+      const pastPossEvents = events
+        .filter(e => e.type && possTypes.includes(e.type))
+        .filter(e => e.videoTime <= draft.videoTime)
+        .sort((a, b) => b.videoTime - a.videoTime);
+        
+      const lastPossEvent = pastPossEvents[0];
+      
+      // If the team changed, a transition occurred.
+      if (lastPossEvent && lastPossEvent.teamId && lastPossEvent.teamId !== draft.teamId) {
+        // If the transition wasn't already pinned by a goal or turnover, pin it now.
+        if (lastPossEvent.type === 'shot' || lastPossEvent.type === 'attempt' || lastPossEvent.type === 'miss_ko') {
+          setPins(prev => [...prev, {
+            id: crypto.randomUUID(),
+            videoId: currentVideo.id,
+            time: lastPossEvent.videoTime + 1, // +1 second so it doesn't perfectly overlap the shot
+            type: 'possession'
+          }]);
+          toast.info("Dropped a pin for missing possession transition");
+        }
+      }
     }
 
     handleAddEvent(
@@ -4923,25 +6137,61 @@ export default function App() {
   // Management Actions
   const handleRunMigration = async () => {
     try {
-      const [pSnap, tSnap, sSnap, gSnap, vSnap] = await Promise.all([
+      const [pSnap, tSnap, sSnap, gSnap, vSnap, lSnap] = await Promise.all([
         getDocs(collection(db, 'players')),
         getDocs(collection(db, 'teams')),
         getDocs(collection(db, 'seasons')),
         getDocs(collection(db, 'games')),
-        getDocs(collection(db, 'videos'))
+        getDocs(collection(db, 'videos')),
+        getDocs(collection(db, 'leagues'))
       ]);
+
+      const lData = lSnap.docs.map(doc => ({ id: doc.id, name: doc.data().name || '', divisions: doc.data().divisions || [] }));
+      
+      const batch = writeBatch(db);
+
+      // Perform Migration of String 'league' to 'leagueId'
+      const existingLeaguesByName = new Map(lData.map(l => [l.name, l.id]));
+      let addedLeagues = false;
+
+      const migrateEntity = async (docSnap: any, collectionName: string) => {
+        const data = docSnap.data();
+        if (data.league && !data.leagueId) {
+          let leagueId = existingLeaguesByName.get(data.league);
+          if (!leagueId) {
+            // Create missing league
+            const newLeagueRef = doc(collection(db, 'leagues'));
+            leagueId = newLeagueRef.id;
+            batch.set(newLeagueRef, { name: data.league, divisions: [], createdAt: serverTimestamp() });
+            existingLeaguesByName.set(data.league, leagueId);
+            lData.push({ id: leagueId, name: data.league, divisions: [] });
+            addedLeagues = true;
+          }
+          batch.update(docSnap.ref, { leagueId, league: deleteField() });
+          return { ...data, leagueId, league: undefined, id: docSnap.id };
+        }
+        return { ...data, id: docSnap.id };
+      };
+
+      const updatedTeams = await Promise.all(tSnap.docs.map(d => migrateEntity(d, 'teams')));
+      const updatedSeasons = await Promise.all(sSnap.docs.map(d => migrateEntity(d, 'seasons')));
+
       const pData = pSnap.docs.map(doc => ({ id: doc.id, firstName: doc.data().firstName || '', lastName: doc.data().lastName || '', preferredName: doc.data().preferredName || '', nickname: doc.data().nickname || '' }));
-      const tData = tSnap.docs.map(doc => ({ id: doc.id, name: doc.data().name || '' }));
-      const sData = sSnap.docs.map(doc => ({ id: doc.id, name: doc.data().name || '', league: doc.data().league || '', year: doc.data().year || '', description: doc.data().description || '' }));
-      const gData = gSnap.docs.map(doc => ({ id: doc.id, seasonId: doc.data().seasonId || '', homeTeamId: doc.data().homeTeamId || '', awayTeamId: doc.data().awayTeamId || '', isVerified: doc.data().isVerified || false, authorId: doc.data().authorId || '', authorTeamId: doc.data().authorTeamId || '', createdAt: serializeTimestamp(doc.data().createdAt) }));
+      const tData = updatedTeams.map(doc => ({ id: doc.id, name: doc.name || '', leagueId: doc.leagueId || '', division: doc.division || '' }));
+      const sData = updatedSeasons.map(doc => ({ id: doc.id, name: doc.name || '', leagueId: doc.leagueId || '', year: doc.year || '', description: doc.description || '' }));
+      const gData = gSnap.docs.map(doc => ({ id: doc.id, seasonId: doc.data().seasonId || '', homeTeamId: doc.data().homeTeamId || '', awayTeamId: doc.data().awayTeamId || '', isVerified: doc.data().isVerified || false, authorId: doc.data().authorId || '', authorTeamId: doc.data().authorTeamId || '', tag: doc.data().tag || null, date: doc.data().date || null, leagueId: doc.data().leagueId || null, division: doc.data().division || null, createdAt: serializeTimestamp(doc.data().createdAt) }));
       const vData = vSnap.docs.map(doc => ({ id: doc.id, videoId: doc.data().videoId || '', youtubeId: doc.data().youtubeId || '', gameId: doc.data().gameId || '', title: doc.data().title || '', createdAt: serializeTimestamp(doc.data().createdAt) }));
 
-      const batch = writeBatch(db);
       batch.set(doc(db, 'aggregated', 'players'), { data: pData });
       batch.set(doc(db, 'aggregated', 'teams'), { data: tData });
       batch.set(doc(db, 'aggregated', 'seasons'), { data: sData });
       batch.set(doc(db, 'aggregated', 'games'), { data: gData });
       batch.set(doc(db, 'aggregated', 'videos'), { data: vData });
+      
+      if (addedLeagues) {
+         batch.set(doc(db, 'aggregated', 'leagues'), { data: lData });
+      }
+
       await batch.commit();
     } catch (error) {
       console.error("Migration error:", error);
@@ -4977,11 +6227,142 @@ export default function App() {
     return updated;
   };
 
-  const handleAddTeam = async (name: string) => {
+  const handleAddLeague = async (name: string, divisions?: string[]) => {
+    if (!name.trim() || !isAdmin) return null;
     try {
-      const docRef = await addDoc(collection(db, 'teams'), { name, createdAt: serverTimestamp() });
-      await updateDoc(doc(db, 'aggregated', 'teams'), { data: arrayUnion({ id: docRef.id, name }) });
-      setTeams(prev => [...prev, { id: docRef.id, name, createdAt: new Date() } as Team].sort((a, b) => String(a.name).localeCompare(String(b.name))));
+      const docRef = await addDoc(collection(db, 'leagues'), { name: name.trim(), divisions: divisions || [], createdAt: serverTimestamp() });
+      await setDoc(doc(db, 'aggregated', 'leagues'), { data: arrayUnion({ id: docRef.id, name: name.trim(), divisions: divisions || [] }) }, { merge: true });
+      setLeagues(prev => [...prev, { id: docRef.id, name: name.trim(), divisions: divisions || [], createdAt: new Date() } as League].sort((a, b) => String(a.name).localeCompare(String(b.name))));
+      toast.success('League added');
+      return docRef.id;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'leagues');
+      return null;
+    }
+  };
+
+  const handleEditLeague = async (id: string, newName: string, newDivisions?: string[]) => {
+    try {
+      const leagueRef = doc(db, 'leagues', id);
+      const oldLeague = leagues.find(l => l.id === id);
+      if (!oldLeague) throw new Error("League not found locally");
+      
+      await updateDoc(leagueRef, { name: newName, divisions: newDivisions || [] });
+      const oldAgg = { id: oldLeague.id, name: oldLeague.name || '', divisions: oldLeague.divisions || [] };
+      const newAgg = { ...oldAgg, name: newName, divisions: newDivisions || [] };
+      
+      const aggRef = doc(db, 'aggregated', 'leagues');
+      const aggSnap = await getDoc(aggRef);
+      if (aggSnap.exists()) {
+        let currentData = aggSnap.data().data || [];
+        currentData = currentData.map((item: any) => item.id === id ? newAgg : item);
+        await updateDoc(aggRef, { data: currentData });
+      }
+      
+      setLeagues(prev => prev.map(l => l.id === id ? { ...l, name: newName, divisions: newDivisions || [] } : l));
+      toast.success('League updated');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'leagues');
+    }
+  };
+
+  const handleDeleteLeague = async (id: string) => {
+    if (!isAdmin) return;
+    try {
+      const deletedLeague = leagues.find(l => l.id === id);
+      if (deletedLeague) {
+        await deleteDoc(doc(db, 'leagues', id));
+        await updateDoc(doc(db, 'aggregated', 'leagues'), { data: arrayRemove({ id: deletedLeague.id, name: deletedLeague.name || '', divisions: deletedLeague.divisions || [] }) });
+        setLeagues(prev => prev.filter(l => l.id !== id));
+        toast.success('League deleted');
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, 'leagues');
+    }
+  };
+
+  const handleAddTournament = async (name: string, seasonId: string, startDate?: string, endDate?: string, location?: string) => {
+    if (!name.trim() || !seasonId) return null;
+    try {
+      const docData: any = { name: name.trim(), seasonId, createdAt: serverTimestamp() };
+      if (startDate) docData.startDate = startDate;
+      if (endDate) docData.endDate = endDate;
+      if (location) docData.location = location;
+
+      const docRef = await addDoc(collection(db, 'tournaments'), docData);
+      await setDoc(doc(db, 'aggregated', 'tournaments'), { data: arrayUnion({ id: docRef.id, ...docData, createdAt: null }) }, { merge: true });
+      setTournaments(prev => [...prev, { id: docRef.id, ...docData, createdAt: new Date() } as Tournament].sort((a, b) => String(a.name).localeCompare(String(b.name))));
+      toast.success('Tournament added');
+      return docRef.id;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'tournaments');
+      return null;
+    }
+  };
+
+  const handleEditTournament = async (id: string, newName: string, newSeasonId: string, newStartDate?: string, newEndDate?: string, newLocation?: string) => {
+    try {
+      const tourneyRef = doc(db, 'tournaments', id);
+      const oldTourney = tournaments.find(t => t.id === id);
+      if (!oldTourney) throw new Error("Tournament not found locally");
+      
+      const updateData: any = { name: newName, seasonId: newSeasonId };
+      updateData.startDate = newStartDate || deleteField();
+      updateData.endDate = newEndDate || deleteField();
+      updateData.location = newLocation || deleteField();
+      updateData.leagueId = deleteField();
+      updateData.division = deleteField();
+      updateData.year = deleteField();
+
+      await updateDoc(tourneyRef, updateData);
+      
+      const newAgg: any = { id: oldTourney.id, name: newName, seasonId: newSeasonId };
+      if (newStartDate) newAgg.startDate = newStartDate;
+      if (newEndDate) newAgg.endDate = newEndDate;
+      if (newLocation) newAgg.location = newLocation;
+
+      const aggRef = doc(db, 'aggregated', 'tournaments');
+      const aggSnap = await getDoc(aggRef);
+      if (aggSnap.exists()) {
+        let currentData = aggSnap.data().data || [];
+        currentData = currentData.map((item: any) => item.id === id ? newAgg : item);
+        await updateDoc(aggRef, { data: currentData });
+      }
+      
+      setTournaments(prev => prev.map(t => t.id === id ? { ...t, ...newAgg } : t));
+      toast.success('Tournament updated');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'tournaments');
+    }
+  };
+
+  const handleDeleteTournament = async (id: string) => {
+    if (!isAdmin) return;
+    try {
+      const deletedTourney = tournaments.find(t => t.id === id);
+      if (deletedTourney) {
+        await deleteDoc(doc(db, 'tournaments', id));
+        const aggRef = doc(db, 'aggregated', 'tournaments');
+        const aggSnap = await getDoc(aggRef);
+        if (aggSnap.exists()) {
+          let currentData = aggSnap.data().data || [];
+          currentData = currentData.filter((item: any) => item.id !== id);
+          await updateDoc(aggRef, { data: currentData });
+        }
+        setTournaments(prev => prev.filter(t => t.id !== id));
+        toast.success('Tournament deleted');
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, 'tournaments');
+    }
+  };
+
+  const handleAddTeam = async (name: string, leagueId?: string, division?: string) => {
+    try {
+      const teamData = { name, ...(leagueId && { leagueId }), ...(division && { division }) };
+      const docRef = await addDoc(collection(db, 'teams'), { ...teamData, createdAt: serverTimestamp() });
+      await updateDoc(doc(db, 'aggregated', 'teams'), { data: arrayUnion({ id: docRef.id, ...teamData }) });
+      setTeams(prev => [...prev, { id: docRef.id, ...teamData, createdAt: new Date() } as Team].sort((a, b) => String(a.name).localeCompare(String(b.name))));
       return docRef.id;
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'teams');
@@ -5010,11 +6391,12 @@ export default function App() {
     }
   };
 
-  const handleAddSeason = async (name: string, league: string, year: string, description: string) => {
+  const handleAddSeason = async (name: string, leagueId: string, division: string | undefined, year: string, tournamentId: string) => {
     try {
-      const docRef = await addDoc(collection(db, 'seasons'), { name, league, year, description, createdAt: serverTimestamp() });
-      await updateDoc(doc(db, 'aggregated', 'seasons'), { data: arrayUnion({ id: docRef.id, name, league, year, description }) });
-      setSeasons(prev => [...prev, { id: docRef.id, name, league, year, description, createdAt: new Date() } as Season].sort((a, b) => String(a.name).localeCompare(String(b.name))));
+      const seasonData = { name, leagueId, ...(division && { division }), year, ...(tournamentId && { tournamentId }) };
+      const docRef = await addDoc(collection(db, 'seasons'), { ...seasonData, createdAt: serverTimestamp() });
+      await updateDoc(doc(db, 'aggregated', 'seasons'), { data: arrayUnion({ id: docRef.id, ...seasonData }) });
+      setSeasons(prev => [...prev, { id: docRef.id, ...seasonData, createdAt: new Date() } as Season].sort((a, b) => String(a.name).localeCompare(String(b.name))));
       return docRef.id;
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'seasons');
@@ -5189,21 +6571,38 @@ export default function App() {
       const deletedSeason = seasons.find(s => s.id === id);
       await deleteDoc(doc(db, 'seasons', id));
       if (deletedSeason) {
-        await updateDoc(doc(db, 'aggregated', 'seasons'), { data: arrayRemove({ id: deletedSeason.id, name: deletedSeason.name || '', league: deletedSeason.league || '', year: deletedSeason.year || '', description: deletedSeason.description || '' }) });
+        // Current format
+        await updateDoc(doc(db, 'aggregated', 'seasons'), { data: arrayRemove({ id: deletedSeason.id, name: deletedSeason.name || '', leagueId: deletedSeason.leagueId || deletedSeason.league || '', division: deletedSeason.division || null, year: deletedSeason.year || '', description: deletedSeason.description || '' }) }).catch(() => {});
+        // Legacy format
+        await updateDoc(doc(db, 'aggregated', 'seasons'), { data: arrayRemove({ id: deletedSeason.id, name: deletedSeason.name || '', league: deletedSeason.league || deletedSeason.leagueId || '', year: deletedSeason.year || '', description: deletedSeason.description || '' }) }).catch(() => {});
       }
     } catch (error) { handleFirestoreError(error, OperationType.DELETE, 'seasons'); }
   };
 
-  const handleEditSeason = async (id: string, newName: string, newLeague: string, newYear: string, newDescription: string) => {
+  const handleEditSeason = async (id: string, newName: string, newLeagueId: string, newDivision: string | undefined, newYear: string, newTournamentId: string) => {
     try {
       const oldSeason = seasons.find(s => s.id === id);
       if (!oldSeason) return;
-      await updateDoc(doc(db, 'seasons', id), { name: newName, league: newLeague, year: newYear, description: newDescription });
+      const newSeasonData: any = { name: newName, leagueId: newLeagueId, division: newDivision || null, year: newYear };
+      if (newTournamentId) { newSeasonData.tournamentId = newTournamentId; }
+      else { newSeasonData.tournamentId = deleteField(); }
+      
+      // Also delete description from the DB to clean up
+      newSeasonData.description = deleteField();
+      
+      await updateDoc(doc(db, 'seasons', id), newSeasonData);
 
-      const oldAgg = { id: oldSeason.id, name: oldSeason.name || '', league: oldSeason.league || '', year: oldSeason.year || '', description: oldSeason.description || '' };
-      const newAgg = { ...oldAgg, name: newName, league: newLeague, year: newYear, description: newDescription };
+      const oldAgg = { id: oldSeason.id, name: oldSeason.name || '', leagueId: oldSeason.leagueId || oldSeason.league || '', division: oldSeason.division || null, year: oldSeason.year || '', description: oldSeason.description || '', tournamentId: oldSeason.tournamentId || '' };
+      
+      // We explicitly copy the non-deleted fields for the new aggregate object
+      const newAgg = { id: oldSeason.id, name: newName, leagueId: newLeagueId, division: newDivision || null, year: newYear, tournamentId: newTournamentId || '' };
 
       await updateDoc(doc(db, 'aggregated', 'seasons'), { data: arrayRemove(oldAgg) }).catch(() => { });
+      
+      // Fallback: also remove the version of the object that might have used `league` key
+      const oldAggLegacy = { id: oldSeason.id, name: oldSeason.name || '', league: oldSeason.league || oldSeason.leagueId || '', year: oldSeason.year || '', description: oldSeason.description || '', tournamentId: oldSeason.tournamentId || '' };
+      await updateDoc(doc(db, 'aggregated', 'seasons'), { data: arrayRemove(oldAggLegacy) }).catch(() => { });
+      
       await updateDoc(doc(db, 'aggregated', 'seasons'), { data: arrayUnion(newAgg) }).catch(() => { });
 
       loadGlobalData();
@@ -5352,6 +6751,7 @@ export default function App() {
   const handleSearchVideo = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!searchQuery) return;
+    setIsAddingGame(true);
 
     // Robust YouTube ID extraction
     const extractYoutubeId = (url: string) => {
@@ -5371,15 +6771,21 @@ export default function App() {
     const youtubeId = extractYoutubeId(searchQuery);
     if (!youtubeId) {
       toast.error("Please enter a valid YouTube URL or 11-character Video ID.");
+      setIsAddingGame(false);
       return;
     }
 
     const homeId = newVideoData.homeTeamId;
     const awayId = newVideoData.awayTeamId;
     const seasonId = newVideoData.seasonId;
+    const gameDate = newVideoData.date || null;
+    const leagueId = newVideoData.leagueId || null;
+    const division = newVideoData.division || null;
+    const tournamentId = newVideoData.tournamentId || null;
 
-    if (!homeId || !awayId || !seasonId) {
-      toast.error("Please select Home Team, Away Team, and Season constraints.");
+    if (!homeId || !awayId || (!seasonId && !tournamentId && !leagueId)) {
+      toast.error("Please select Home Team, Away Team, and Event/Season/League constraints.");
+      setIsAddingGame(false);
       return;
     }
 
@@ -5391,18 +6797,23 @@ export default function App() {
     const gId = newVideoData.gameId?.trim() || `game_${crypto.randomUUID()}`;
     const vId = crypto.randomUUID();
 
+    const normalizedSeasonId = tournamentId ? null : seasonId || null;
+    const normalizedLeagueId = (tournamentId || seasonId) ? null : leagueId || null;
+    const normalizedDivision = (tournamentId || seasonId) ? null : division || null;
+
     // SET VIDEO LOCALLY FIRST — so the embed renders immediately regardless of Firestore
     const localVideo: Video = {
       id: vId, youtubeId, videoId: vId, gameId: gId,
       title: `${homeName} vs ${awayName}`, createdAt: new Date()
     } as Video;
     setCurrentVideo(localVideo);
+    setView('tracker');
     setIsAddingGame(false);
     setSearchQuery('');
 
     // Also inject local game + teams into state so scoreboard shows names immediately
     if (!games.find(g => g.id === gId)) {
-      setGames(prev => [...prev, { id: gId, seasonId, homeTeamId: homeId, awayTeamId: awayId, tag: newVideoData.tag, createdAt: new Date() } as any]);
+      setGames(prev => [...prev, { id: gId, seasonId: normalizedSeasonId, homeTeamId: homeId, awayTeamId: awayId, tag: newVideoData.tag, date: gameDate, leagueId: normalizedLeagueId, division: normalizedDivision, tournamentId, createdAt: new Date() } as any]);
     }
 
     // Background Firestore sync (best-effort)
@@ -5414,7 +6825,11 @@ export default function App() {
 
       if (!gameSnap.exists()) {
         await setDoc(gameRef, {
-          id: gId, seasonId, homeTeamId: homeId, awayTeamId: awayId, isVerified: false, createdAt: serverTimestamp(), tag: newVideoData.tag || null,
+          id: gId, homeTeamId: homeId, awayTeamId: awayId, isVerified: false, createdAt: serverTimestamp(), tag: newVideoData.tag || null, date: gameDate, 
+          tournamentId: tournamentId || null, 
+          seasonId: normalizedSeasonId, 
+          leagueId: normalizedLeagueId, 
+          division: normalizedDivision,
           authorId: user?.uid || '', authorTeamId: currentUserTeamId || ''
         });
       } else {
@@ -5424,7 +6839,13 @@ export default function App() {
 
       // Auto-heal the Games cache safely without string duplication
       await updateDoc(doc(db, 'aggregated', 'games'), {
-        data: arrayUnion({ id: gId, seasonId, homeTeamId: homeId, awayTeamId: awayId, isVerified: false, createdAt: gCreatedAt, tag: newVideoData.tag || null, authorId: user?.uid || '', authorTeamId: currentUserTeamId || '' })
+        data: arrayUnion({ id: gId, homeTeamId: homeId, awayTeamId: awayId, isVerified: false, createdAt: gCreatedAt, tag: newVideoData.tag || null, date: gameDate, 
+          tournamentId: tournamentId || null, 
+          seasonId: normalizedSeasonId, 
+          leagueId: normalizedLeagueId, 
+          division: normalizedDivision, 
+          authorId: user?.uid || '', authorTeamId: currentUserTeamId || '' 
+        })
       }).catch(() => { });
 
       // Always Provision Unique Video Document 1:1 Mapping to Game
@@ -5490,33 +6911,50 @@ export default function App() {
     statsGames.forEach(g => {
       if (!gamesWithVideos.has(g.id)) return; // Exclude games without videos
 
-      if (watchLeagueId !== 'all') {
-        const s = statsSeasons.find(sea => sea.id === g.seasonId);
-        if (!s || s.league !== watchLeagueId) return;
-      }
       const s = statsSeasons.find(sea => sea.id === g.seasonId);
+      if (watchLeagueId !== 'all') {
+        if (!s) return;
+        const lid = s.leagueId || s.league;
+        if (lid !== watchLeagueId) return;
+        if (watchDivision !== 'all' && s.division !== watchDivision) return;
+      }
       if (s && s.name) ySet.add(s.name);
       else if (g.seasonId) ySet.add(g.seasonId);
     });
     return Array.from(ySet).sort((a, b) => b.localeCompare(a));
-  }, [statsGames, statsSeasons, statsVideos, watchLeagueId]);
+  }, [statsGames, statsSeasons, statsVideos, watchLeagueId, watchDivision]);
 
   const watchLeagues = useMemo(() => {
     const lSet = new Set<string>();
     statsSeasons.forEach(s => {
-      if (s.league) lSet.add(s.league);
+      const lid = s.leagueId || s.league;
+      if (lid) lSet.add(lid);
     });
     return Array.from(lSet).sort();
   }, [statsSeasons]);
+
+  const watchDivisions = useMemo(() => {
+    if (watchLeagueId === 'all') return [];
+    const dSet = new Set<string>();
+    statsSeasons.forEach(s => {
+      const lid = s.leagueId || s.league;
+      if (lid === watchLeagueId && s.division) {
+        dSet.add(s.division);
+      }
+    });
+    return Array.from(dSet).sort();
+  }, [statsSeasons, watchLeagueId]);
   const trackingTeams = useMemo(() => {
     const tSet = new Set<string>();
     statsGames.forEach(g => {
+      const s = statsSeasons.find(sea => sea.id === g.seasonId);
       if (watchLeagueId !== 'all') {
-        const s = statsSeasons.find(sea => sea.id === g.seasonId);
-        if (!s || s.league !== watchLeagueId) return;
+        if (!s) return;
+        const lid = s.leagueId || s.league;
+        if (lid !== watchLeagueId) return;
+        if (watchDivision !== 'all' && s.division !== watchDivision) return;
       }
       if (trackerYearId !== 'all') {
-        const s = statsSeasons.find(sea => sea.id === g.seasonId);
         const yearStr = (s && s.name) ? s.name : g.seasonId;
         if (yearStr !== trackerYearId) return;
       }
@@ -5527,17 +6965,19 @@ export default function App() {
       .map(tid => statsTeams.find(t => t.id === tid))
       .filter((t): t is Team => !!t)
       .sort((a, b) => String(a.name).localeCompare(String(b.name)));
-  }, [statsGames, statsSeasons, statsTeams, trackerYearId, watchLeagueId]);
+  }, [statsGames, statsSeasons, statsTeams, trackerYearId, watchLeagueId, watchDivision]);
 
   const trackingOpponents = useMemo(() => {
     const tSet = new Set<string>();
     statsGames.forEach(g => {
+      const s = statsSeasons.find(sea => sea.id === g.seasonId);
       if (watchLeagueId !== 'all') {
-        const s = statsSeasons.find(sea => sea.id === g.seasonId);
-        if (!s || s.league !== watchLeagueId) return;
+        if (!s) return;
+        const lid = s.leagueId || s.league;
+        if (lid !== watchLeagueId) return;
+        if (watchDivision !== 'all' && s.division !== watchDivision) return;
       }
       if (trackerYearId !== 'all') {
-        const s = statsSeasons.find(sea => sea.id === g.seasonId);
         const yearStr = (s && s.name) ? s.name : g.seasonId;
         if (yearStr !== trackerYearId) return;
       }
@@ -5554,18 +6994,21 @@ export default function App() {
       .map(tid => statsTeams.find(t => t.id === tid))
       .filter((t): t is Team => !!t)
       .sort((a, b) => String(a.name).localeCompare(String(b.name)));
-  }, [statsGames, statsSeasons, statsTeams, trackerYearId, trackerTeamId, watchLeagueId]);
+  }, [statsGames, statsSeasons, statsTeams, trackerYearId, trackerTeamId, watchLeagueId, watchDivision]);
 
   const trackingFilteredGames = useMemo(() => {
     return statsGames.filter(g => {
+      if (g.isVerified) return false;
+      const s = statsSeasons.find(sea => sea.id === g.seasonId);
       if (trackerYearId !== 'all') {
-        const s = statsSeasons.find(sea => sea.id === g.seasonId);
         const yearStr = (s && s.name) ? s.name : g.seasonId;
         if (yearStr !== trackerYearId) return false;
       }
       if (watchLeagueId !== 'all') {
-        const s = statsSeasons.find(sea => sea.id === g.seasonId);
-        if (!s || s.league !== watchLeagueId) return false;
+        if (!s) return false;
+        const lid = s.leagueId || s.league;
+        if (lid !== watchLeagueId) return false;
+        if (watchDivision !== 'all' && s.division !== watchDivision) return false;
       }
       if (trackerTeamId !== 'all') {
         if (g.homeTeamId !== trackerTeamId && g.awayTeamId !== trackerTeamId) return false;
@@ -5580,8 +7023,17 @@ export default function App() {
       const hName = hTeam?.nickname || hTeam?.name || g.homeTeamId;
       const aName = aTeam?.nickname || aTeam?.name || g.awayTeamId;
       return { ...g, displayName: g.tag ? `${hName} vs ${aName} (${g.tag})` : `${hName} vs ${aName}` };
+    }).sort((a, b) => {
+      if (a.date && b.date) {
+        return new Date(b.date).getTime() - new Date(a.date).getTime();
+      }
+      if (a.date) return -1;
+      if (b.date) return 1;
+      const tA = a.createdAt?.seconds ? a.createdAt.seconds * 1000 : (a.createdAt instanceof Date ? a.createdAt.getTime() : 0);
+      const tB = b.createdAt?.seconds ? b.createdAt.seconds * 1000 : (b.createdAt instanceof Date ? b.createdAt.getTime() : 0);
+      return tB - tA;
     });
-  }, [statsGames, statsSeasons, statsTeams, trackerYearId, trackerTeamId, trackerOpponentId, watchLeagueId]);
+  }, [statsGames, statsSeasons, statsTeams, trackerYearId, trackerTeamId, trackerOpponentId, watchLeagueId, watchDivision]);
 
   const verifiedTeams = useMemo(() => {
     const tSet = new Set<string>();
@@ -5619,6 +7071,15 @@ export default function App() {
       const hName = hTeam?.nickname || hTeam?.name || g.homeTeamId;
       const aName = aTeam?.nickname || aTeam?.name || g.awayTeamId;
       return { ...g, displayName: g.tag ? `${hName} vs ${aName} (${g.tag})` : `${hName} vs ${aName}` };
+    }).sort((a, b) => {
+      if (a.date && b.date) {
+        return new Date(b.date).getTime() - new Date(a.date).getTime();
+      }
+      if (a.date) return -1;
+      if (b.date) return 1;
+      const tA = a.createdAt?.seconds ? a.createdAt.seconds * 1000 : (a.createdAt instanceof Date ? a.createdAt.getTime() : 0);
+      const tB = b.createdAt?.seconds ? b.createdAt.seconds * 1000 : (b.createdAt instanceof Date ? b.createdAt.getTime() : 0);
+      return tB - tA;
     });
   }, [statsGames, statsSeasons, statsTeams, verifiedYearId, verifiedTeamId]);
 
@@ -5757,7 +7218,7 @@ export default function App() {
               </button>
             )}
 
-            {(['moderator', 'trusted'].includes(effectiveRole)) && (
+            {isAdmin && (
               <button
                 onClick={() => setView(view === 'manage' ? 'stats' : 'manage')}
                 className={cn(
@@ -5789,7 +7250,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className={cn("mx-auto transition-all w-full", (view === 'tracker' && currentVideo) ? "max-w-[100vw] px-2 py-2 flex-1 min-h-0 flex flex-col" : "max-w-7xl px-4 py-8")}>
+      <main className={cn("mx-auto transition-all w-full", (view === 'tracker' && currentVideo) ? "max-w-[100vw] px-2 py-2 flex-1 min-h-0 flex flex-col" : view === 'tracker' ? "max-w-[1600px] px-4 py-8" : "max-w-7xl px-4 py-8")}>
         {view === 'help' ? (
           <div className="bg-white rounded-xl shadow-sm border p-8 max-w-4xl mx-auto space-y-10">
             <div className="mb-12">
@@ -5914,11 +7375,19 @@ export default function App() {
           </div>
         ) : view === 'manage' ? (
           <ManagementView
+            leagues={leagues}
+            tournaments={tournaments}
             teams={teams}
             seasons={seasons}
             players={allPlayers}
             videos={videos}
             games={games}
+            onAddLeague={handleAddLeague}
+            onEditLeague={handleEditLeague}
+            onDeleteLeague={handleDeleteLeague}
+            onAddTournament={handleAddTournament}
+            onEditTournament={handleEditTournament}
+            onDeleteTournament={handleDeleteTournament}
             onAddTeam={handleAddTeam}
             onAddSeason={handleAddSeason}
             onAddPlayer={handleAddGlobalPlayer}
@@ -5951,12 +7420,23 @@ export default function App() {
             teams={teams}
             seasons={seasons}
             players={allPlayers}
+            leagues={leagues}
+            tournaments={tournaments}
+            searchQuery={searchQuery}
+            setSearchQuery={setSearchQuery}
+            newVideoData={newVideoData}
+            setNewVideoData={setNewVideoData}
+            onAddGame={handleSearchVideo}
+            isAddingGame={isAddingGame}
+            setIsAddingGame={setIsAddingGame}
             onAddTeam={handleAddTeam}
             onAddPlayer={handleAddGlobalPlayer}
             onAddPlayerToRoster={handleAddPlayerToRoster}
             onRemovePlayerFromRoster={handleRemovePlayerFromRoster}
             onCreateRoster={handleCreateRoster}
             onDeleteRoster={handleDeleteRoster}
+            onEditPlayer={handleEditPlayer}
+            onDeletePlayer={handleDeletePlayer}
           />
         ) : view === 'review' ? (
           <div className="-mx-4 px-4 -mt-8 pt-6 pb-8 min-h-[80vh]">
@@ -5967,7 +7447,7 @@ export default function App() {
             {/* Data source indicator */}
             <div className="flex items-center gap-3 mb-2 text-[10px] font-mono text-gray-400">
               <span className={demoData ? 'text-amber-500' : 'text-green-500'}>● {demoData ? 'Demo CSV' : 'Firestore'}</span>
-              <span>{statsEvents.length.toLocaleString()} events{statsFilter === 'verified' ? ' (verified)' : ''}</span>
+              <span>{statsEvents.length.toLocaleString()} events{statsFilter.startsWith('verified') ? ' (verified)' : ''}</span>
               <span>{statsPlayers.length} players</span>
               <span>{statsGames.length} games</span>
               <span>{statsTeams.length} teams</span>
@@ -6007,17 +7487,17 @@ export default function App() {
                 </button>
               </div>
               <div className="flex border rounded-lg bg-gray-50 overflow-hidden text-xs font-bold shadow-sm">
-                {(['verified', 'all'] as const).map(option => (
+                {(['verified', 'verified_events', 'all'] as const).map(option => (
                   <button
                     key={option}
                     onClick={() => setStatsFilter(option)}
                     className={cn(
                       'flex items-center gap-1.5 px-3 py-1.5 transition-all outline-none',
-                      statsFilter === option ? (option === 'verified' ? 'bg-amber-500/10 text-amber-600 shadow-sm border border-amber-500/30' : 'bg-white shadow-sm border border-gray-200 text-gray-800') : 'text-gray-400 hover:text-gray-600 border border-transparent hover:bg-white/50'
+                      statsFilter === option ? (option.startsWith('verified') ? 'bg-amber-500/10 text-amber-600 shadow-sm border border-amber-500/30' : 'bg-white shadow-sm border border-gray-200 text-gray-800') : 'text-gray-400 hover:text-gray-600 border border-transparent hover:bg-white/50'
                     )}
                   >
-                    {option === 'verified' && <ShieldCheck className="w-3.5 h-3.5" />}
-                    {option === 'all' ? 'Pending' : 'Verified & Complete'}
+                    {option.startsWith('verified') && <ShieldCheck className="w-3.5 h-3.5" />}
+                    {option === 'all' ? 'Pending' : option === 'verified_events' ? 'Verified' : 'Verified & Complete'}
                   </button>
                 ))}
               </div>
@@ -6026,14 +7506,18 @@ export default function App() {
             {/* Shared Filters component */}
             <StatsFilters
               viewType={statsSubView as 'quadball' | 'beaters' | 'seekers'}
-              seasonId={statsSeasonId} onSeasonChange={setStatsSeasonId}
-              teamId={statsTeamId} onTeamChange={setStatsTeamId}
-              seasons={filteredDropdownSeasons} teams={filteredDropdownTeams}
+              leagueDivisions={statsLeagueDivs} onLeagueDivisionChange={setStatsLeagueDivs}
+              leagues={leagues}
+              years={statsSelectedYears} onYearChange={setStatsSelectedYears}
+              availableYears={statsYears}
+              tournamentIds={statsTournamentIds} onTournamentChange={setStatsTournamentIds}
+              tournaments={tournaments}
+              teamIds={statsTeamIds} onTeamChange={setStatsTeamIds}
+              teams={filteredDropdownTeams}
               search={statsSearch} onSearchChange={setStatsSearch}
               minGames={statsMinGames} onMinGamesChange={setStatsMinGames}
               bludgerControlMode={bludgerControlMode} onBludgerControlModeChange={setBludgerControlMode}
               flagFilter={statsFlagFilter} onFlagFilterChange={setStatsFlagFilter}
-              outlierFilter={statsOutlierFilter} onOutlierFilterChange={setStatsOutlierFilter}
               positionFilter={statsSubView === 'quadball' ? statsPositionFilter : undefined}
               onPositionFilterChange={statsSubView === 'quadball' ? setStatsPositionFilter : undefined}
             />
@@ -6053,13 +7537,11 @@ export default function App() {
                 games={dashboardGames}
                 seasons={statsSeasons}
                 statsFilter={statsFilter}
-                seasonId={statsSeasonId}
-                teamId={statsTeamId}
+                teamIds={statsTeamIds}
                 search={statsSearch}
                 minGames={statsMinGames}
                 bludgerControlMode={bludgerControlMode}
                 flagFilter={statsFlagFilter}
-                outlierFilter={statsOutlierFilter}
                 positionFilter={statsPositionFilter}
                 onPlayerSelect={handlePlayerProfileClick}
                 onTeamSelect={handleTeamProfileClick}
@@ -6072,13 +7554,11 @@ export default function App() {
                 games={dashboardGames}
                 seasons={statsSeasons}
                 statsFilter={statsFilter}
-                seasonId={statsSeasonId}
-                teamId={statsTeamId}
+                teamIds={statsTeamIds}
                 search={statsSearch}
                 minGames={statsMinGames}
                 bludgerControlMode={bludgerControlMode}
                 flagFilter={statsFlagFilter}
-                outlierFilter={statsOutlierFilter}
                 onPlayerSelect={handlePlayerProfileClick}
                 onTeamSelect={handleTeamProfileClick}
               />
@@ -6090,8 +7570,7 @@ export default function App() {
                 games={dashboardGames}
                 seasons={statsSeasons}
                 statsFilter={statsFilter}
-                seasonId={statsSeasonId}
-                teamId={statsTeamId}
+                teamIds={statsTeamIds}
                 search={statsSearch}
                 minGames={statsMinGames}
                 bludgerControlMode={bludgerControlMode}
@@ -6102,17 +7581,18 @@ export default function App() {
           </div>
         ) : view === 'playerProfile' && activePlayerId ? (
           <PlayerProfileView
-            players={statsPlayers} events={dashboardEvents} games={dashboardGames} seasons={statsSeasons} teams={statsTeams}
+            players={statsPlayers} events={dashboardEvents} games={dashboardGames} seasons={statsSeasons} teams={statsTeams} leagues={leagues}
             activePlayerId={activePlayerId}
-            initialSeasonId={statsSeasonId}
+            initialSeasonId={statsSelectedYears.length === 1 ? statsSelectedYears[0] : ''}
             onBack={popProfile}
             onTeamSelect={handleTeamProfileClick}
             onGameSelect={handleGameProfileClick}
             jerseyNumbers={playerJerseyNumbers}
+            statsFilter={statsFilter}
           />
         ) : view === 'teamProfile' && activeTeamId ? (
           <TeamProfileView
-            players={statsPlayers} events={dashboardEvents} games={dashboardGames} seasons={statsSeasons} teams={statsTeams}
+            players={statsPlayers} events={dashboardEvents} games={dashboardGames} seasons={statsSeasons} teams={statsTeams} leagues={leagues}
             activeTeamId={activeTeamId}
             onBack={popProfile}
             onPlayerSelect={handlePlayerProfileClick}
@@ -6120,11 +7600,12 @@ export default function App() {
           />
         ) : view === 'gameProfile' && activeGameId ? (
           <GameBoxScoreView
-            players={statsPlayers} events={statsEvents} games={statsGames} seasons={statsSeasons} teams={statsTeams}
+            players={statsPlayers} events={statsEvents} games={statsGames} seasons={statsSeasons} teams={statsTeams} videos={videos}
             activeGameId={activeGameId}
             onBack={popProfile}
             onPlayerSelect={handlePlayerProfileClick}
             onTeamSelect={handleTeamProfileClick}
+            onWatchVideo={(vid) => { setCurrentVideo(vid); setView('tracker'); }}
           />
         ) : !currentVideo ? (
           <div className="mx-auto mt-8 px-6 pb-16">
@@ -6132,7 +7613,7 @@ export default function App() {
             <div className="flex flex-col xl:flex-row gap-6 w-full items-start">
 
               {/* Completed Games List */}
-              <div className="xl:w-[300px] xl:min-w-[300px] w-full bg-white border border-amber-200/60 rounded-2xl shadow-sm overflow-hidden p-6 flex flex-col">
+              <div className="xl:w-[450px] xl:min-w-[450px] w-full bg-white border border-amber-200/60 rounded-2xl shadow-sm overflow-hidden p-6 flex flex-col">
                 <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2"><ShieldCheck className="w-4 h-4 text-amber-500" /> Completed Games</h3>
                 <div className="grid grid-cols-1 gap-3 mb-4 shrink-0 bg-amber-50/30 p-3 rounded-xl border border-amber-100">
                   <div>
@@ -6162,7 +7643,7 @@ export default function App() {
                     </select>
                   </div>
                 </div>
-                <div className="space-y-1.5 flex-1 min-h-[200px] max-h-[600px] overflow-y-auto custom-scrollbar pr-1 pb-4">
+                <div className="space-y-1.5 flex-1 min-h-[200px] max-h-[400px] overflow-y-auto custom-scrollbar pr-1 pb-4">
                   {verifiedFilteredGames.map(g => {
                     const acts = statsVideos.filter(v => v.gameId === g.id);
                     if (acts.length === 0) return null;
@@ -6178,9 +7659,15 @@ export default function App() {
                         <div className="flex-1 min-w-0">
                           <p className="font-bold text-xs leading-snug text-gray-900">{g.displayName}</p>
                           {g.tag && <p className="text-[9px] font-normal truncate mt-0.5 text-amber-700/60">{g.tag}</p>}
-                          <p className="text-[10px] flex items-center gap-1 font-medium text-amber-600/80 mt-0.5">
-                            <ShieldCheck className="w-2.5 h-2.5" /> Complete
-                          </p>
+                          <div className="flex items-center gap-2 mt-0.5 text-[10px] font-medium text-amber-600/80">
+                            <span className="flex items-center gap-1">
+                              <ShieldCheck className="w-2.5 h-2.5" /> Complete
+                            </span>
+                            <span className="flex items-center gap-1 opacity-80">
+                              <Clock className="w-2.5 h-2.5" />
+                              {g.date ? new Date(g.date + "T12:00:00").toLocaleDateString() : '-'}
+                            </span>
+                          </div>
                         </div>
                       </button>
                     ));
@@ -6199,17 +7686,31 @@ export default function App() {
               <div className="xl:flex-1 w-full bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden p-6 flex flex-col">
                 <h3 className="text-xl font-bold text-gray-900 mb-6 flex items-center gap-3"><Play className="w-5 h-5 text-gray-400" /> Watch and Contribute</h3>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6 shrink-0 bg-gray-50/50 p-4 rounded-xl border border-gray-100">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6 shrink-0 bg-gray-50/50 p-4 rounded-xl border border-gray-100">
                   <div>
                     <span className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-2 block">League</span>
                     <select
                       value={watchLeagueId}
-                      onChange={e => { setWatchLeagueId(e.target.value); setTrackerYearId('all'); setTrackerTeamId('all'); setTrackerOpponentId('all'); setTrackerGameId(''); }}
+                      onChange={e => { setWatchLeagueId(e.target.value); setWatchDivision('all'); setTrackerYearId('all'); setTrackerTeamId('all'); setTrackerOpponentId('all'); setTrackerGameId(''); }}
                       className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-red-500 font-medium"
                     >
                       <option value="all">All Leagues</option>
                       {watchLeagues.map(l => (
-                        <option key={l} value={l}>{l}</option>
+                        <option key={l} value={l}>{leagues.find(lg => lg.id === l)?.name || l}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <span className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-2 block">Division</span>
+                    <select
+                      value={watchDivision}
+                      onChange={e => { setWatchDivision(e.target.value); setTrackerYearId('all'); setTrackerTeamId('all'); setTrackerOpponentId('all'); setTrackerGameId(''); }}
+                      className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-red-500 font-medium disabled:opacity-50"
+                      disabled={watchLeagueId === 'all'}
+                    >
+                      <option value="all">All Divisions</option>
+                      {watchDivisions.map(d => (
+                        <option key={d} value={d}>{d}</option>
                       ))}
                     </select>
                   </div>
@@ -6241,7 +7742,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="space-y-1.5 flex-1 min-h-[400px] max-h-[600px] overflow-y-auto custom-scrollbar pr-2 pb-4">
+                <div className="space-y-1.5 flex-1 min-h-[300px] max-h-[400px] overflow-y-auto custom-scrollbar pr-2 pb-4">
                   {trackingFilteredGames.map(g => {
                     const acts = statsVideos.filter(v => v.gameId === g.id);
                     if (acts.length === 0) return null;
@@ -6268,7 +7769,7 @@ export default function App() {
                             <div className="flex items-center gap-2 mt-0.5">
                               <p className={cn("text-[11px] flex items-center gap-1 font-medium", isVerified ? "text-amber-600/80" : "text-gray-500")}>
                                 <Clock className="w-3 h-3" />
-                                {new Date(vid.createdAt).toLocaleDateString()}
+                                {g.date ? new Date(g.date + "T12:00:00").toLocaleDateString() : '-'}
                               </p>
                             </div>
                           </div>
@@ -6296,83 +7797,14 @@ export default function App() {
                   )}
                 </div>
               </div>
-
-              {/* Start New Video */}
-              {['author', 'moderator', 'trusted'].includes(effectiveRole) && (
-                <div className="xl:w-1/3 w-full bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden sticky top-6">
-                  <div className="bg-gray-50/50 border-b border-gray-100 p-5">
-                    <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2"><Play className="w-4 h-4 text-red-600" /> Add New Video</h3>
-                    <p className="text-sm text-gray-500 mt-1">Don't see the game above? Paste a YouTube link here to add it.</p>
-                  </div>
-                  <div className="p-6 space-y-5">
-                    <label className="block">
-                      <span className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-1.5 block">YouTube URL</span>
-                      <div className="relative">
-                        <input type="text" placeholder="https://www.youtube.com/watch?v=..." className="w-full bg-gray-50 border border-gray-200 focus:border-red-500 focus:ring-2 focus:ring-red-500/20 rounded-xl px-4 py-3 outline-none transition-all pr-12 text-sm font-medium" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
-                        <div className="absolute right-3 top-3 text-gray-300"><Search className="w-5 h-5" /></div>
-                      </div>
-                    </label>
-
-                    <div className="grid grid-cols-1 gap-5">
-                      <label className="block">
-                        <span className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-1.5 block">Season (Year)</span>
-                        <select className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20 text-sm font-medium" value={newVideoData.seasonId} onChange={e => setNewVideoData({ ...newVideoData, seasonId: e.target.value })} required>
-                          <option value="" disabled>Select Season...</option>
-                          {seasons.map(s => <option key={s.id} value={s.id}>{s.name || s.id}</option>)}
-                        </select>
-                      </label>
-
-                      <label className="block">
-                        <span className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-1.5 block">Home Team</span>
-                        <select className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20 text-sm font-medium" value={newVideoData.homeTeamId} onChange={e => setNewVideoData({ ...newVideoData, homeTeamId: e.target.value })} required>
-                          <option value="" disabled>Select Home...</option>
-                          {teams.map(t => <option key={t.id} value={t.id}>{t.name || t.id}</option>)}
-                        </select>
-                      </label>
-
-                      <label className="block">
-                        <span className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-1.5 block">Away Team</span>
-                        <select className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20 text-sm font-medium" value={newVideoData.awayTeamId} onChange={e => setNewVideoData({ ...newVideoData, awayTeamId: e.target.value })} required>
-                          <option value="" disabled>Select Away...</option>
-                          {teams.map(t => <option key={t.id} value={t.id}>{t.name || t.id}</option>)}
-                        </select>
-                      </label>
-                    </div>
-
-                    <label className="block">
-                      <span className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-1.5 block flex items-center justify-between">
-                        Game Tag
-                        <span className="text-gray-300 font-normal normal-case">Optional, e.g. Finals</span>
-                      </span>
-                      <input type="text" placeholder="e.g. Finals Match 1" className="w-full bg-gray-50 border border-gray-200 focus:border-red-500 focus:ring-2 focus:ring-red-500/20 rounded-xl px-4 py-3 outline-none transition-all text-sm font-medium" value={newVideoData.tag} onChange={(e) => setNewVideoData({ ...newVideoData, tag: e.target.value })} />
-                    </label>
-
-                    {/* Game ID Override — hidden, enable manually when needed
-                    {isAdmin && (
-                      <label className="block">
-                        <span className="text-xs font-bold uppercase tracking-wider text-amber-500 mb-1.5 block flex items-center justify-between">
-                          Game ID Override
-                          <span className="text-amber-400 font-normal normal-case">Admin only — leave blank to auto-generate</span>
-                        </span>
-                        <input type="text" placeholder="e.g. game_xWoB5bLcuBo" className="w-full bg-amber-50/30 border border-amber-300 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 rounded-xl px-4 py-3 outline-none transition-all text-sm font-mono" value={newVideoData.gameId} onChange={(e) => setNewVideoData({ ...newVideoData, gameId: e.target.value })} />
-                      </label>
-                    )}
-                    */}
-
-                    <button onClick={handleSearchVideo} disabled={!searchQuery || !newVideoData.seasonId || !newVideoData.homeTeamId || !newVideoData.awayTeamId} className="w-full bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3.5 rounded-xl transition-all mt-4 flex justify-center items-center gap-2 shadow-sm" >
-                      Start Tracking
-                    </button>
-                  </div>
-                </div>
-              )}
             </div>
           </div>
 
         ) : (
           <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 gap-4">
             {/* Left Column: Player & Controls */}
-            <div className="lg:col-span-9 flex flex-col gap-2 min-h-0 overflow-hidden">
-              <div className="flex-1 min-h-0 bg-black rounded-2xl overflow-hidden shadow-2xl border border-gray-200 flex items-center justify-center relative">
+            <div className={cn("flex flex-col gap-2 min-h-0 overflow-hidden", isExpandedLayout ? "lg:col-span-12 shrink-0" : "lg:col-span-9")}>
+              <div className={cn("rounded-2xl overflow-hidden shadow-2xl border border-gray-200 flex items-center justify-center relative", isExpandedLayout ? "hidden" : "bg-black flex-1 min-h-0")}>
                 {(() => {
                   const url = currentVideo?.youtubeId || '';
                   let validId = '';
@@ -6404,84 +7836,102 @@ export default function App() {
                         playerVars: { autoplay: 0, modestbranding: 1 },
                       }}
                       onReady={(e) => setPlayer(e.target)}
+                      onStateChange={(e) => setIsVideoPlaying(e.data === 1)}
                     />
                   );
                 })()}
               </div>
 
               {/* Controls and Scoreboard Row */}
-              <div className="flex flex-row items-center justify-between gap-3 w-full mt-2 mb-3">
-                {/* Scoreboard Persistent Header */}
-                <div className="flex-1 min-w-0">
-                  {(() => {
-                    if (!currentGame) return null;
-                    const pastEvents = activeTrackingEvents.filter(e => e.videoTime <= currentTime);
-                    const liveScores = computeScores(pastEvents, currentGame.homeTeamId, currentGame.awayTeamId);
-                    const winCond = computeWinCondition(pastEvents, currentGame.homeTeamId, currentGame.awayTeamId);
-                    const homeTeamObj = teams.find(t => t.id === currentGame.homeTeamId);
-                    const awayTeamObj = teams.find(t => t.id === currentGame.awayTeamId);
-                    const homeName = homeTeamObj?.nickname || homeTeamObj?.name || 'Home';
-                    const awayName = awayTeamObj?.nickname || awayTeamObj?.name || 'Away';
-                    const homeColor = homeTeamObj?.colorPrimary || '#dc2626';
-                    const awayColor = awayTeamObj?.colorPrimary || '#2563eb';
-                    const currentDodgeballTeamId = getControlTeamAtTime(computeControlPeriods(pastEvents), currentTime);
-
-                    return (
-                      <div className={cn("bg-white border rounded py-1.5 px-3 shrink-0 shadow-sm flex items-center justify-between w-full mx-auto gap-4 relative", winCond.flagOnPitch && !winCond.winner ? "bg-yellow-50 border-yellow-300" : "border-gray-200")}>
-                        {/* Left: Home */}
-                        <div className="flex items-center justify-end flex-1 w-0 gap-2">
-                          <p className="text-[10px] md:text-xs uppercase font-bold truncate text-right w-full" style={{ color: homeColor }}>{homeName}</p>
-                          <div className="flex items-center gap-1 shrink-0">
-                            <p className="text-xl font-mono font-bold" style={{ color: homeColor }}>{liveScores.home}</p>
-                            {currentDodgeballTeamId === currentGame.homeTeamId && <div title="Dodgeball Control" className="w-1.5 h-1.5 bg-black rounded-sm shadow-sm" />}
-                          </div>
-                        </div>
-
-                        {/* Center: Clock & Win Cond */}
-                        <div className="flex flex-col items-center justify-center shrink-0 border-x border-gray-100 px-4 min-w-[100px]">
-                          <p className="text-xs font-mono font-bold text-gray-800 bg-gray-100 px-2 py-0.5 rounded shadow-inner leading-none">{formatTime(gameTime)}</p>
-                          {winCond.winner ? (
-                            <p className="text-[8px] font-bold text-yellow-600 uppercase tracking-widest mt-1 truncate">
-                              Winner: {teams.find(t => t.id === winCond.winner)?.nickname || teams.find(t => t.id === winCond.winner)?.name || winCond.winner}
-                            </p>
-                          ) : winCond.targetSet ? (
-                            <div className="flex items-center gap-1 mt-1 text-[8px] font-bold uppercase tracking-widest text-yellow-600">
-                              {winCond.flagOnPitch && <Flag className="w-2.5 h-2.5" />} Target: {winCond.threshold}
-                            </div>
-                          ) : null}
-                        </div>
-
-                        {/* Right: Away */}
-                        <div className="flex items-center justify-start flex-1 w-0 gap-2">
-                          <div className="flex items-center gap-1 shrink-0">
-                            {currentDodgeballTeamId === currentGame.awayTeamId && <div title="Dodgeball Control" className="w-1.5 h-1.5 bg-black rounded-sm shadow-sm" />}
-                            <p className="text-xl font-mono font-bold" style={{ color: awayColor }}>{liveScores.away}</p>
-                          </div>
-                          <p className="text-[10px] md:text-xs uppercase font-bold truncate text-left w-full" style={{ color: awayColor }}>{awayName}</p>
-                        </div>
-
-                        {isAdmin && rightPanelTab === 'record' && (
-                          <div className="flex gap-1 absolute -right-2 top-0 bottom-0 translate-x-full">
-                            <button onClick={() => handleVerifyGame(currentGame.id)} className={cn("flex flex-col items-center justify-center p-1 rounded-r border transition-colors", currentGame.isVerified ? "text-emerald-600 bg-emerald-50 border-emerald-200" : "text-gray-400 bg-gray-50 border-gray-200 hover:text-emerald-600 hover:bg-emerald-50")} title={currentGame.isVerified ? "Mark Incomplete" : "Mark Complete"}>
-                              <ShieldCheck className="w-3 h-3" />
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })()}
-                </div>
-
-                {/* Video Scrub Controls */}
-                {player && (
+              {(() => {
+                const renderScrubControls = () => (
                   <div className="flex gap-1 items-center shrink-0">
-                    <button onClick={() => player.seekTo(Math.max(0, currentTime - 15))} className="p-1.5 md:px-2 md:py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-[9px] md:text-[10px] uppercase tracking-wider font-bold rounded shadow-sm flex items-center justify-center gap-0.5 md:gap-1 transition-all" title="Rewind 15s"><Rewind className="w-3 h-3"/> <span className="hidden md:block">15s</span></button>
-                    <button onClick={() => player.seekTo(Math.max(0, currentTime - 5))} className="p-1.5 md:px-2 md:py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-[9px] md:text-[10px] uppercase tracking-wider font-bold rounded shadow-sm flex items-center justify-center gap-0.5 md:gap-1 transition-all" title="Rewind 5s"><Rewind className="w-3 h-3"/> <span className="hidden md:block">5s</span></button>
-                    <button onClick={() => player.seekTo(currentTime + 5)} className="p-1.5 md:px-2 md:py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-[9px] md:text-[10px] uppercase tracking-wider font-bold rounded shadow-sm flex items-center justify-center gap-0.5 md:gap-1 transition-all" title="Forward 5s"><span className="hidden md:block">5s</span> <FastForward className="w-3 h-3"/></button>
-                    <button onClick={() => player.seekTo(currentTime + 15)} className="p-1.5 md:px-2 md:py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-[9px] md:text-[10px] uppercase tracking-wider font-bold rounded shadow-sm flex items-center justify-center gap-0.5 md:gap-1 transition-all" title="Forward 15s"><span className="hidden md:block">15s</span> <FastForward className="w-3 h-3"/></button>
+                    <button onClick={() => player?.seekTo(Math.max(0, currentTime - 15))} className="p-1.5 md:px-2 md:py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-[9px] md:text-[10px] uppercase tracking-wider font-bold rounded shadow-sm flex items-center justify-center gap-0.5 md:gap-1 transition-all" title="Rewind 15s"><Rewind className="w-3 h-3"/> <span className="hidden md:block">15s</span></button>
+                    <button onClick={() => player?.seekTo(Math.max(0, currentTime - 5))} className="p-1.5 md:px-2 md:py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-[9px] md:text-[10px] uppercase tracking-wider font-bold rounded shadow-sm flex items-center justify-center gap-0.5 md:gap-1 transition-all" title="Rewind 5s"><Rewind className="w-3 h-3"/> <span className="hidden md:block">5s</span></button>
+                    <button onClick={() => isVideoPlaying ? player?.pauseVideo() : player?.playVideo()} className="p-1.5 md:px-3 md:py-1.5 bg-red-100 hover:bg-red-200 text-red-700 text-[9px] md:text-[10px] uppercase tracking-wider font-bold rounded shadow-sm flex items-center justify-center gap-0.5 md:gap-1 transition-all" title={isVideoPlaying ? "Pause" : "Play"}>
+                      {isVideoPlaying ? <Pause className="w-3 h-3"/> : <Play className="w-3 h-3"/>}
+                    </button>
+                    <button onClick={() => player?.seekTo(currentTime + 5)} className="p-1.5 md:px-2 md:py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-[9px] md:text-[10px] uppercase tracking-wider font-bold rounded shadow-sm flex items-center justify-center gap-0.5 md:gap-1 transition-all" title="Forward 5s"><span className="hidden md:block">5s</span> <FastForward className="w-3 h-3"/></button>
+                    <button onClick={() => player?.seekTo(currentTime + 15)} className="p-1.5 md:px-2 md:py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-[9px] md:text-[10px] uppercase tracking-wider font-bold rounded shadow-sm flex items-center justify-center gap-0.5 md:gap-1 transition-all" title="Forward 15s"><span className="hidden md:block">15s</span> <FastForward className="w-3 h-3"/></button>
                   </div>
-                )}
-              </div>
+                );
+
+                return (
+                  <div className={cn("w-full mt-2 mb-3", isExpandedLayout ? "grid grid-cols-4 gap-4 items-center" : "flex flex-row items-center justify-between gap-3")}>
+                    {/* Video Scrub Controls - Left side in Expanded Mode */}
+                    {isExpandedLayout && player && (
+                      <div className="col-span-1 flex items-center justify-center">
+                        {renderScrubControls()}
+                      </div>
+                    )}
+
+                    {/* Scoreboard Persistent Header */}
+                    <div className={cn("min-w-0", isExpandedLayout ? "col-span-3" : "flex-1")}>
+                      {(() => {
+                        if (!currentGame) return null;
+                        const pastEvents = activeTrackingEvents.filter(e => e.videoTime <= currentTime);
+                        const liveScores = computeScores(pastEvents, currentGame.homeTeamId, currentGame.awayTeamId);
+                        const winCond = computeWinCondition(pastEvents, currentGame.homeTeamId, currentGame.awayTeamId);
+                        const homeTeamObj = teams.find(t => t.id === currentGame.homeTeamId);
+                        const awayTeamObj = teams.find(t => t.id === currentGame.awayTeamId);
+                        const homeName = homeTeamObj?.nickname || homeTeamObj?.name || 'Home';
+                        const awayName = awayTeamObj?.nickname || awayTeamObj?.name || 'Away';
+                        const homeColor = homeTeamObj?.colorPrimaryDark || homeTeamObj?.colorPrimary || '#dc2626';
+                        const awayColor = awayTeamObj?.colorPrimaryDark || awayTeamObj?.colorPrimary || '#2563eb';
+                        const currentDodgeballTeamId = getControlTeamAtTime(computeControlPeriods(pastEvents), currentTime);
+
+                        return (
+                          <div className={cn("bg-white border rounded py-1.5 px-3 shrink-0 shadow-sm flex items-center justify-between w-full mx-auto gap-4 relative", winCond.flagOnPitch && !winCond.winner ? "bg-yellow-50 border-yellow-300" : "border-gray-200")}>
+                            {/* Left: Home */}
+                            <div className="flex items-center justify-end flex-1 w-0 gap-2">
+                              <p className="text-[10px] md:text-xs uppercase font-bold truncate text-right w-full" style={{ color: homeColor }}>{homeName}</p>
+                              <div className="flex items-center gap-1 shrink-0">
+                                <p className="text-xl font-mono font-bold" style={{ color: homeColor }}>{liveScores.home}</p>
+                                {currentDodgeballTeamId === currentGame.homeTeamId && <div title="Dodgeball Control" className="w-1.5 h-1.5 bg-black rounded-sm shadow-sm" />}
+                              </div>
+                            </div>
+
+                            {/* Center: Clock & Win Cond */}
+                            <div className="flex flex-col items-center justify-center shrink-0 border-x border-gray-100 px-4 min-w-[100px]">
+                              <p className="text-xs font-mono font-bold text-gray-800 bg-gray-100 px-2 py-0.5 rounded shadow-inner leading-none">{formatTime(gameTime)}</p>
+                              {winCond.winner ? (
+                                <p className="text-[8px] font-bold text-yellow-600 uppercase tracking-widest mt-1 truncate">
+                                  Winner: {teams.find(t => t.id === winCond.winner)?.nickname || teams.find(t => t.id === winCond.winner)?.name || winCond.winner}
+                                </p>
+                              ) : winCond.targetSet ? (
+                                <div className="flex items-center gap-1 mt-1 text-[8px] font-bold uppercase tracking-widest text-yellow-600">
+                                  {winCond.flagOnPitch && <Flag className="w-2.5 h-2.5" />} Target: {winCond.threshold}
+                                </div>
+                              ) : null}
+                            </div>
+
+                            {/* Right: Away */}
+                            <div className="flex items-center justify-start flex-1 w-0 gap-2">
+                              <div className="flex items-center gap-1 shrink-0">
+                                {currentDodgeballTeamId === currentGame.awayTeamId && <div title="Dodgeball Control" className="w-1.5 h-1.5 bg-black rounded-sm shadow-sm" />}
+                                <p className="text-xl font-mono font-bold" style={{ color: awayColor }}>{liveScores.away}</p>
+                              </div>
+                              <p className="text-[10px] md:text-xs uppercase font-bold truncate text-left w-full" style={{ color: awayColor }}>{awayName}</p>
+                            </div>
+
+                            <div className="pl-3 ml-2 border-l border-gray-200 flex items-center justify-center shrink-0 gap-1">
+                              <button onClick={() => setIsExpandedLayout(v => !v)} className={cn("p-1.5 rounded transition-colors", isExpandedLayout ? "text-red-600 bg-red-50 hover:bg-red-100" : "text-gray-400 hover:text-red-600")} title={isExpandedLayout ? "Restore Video" : "Cinema Mode (Hide Video)"}>
+                                <Maximize2 className="w-5 h-5" />
+                              </button>
+                              <button onClick={() => handleGameProfileClick(currentGame.id)} className="p-1.5 text-gray-400 hover:text-blue-600 transition-colors" title="View Box Score">
+                                <Activity className="w-5 h-5" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+
+                    {/* Video Scrub Controls - Right side in Normal Mode */}
+                    {!isExpandedLayout && player && renderScrubControls()}
+                  </div>
+                );
+              })()}
 
 
               {!user && (
@@ -6493,15 +7943,16 @@ export default function App() {
             </div>
 
             {/* Right Column: Event Feed & Roster */}
-            <div className="lg:col-span-3 flex flex-col gap-4 overflow-hidden h-full">
+            <div className={cn("flex flex-col gap-4 overflow-hidden h-full", isExpandedLayout ? "lg:col-span-12" : "lg:col-span-3")}>
               <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden flex flex-col h-full relative">
-                <div className="p-0 border-b border-gray-200 flex items-center justify-between bg-gray-50/50 z-10 shrink-0">
-                  <div className="flex w-full">
+                {!isExpandedLayout && (
+                  <div className="p-0 border-b border-gray-200 flex items-center justify-between bg-gray-50/50 z-10 shrink-0">
+                    <div className="flex w-full">
                     <button
                       onClick={() => setRightPanelTab('live_events')}
                       className={cn("flex-1 px-4 py-3 text-sm font-bold flex items-center justify-center gap-2 transition-colors", rightPanelTab === 'live_events' ? "bg-white text-red-600 border-b-2 border-red-600" : "text-gray-500 hover:text-gray-700 hover:bg-gray-100")}
                     >
-                      <Clock className="w-4 h-4" /> {statsFilter === 'verified' ? 'Verified' : 'Events'}
+                      <Clock className="w-4 h-4" /> {statsFilter.startsWith('verified') ? 'Verified' : 'Events'}
                     </button>
                     {user && effectiveRole !== 'voter' && (
                       <button
@@ -6517,24 +7968,380 @@ export default function App() {
                       </button>
                     )}
                     <button
-                      onClick={() => setRightPanelTab('momentum')}
-                      className={cn("flex-1 px-4 py-3 text-sm font-bold flex items-center justify-center gap-2 transition-colors", rightPanelTab === 'momentum' ? "bg-white text-red-600 border-b-2 border-red-600" : "text-gray-500 hover:text-gray-700 hover:bg-gray-100")}
-                    >
-                      <TrendingUp className="w-4 h-4" /> Momentum
-                    </button>
-                    <button
                       onClick={() => setRightPanelTab('rosters')}
                       className={cn("flex-1 px-4 py-3 text-sm font-bold flex items-center justify-center gap-2 transition-colors", rightPanelTab === 'rosters' ? "bg-white text-red-600 border-b-2 border-red-600" : "text-gray-500 hover:text-gray-700 hover:bg-gray-100")}
                     >
                       <User className="w-4 h-4" /> Players
                     </button>
+                    <button
+                      onClick={() => setRightPanelTab('momentum')}
+                      className={cn("flex-1 px-4 py-3 text-sm font-bold flex items-center justify-center gap-2 transition-colors", rightPanelTab === 'momentum' ? "bg-white text-red-600 border-b-2 border-red-600" : "text-gray-500 hover:text-gray-700 hover:bg-gray-100")}
+                    >
+                      <TrendingUp className="w-4 h-4" /> Momentum
+                    </button>
                   </div>
                 </div>
+                )}
 
-                <div className="flex-1 overflow-hidden relative">
+                <div className={cn("flex-1 overflow-hidden relative", isExpandedLayout ? "grid grid-cols-1 lg:grid-cols-4 divide-y lg:divide-y-0 lg:divide-x divide-gray-200" : "")}>
 
-                  {/* RECORD TAB */}
-                  <div className={cn("absolute inset-0 overflow-y-auto custom-scrollbar p-4 flex flex-col gap-4 bg-white", rightPanelTab === 'record' ? "block" : "hidden")}>
+<div className={cn(isExpandedLayout ? "flex flex-col h-full relative" : "absolute inset-0", (rightPanelTab === 'live_events' || isExpandedLayout) ? "block" : "hidden", "overflow-y-auto p-4 custom-scrollbar bg-gray-50")} id="events-scroll-container">
+                    <div className="sticky top-0 z-10 bg-gray-50/95 backdrop-blur-md pb-3 pt-1 mb-4 border-b border-gray-200/60 flex flex-col gap-2.5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => {
+                              const container = document.getElementById('events-scroll-container');
+                              if (!container) return;
+                              const allCards = container.querySelectorAll('[data-event-time]');
+                              let nearest: Element | null = null;
+                              let bestDiff = Infinity;
+                              allCards.forEach(card => {
+                                const t = parseFloat(card.getAttribute('data-event-time') || '0');
+                                const diff = Math.abs(t - currentTime);
+                                if (diff < bestDiff) { bestDiff = diff; nearest = card; }
+                              });
+                              if (nearest) (nearest as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            }}
+                            className="flex items-center gap-1 px-3 py-1 rounded text-[10px] font-bold transition-all border bg-white text-gray-500 border-gray-200 hover:text-red-500 hover:border-red-300 shadow-sm"
+                            title="Scroll to event nearest current time"
+                          >
+                            <SkipForward className="w-3 h-3" />
+                            Now
+                          </button>
+                          <button
+                            onClick={handleRegeneratePossessionPins}
+                            className="flex items-center gap-1 px-2 py-1 rounded transition-all border bg-white text-purple-500 border-purple-200 hover:text-purple-700 hover:border-purple-400 shadow-sm"
+                            title="Regenerate auto-pins (possession & control) for the current video"
+                          >
+                            <RefreshCcw className="w-3 h-3" />
+                          </button>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mr-1">
+                            {statsFilter.startsWith('verified') ? `${activeTrackingEvents.filter(e => e.status === 'verified').length} verified` : `${activeTrackingEvents.length} events`}
+                          </span>
+                          <button
+                            onClick={() => setStatsFilter(statsFilter.startsWith('verified') ? 'all' : 'verified')}
+                            className={cn('flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold transition-all border', statsFilter.startsWith('verified') ? 'bg-amber-500/10 text-amber-600 border-amber-500/30' : 'bg-white text-gray-400 border-gray-200 hover:text-amber-500')}
+                          >
+                            <ShieldCheck className="w-3 h-3" /> {statsFilter.startsWith('verified') ? 'Verified' : 'All'}
+                          </button>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <select value={eventsFilterSet} onChange={e => setEventsFilterSet(e.target.value)} className="flex-1 text-[10px] font-bold text-gray-600 bg-white border border-gray-200 rounded-md py-1.5 px-2 outline-none focus:border-red-300 focus:ring-1 focus:ring-red-200 shadow-sm appearance-none">
+                          <option value="all">All Events</option>
+                          <option value="all_no_subs">All (No Subs)</option>
+                          {currentGame?.homeTeamId && <option value="home_focused">Home Focused</option>}
+                          {currentGame?.awayTeamId && <option value="away_focused">Away Focused</option>}
+                          <option value="possession_scoring">Possessions & Scoring</option>
+                        </select>
+                      </div>
+                      {(isAdmin || effectiveRole === 'moderator') && currentGame && (
+                        <div className="flex items-center gap-2">
+                          {(() => {
+                            const allEvts = activeTrackingEvents.filter(e => e.id && !e.id.includes('_draft'));
+                            const allVerified = allEvts.length > 0 && allEvts.every(e => e.status === 'verified');
+                            return (
+                              <button
+                                onClick={() => handleToggleAllEventsVerified(currentGame.id)}
+                                className={cn(
+                                  'flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md text-[10px] font-bold transition-all border',
+                                  allVerified
+                                    ? 'bg-emerald-50 text-emerald-600 border-emerald-200 hover:bg-emerald-100'
+                                    : 'bg-white text-gray-400 border-gray-200 hover:text-emerald-500 hover:border-emerald-300'
+                                )}
+                                title={allVerified ? 'Unverify all events' : 'Verify all events'}
+                              >
+                                <ShieldCheck className="w-3 h-3" />
+                                {allVerified ? 'Events Verified ✓' : 'Verify All Events'}
+                              </button>
+                            );
+                          })()}
+                          <button
+                            onClick={() => handleVerifyGame(currentGame.id)}
+                            className={cn(
+                              'flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md text-[10px] font-bold transition-all border',
+                              currentGame.isVerified
+                                ? 'bg-amber-50 text-amber-600 border-amber-200 hover:bg-amber-100'
+                                : 'bg-white text-gray-400 border-gray-200 hover:text-amber-500 hover:border-amber-300'
+                            )}
+                            title={currentGame.isVerified ? 'Mark game incomplete' : 'Mark game complete'}
+                          >
+                            <ShieldCheck className="w-3 h-3" />
+                            {currentGame.isVerified ? 'Game Complete ✓' : 'Mark Game Complete'}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    <div className="space-y-4">
+                    {(() => {
+                      const pinEvents = pins.filter(p => p.videoId === currentVideo?.id).map(p => ({
+                        id: p.id,
+                        type: `pin_${p.type}`,
+                        videoTime: p.time,
+                        gameTime: 0,
+                        teamId: null,
+                        playerId: null,
+                        status: 'recorded'
+                      } as any));
+                      let displayEvents = [...activeTrackingEvents, ...pinEvents].sort((a,b) => a.videoTime - b.videoTime);
+                      
+                      if (statsFilter.startsWith('verified')) {
+                        displayEvents = displayEvents.filter(e => e.status === 'verified' || e.type.startsWith('pin_'));
+                      }
+
+                      switch (eventsFilterSet) {
+                        case 'all_no_subs':
+                          displayEvents = displayEvents.filter(e => (e.type !== 'sub_in' && e.type !== 'sub_out') || e.type.startsWith('pin_'));
+                          break;
+                        case 'home_focused':
+                          displayEvents = displayEvents.filter(e => 
+                            e.type.startsWith('pin_') || 
+                            e.teamId === currentGame?.homeTeamId || 
+                            (e.teamId === currentGame?.awayTeamId && e.type === 'goal')
+                          );
+                          break;
+                        case 'away_focused':
+                          displayEvents = displayEvents.filter(e => 
+                            e.type.startsWith('pin_') || 
+                            e.teamId === currentGame?.awayTeamId || 
+                            (e.teamId === currentGame?.homeTeamId && e.type === 'goal')
+                          );
+                          break;
+                        case 'possession_scoring':
+                          displayEvents = displayEvents.filter(e => 
+                            e.type.startsWith('pin_') || 
+                            ['goal', 'assist', 'shot', 'attempt', 'miss_ko', 'turnover', 'control_change', 'control_start'].includes(e.type)
+                          );
+                          break;
+                        case 'all':
+                        default:
+                          // No additional filtering needed
+                          break;
+                      }
+
+
+
+                      return displayEvents.length === 0 ? (
+                        <div className="h-full flex flex-col items-center justify-center text-gray-400 text-center p-8">
+                          <Clock className="w-12 h-12 mb-4 opacity-20" />
+                          <p>{statsFilter.startsWith('verified') ? 'No verified events yet.' : 'No events recorded yet.'}</p>
+                          <p className="text-sm">{statsFilter.startsWith('verified') ? 'Switch to All to see unverified events.' : 'Be the first to track a goal!'}</p>
+                        </div>
+                      ) : (
+                        displayEvents.slice().reverse().map((event) => {
+                          const isPin = event.type.startsWith('pin_');
+                          if (isPin) {
+                            const pinType = event.type.replace('pin_', '');
+                            let colorClass = "bg-gray-400 text-white";
+                            let lineClass = "bg-gray-400";
+                            if (pinType === 'control') { colorClass = "bg-black text-white"; lineClass = "bg-black"; }
+                            else if (pinType === 'general') { colorClass = "bg-yellow-400 text-yellow-900"; lineClass = "bg-yellow-400"; }
+                            else if (pinType === 'possession') { colorClass = "bg-purple-600 text-white"; lineClass = "bg-purple-600"; }
+                            else if (pinType === 'sub') { colorClass = "bg-cyan-600 text-white"; lineClass = "bg-cyan-600"; }
+
+                            return (
+                              <div key={event.id} className="flex items-center gap-1.5 group w-full py-1 relative">
+                                <div className={`flex-1 h-[2px] ${lineClass} opacity-30 group-hover:opacity-100 transition-opacity`}></div>
+                                <button 
+                                  onClick={() => player?.seekTo(event.videoTime)}
+                                  className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider ${colorClass} hover:opacity-80 transition-opacity flex items-center gap-1 shadow-sm shrink-0`}
+                                >
+                                  <MapPin className="w-2.5 h-2.5" />
+                                  {pinType} @ {formatTime(event.videoTime)}
+                                </button>
+                                <button 
+                                  onClick={(e) => { e.stopPropagation(); setPins(prev => prev.filter(pin => pin.id !== event.id)); }} 
+                                  className="text-gray-400 hover:text-red-500 transition-colors p-0.5 opacity-0 group-hover:opacity-100 shrink-0" 
+                                  title="Dismiss Pin"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                                <div className={`flex-1 h-[2px] ${lineClass} opacity-30 group-hover:opacity-100 transition-opacity`}></div>
+                              </div>
+                            );
+                          }
+
+                          const eventConfig = EVENT_CONFIG[event.type as EventType] || { label: event.type, icon: <AlertCircle className="w-4 h-4" />, color: 'bg-neutral-500' };
+                          const dynamicLabel = (event.type === 'sub_in' && event.position) ? `${event.position} In` : (event.type === 'sub_out' && event.position) ? `${event.position} Out` : eventConfig.label;
+                          return (
+                            <div
+                              key={event.id}
+                              data-event-time={event.videoTime}
+                              className={cn(
+                                "group border rounded-xl p-3 transition-all",
+                                event.teamId === currentGame?.homeTeamId ? "bg-red-50/50 border-red-100 hover:border-red-200" :
+                                  event.teamId === currentGame?.awayTeamId ? "bg-blue-50/50 border-blue-100 hover:border-blue-200" :
+                                    "bg-white border-gray-200 hover:border-gray-300",
+                                event.status === 'rejected' && "opacity-50 grayscale"
+                              )}
+                            >
+                              <div className="flex items-start justify-between mb-2">
+                                <div className="flex items-center gap-2">
+                                  <div className={cn("p-1.5 rounded-md", eventConfig.color)}>
+                                    {React.cloneElement(eventConfig.icon as React.ReactElement<any>, { className: 'w-3 h-3' })}
+                                  </div>
+                                  <div className="flex flex-col items-center">
+                                    <p className="font-mono text-xs font-bold text-gray-800 w-12 text-center">{formatTime(event.gameTime || 0)}</p>
+                                    <p className="font-mono text-[9px] text-gray-400 w-12 text-center">({formatTime(event.videoTime)})</p>
+                                  </div>
+                                  <div className="flex flex-col justify-center gap-0.5 ml-1">
+                                    <div className="flex items-center gap-1.5">
+                                      <p className="text-sm font-bold capitalize">
+                                        {dynamicLabel}
+                                      </p>
+                                      {event.status === 'verified' && (
+                                        <ShieldCheck className="w-3.5 h-3.5 text-amber-500" />
+                                      )}
+                                    </div>
+                                    {(event.playerId || event.teamId) && (
+                                      <div className="text-xs">
+                                        {event.playerId ? (() => {
+                                          const p = allPlayers.find(pl => pl.id === event.playerId);
+                                          return p ? (
+                                            <span className={cn("font-bold tracking-tight", event.teamId === currentGame?.homeTeamId ? "text-red-700" : event.teamId === currentGame?.awayTeamId ? "text-blue-700" : "text-gray-700")}>
+                                              {p.firstName.charAt(0)}. {p.lastName}
+                                            </span>
+                                          ) : 'Player';
+                                        })() : (() => {
+                                          const t = teams.find(tm => tm.id === event.teamId);
+                                          return t ? (
+                                            <span className={cn("font-bold text-[9px] uppercase tracking-wider", event.teamId === currentGame?.homeTeamId ? "text-red-700" : event.teamId === currentGame?.awayTeamId ? "text-blue-700" : "text-gray-500")}>
+                                              {t.name}
+                                            </span>
+                                          ) : 'Team';
+                                        })()}
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  {(isAdmin || (event.userId === user?.uid && event.status !== 'verified')) && (
+                                    <>
+                                      <button
+                                        onClick={() => handleEditRecordedEvent(event.id)}
+                                        className="p-1 text-gray-400 hover:text-blue-500 hover:bg-blue-50 transition-colors rounded flex items-center justify-center border border-transparent hover:border-blue-100"
+                                        title="Edit Event"
+                                      >
+                                        <Edit2 className="w-3.5 h-3.5" />
+                                      </button>
+                                      <button
+                                        onClick={() => { if (window.confirm('Delete this event permanently?')) handleDeleteRecordedEvent(event.id) }}
+                                        className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors rounded flex items-center justify-center border border-transparent hover:border-red-100"
+                                        title="Delete Event"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    </>
+                                  )}
+
+                                  <button
+                                    onClick={() => player?.seekTo(event.videoTime)}
+                                    className="text-[10px] font-mono bg-gray-100 hover:bg-red-600 px-2 py-1 rounded transition-colors"
+                                  >
+                                    Seek {formatTime(event.videoTime)}
+                                  </button>
+                                </div>
+                              </div>
+
+                              {event.relatedEventId && (
+                                <div className="mb-2 pl-8 border-l-2 border-gray-200 text-[10px] text-gray-400 italic">
+                                  Assisting: {enrichedEvents.find(e => e.id === event.relatedEventId)?.type || 'Event'}
+                                  ({formatTime(enrichedEvents.find(e => e.id === event.relatedEventId)?.gameTime || 0)})
+                                </div>
+                              )}
+
+                              <div className="flex items-center justify-between pt-2 border-t border-gray-200/50">
+                                <div className="flex items-center gap-3">
+                                  {(isAdmin || effectiveRole === 'moderator') && (
+                                    <button
+                                      onClick={async () => {
+                                        if (!user || !currentVideo) return;
+                                        const newStatus = event.status === 'verified' ? 'unverified' : 'verified';
+                                        // Optimistic local update
+                                        setEvents(prev => prev.map(e => e.id === event.id ? { ...e, status: newStatus } : e));
+                                        try {
+                                          const gameRef = doc(db, 'gameEvents', currentVideo.gameId);
+                                          const gameSnap = await getDoc(gameRef);
+                                          if (!gameSnap.exists()) { toast.error('Game doc not found'); return; }
+                                          const gameData = gameSnap.data();
+                                          const currentEvents = gameData.events as GameEvent[] || [];
+                                          const eventIndex = currentEvents.findIndex(e => e.id === event.id);
+                                          if (eventIndex !== -1) {
+                                            currentEvents[eventIndex] = { ...currentEvents[eventIndex], status: newStatus };
+                                            await updateDoc(gameRef, { events: currentEvents });
+                                            toast.success(newStatus === 'verified' ? '✓ Event verified' : 'Verification removed');
+                                          }
+                                        } catch (e) {
+                                          console.error(e);
+                                          toast.error('Failed to update verification');
+                                          // Revert optimistic update
+                                          setEvents(prev => prev.map(ev => ev.id === event.id ? { ...ev, status: event.status } : ev));
+                                        }
+                                      }}
+                                      className={cn("p-1.5 rounded-lg transition-all border", event.status === 'verified' ? 'bg-amber-500/15 text-amber-500 border-amber-500/30 shadow-sm' : 'bg-gray-50 text-gray-300 border-gray-200 hover:text-amber-500 hover:border-amber-500 hover:bg-amber-50')}
+                                      title={event.status === 'verified' ? "Remove Verification" : "Verify Event (Trusted Only)"}
+                                    >
+                                      <ShieldCheck className="w-4 h-4" />
+                                    </button>
+                                  )}
+                                  <div className="flex items-center gap-1">
+                                    <span className="text-xs font-bold text-green-500">{event.upvotes || 0}</span>
+                                    <CheckCircle2 className="w-3 h-3 text-green-500 opacity-50" />
+                                  </div>
+                                  <div className="flex items-center gap-1">
+                                    <span className="text-xs font-bold text-red-500">{event.downvotes || 0}</span>
+                                    <XCircle className="w-3 h-3 text-red-500 opacity-50" />
+                                  </div>
+                                  <div className="h-3 w-px bg-gray-100 mx-1" />
+                                  <span className={cn(
+                                    "text-xs font-bold",
+                                    event.votes > 0 ? "text-green-500" : event.votes < 0 ? "text-red-500" : "text-gray-400"
+                                  )}>
+                                    {event.votes > 0 ? `+${event.votes}` : event.votes}
+                                  </span>
+                                  <span className="text-[10px] text-gray-300 uppercase font-bold tracking-tighter">Net</span>
+                                </div>
+                                {(
+                                  <div className="flex items-center gap-1">
+                                    <button
+                                      onClick={() => handleVote(event.id, true)}
+                                      className={cn(
+                                        'p-1.5 rounded transition-all',
+                                        event.upvoterIds?.includes(voterId)
+                                          ? 'bg-green-500/20 text-green-600 ring-1 ring-green-500/30'
+                                          : 'hover:bg-green-500/20 text-gray-400 hover:text-green-500'
+                                      )}
+                                      title="Accurate"
+                                    >
+                                      <CheckCircle2 className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                      onClick={() => handleVote(event.id, false)}
+                                      className={cn(
+                                        'p-1.5 rounded transition-all',
+                                        event.downvoterIds?.includes(voterId)
+                                          ? 'bg-red-500/20 text-red-600 ring-1 ring-red-500/30'
+                                          : 'hover:bg-red-500/20 text-gray-400 hover:text-red-500'
+                                      )}
+                                      title="Inaccurate"
+                                    >
+                                      <XCircle className="w-4 h-4" />
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })
+                      );
+                    })()}
+                    </div>
+                  </div>
+
+                  <div className={cn(isExpandedLayout ? "flex flex-col h-full relative" : "absolute inset-0", (rightPanelTab === 'record' || isExpandedLayout) ? "block" : "hidden", "overflow-y-auto custom-scrollbar p-4 bg-white")}>
 
                     {/* Event Type Grid ALWAYS visible because Player Actions are now local popups */}
                     <div className="flex flex-col gap-3 mb-2">
@@ -6719,7 +8526,7 @@ export default function App() {
                                       className="flex-1 w-0 text-[10px] border border-gray-300 rounded p-1.5 bg-white shadow-sm"
                                     >
                                       <option value="">Home Team</option>
-                                      <option value="TEAM_ONLY" className="font-bold text-gray-500">- Team / No Player -</option>
+                                      <option value="TEAM_ONLY" className="font-bold text-gray-500">- {teams.find(t => t.id === currentGame?.homeTeamId)?.nickname || teams.find(t => t.id === currentGame?.homeTeamId)?.name || 'Team'} / No Player -</option>
                                       {homeRosterPlayers
                                         .filter(rp => {
                                           if (draft.type === 'sub_in') return !activePlayerPositions.has(rp.playerId);
@@ -6775,7 +8582,7 @@ export default function App() {
                                       className="flex-1 w-0 text-[10px] border border-gray-300 rounded p-1.5 bg-white shadow-sm"
                                     >
                                       <option value="">Away Team</option>
-                                      <option value="TEAM_ONLY" className="font-bold text-gray-500">- Team / No Player -</option>
+                                      <option value="TEAM_ONLY" className="font-bold text-gray-500">- {teams.find(t => t.id === currentGame?.awayTeamId)?.nickname || teams.find(t => t.id === currentGame?.awayTeamId)?.name || 'Team'} / No Player -</option>
                                       {awayRosterPlayers
                                         .filter(rp => {
                                           if (draft.type === 'sub_in') return !activePlayerPositions.has(rp.playerId);
@@ -6920,8 +8727,8 @@ export default function App() {
 
                   </div>
 
-                  <div className={cn("absolute inset-0 overflow-y-auto custom-scrollbar p-4 space-y-8 bg-gray-50", rightPanelTab === 'rosters' ? "block" : "hidden")}>
-                    {rightPanelTab === 'rosters' && (() => {
+                  <div className={cn(isExpandedLayout ? "flex flex-col h-full relative" : "absolute inset-0", (rightPanelTab === 'rosters' || isExpandedLayout) ? "block" : "hidden", "overflow-y-auto custom-scrollbar p-4 space-y-8 bg-gray-50")}>
+                    {(rightPanelTab === 'rosters' || isExpandedLayout) && (() => {
                       const pastEvents = activeTrackingEvents.filter(e => e.videoTime <= currentTime);
                       const liveStats = new Map<string, { g: number, a: number, plus: number, minus: number }>();
 
@@ -7299,373 +9106,8 @@ export default function App() {
                     })()}
                   </div>
 
-                  <div className={cn("absolute inset-0 overflow-y-auto p-4 custom-scrollbar bg-gray-50", rightPanelTab === 'live_events' ? "block" : "hidden")} id="events-scroll-container">
-                    <div className="sticky top-0 z-10 bg-gray-50/95 backdrop-blur-md pb-3 pt-1 mb-4 border-b border-gray-200/60 flex flex-col gap-2.5">
-                      <div className="flex items-center justify-between">
-                        <button
-                          onClick={() => {
-                            const container = document.getElementById('events-scroll-container');
-                            if (!container) return;
-                            const allCards = container.querySelectorAll('[data-event-time]');
-                            let nearest: Element | null = null;
-                            let bestDiff = Infinity;
-                            allCards.forEach(card => {
-                              const t = parseFloat(card.getAttribute('data-event-time') || '0');
-                              const diff = Math.abs(t - currentTime);
-                              if (diff < bestDiff) { bestDiff = diff; nearest = card; }
-                            });
-                            if (nearest) (nearest as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
-                          }}
-                          className="flex items-center gap-1 px-3 py-1 rounded text-[10px] font-bold transition-all border bg-white text-gray-500 border-gray-200 hover:text-red-500 hover:border-red-300 shadow-sm"
-                          title="Scroll to event nearest current time"
-                        >
-                          <SkipForward className="w-3 h-3" />
-                          Now
-                        </button>
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mr-1">
-                            {statsFilter === 'verified' ? `${activeTrackingEvents.filter(e => e.status === 'verified').length} verified` : `${activeTrackingEvents.length} events`}
-                          </span>
-                          <button
-                            onClick={() => setStatsFilter(statsFilter === 'verified' ? 'all' : 'verified')}
-                            className={cn('flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold transition-all border', statsFilter === 'verified' ? 'bg-amber-500/10 text-amber-600 border-amber-500/30' : 'bg-white text-gray-400 border-gray-200 hover:text-amber-500')}
-                          >
-                            <ShieldCheck className="w-3 h-3" /> {statsFilter === 'verified' ? 'Verified' : 'All'}
-                          </button>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <select value={eventsListTeamFilter} onChange={e => setEventsListTeamFilter(e.target.value)} className="flex-1 text-[10px] font-bold text-gray-600 bg-white border border-gray-200 rounded-md py-1.5 px-2 outline-none focus:border-red-300 focus:ring-1 focus:ring-red-200 shadow-sm text-center appearance-none">
-                          <option value="all">All Teams</option>
-                          {currentGame?.homeTeamId && <option value={currentGame.homeTeamId}>Home</option>}
-                          {currentGame?.awayTeamId && <option value={currentGame.awayTeamId}>Away</option>}
-                        </select>
-                        <select value={eventsListEventFilter} onChange={e => setEventsListEventFilter(e.target.value)} className="flex-1 text-[10px] font-bold text-gray-600 bg-white border border-gray-200 rounded-md py-1.5 px-2 outline-none focus:border-red-300 focus:ring-1 focus:ring-red-200 shadow-sm text-center appearance-none">
-                          <option value="all">All Types</option>
-                          <option value="goal">Goals</option>
-                          <option value="assist">Assists</option>
-                          <option value="shot">Shots / Attempts</option>
-                          <option value="turnover">Turnovers</option>
-                          <option value="control_change">Control & Control Pins</option>
-                          <option value="card">Cards / Fouls</option>
-                          <option value="sub_in">Subs & Sub Pins</option>
-                          <option value="possession_pins">Possessions & Pins</option>
-                        </select>
-                      </div>
-                      {['trusted', 'moderator', 'author'].includes(effectiveRole) && currentGame && (
-                        <div className="flex items-center gap-2">
-                          {(() => {
-                            const allEvts = activeTrackingEvents.filter(e => e.id && !e.id.includes('_draft'));
-                            const allVerified = allEvts.length > 0 && allEvts.every(e => e.status === 'verified');
-                            return (
-                              <button
-                                onClick={() => handleToggleAllEventsVerified(currentGame.id)}
-                                className={cn(
-                                  'flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md text-[10px] font-bold transition-all border',
-                                  allVerified
-                                    ? 'bg-emerald-50 text-emerald-600 border-emerald-200 hover:bg-emerald-100'
-                                    : 'bg-white text-gray-400 border-gray-200 hover:text-emerald-500 hover:border-emerald-300'
-                                )}
-                                title={allVerified ? 'Unverify all events' : 'Verify all events'}
-                              >
-                                <ShieldCheck className="w-3 h-3" />
-                                {allVerified ? 'Events Verified ✓' : 'Verify All Events'}
-                              </button>
-                            );
-                          })()}
-                          <button
-                            onClick={() => handleVerifyGame(currentGame.id)}
-                            className={cn(
-                              'flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md text-[10px] font-bold transition-all border',
-                              currentGame.isVerified
-                                ? 'bg-amber-50 text-amber-600 border-amber-200 hover:bg-amber-100'
-                                : 'bg-white text-gray-400 border-gray-200 hover:text-amber-500 hover:border-amber-300'
-                            )}
-                            title={currentGame.isVerified ? 'Mark game incomplete' : 'Mark game complete'}
-                          >
-                            <ShieldCheck className="w-3 h-3" />
-                            {currentGame.isVerified ? 'Game Complete ✓' : 'Mark Game Complete'}
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                    <div className="space-y-4">
-                    {(() => {
-                      const pinEvents = pins.filter(p => p.videoId === currentVideo?.id).map(p => ({
-                        id: p.id,
-                        type: `pin_${p.type}`,
-                        videoTime: p.time,
-                        gameTime: 0,
-                        teamId: null,
-                        playerId: null,
-                        status: 'recorded'
-                      } as any));
-                      let displayEvents = [...activeTrackingEvents, ...pinEvents].sort((a,b) => a.videoTime - b.videoTime);
-                      
-                      if (statsFilter === 'verified') displayEvents = displayEvents.filter(e => e.status === 'verified');
-                      if (eventsListTeamFilter !== 'all') displayEvents = displayEvents.filter(e => e.teamId === eventsListTeamFilter);
-                      if (eventsListEventFilter !== 'all') {
-                        if (eventsListEventFilter === 'sub_in') displayEvents = displayEvents.filter(e => e.type === 'sub_in' || e.type === 'sub_out' || e.type === 'pin_sub');
-                        else if (eventsListEventFilter === 'card') displayEvents = displayEvents.filter(e => e.type === 'foul' || e.type === 'card');
-                        else if (eventsListEventFilter === 'shot') displayEvents = displayEvents.filter(e => e.type === 'shot' || e.type === 'attempt' || e.type === 'miss_ko');
-                        else if (eventsListEventFilter === 'control_change') displayEvents = displayEvents.filter(e => e.type === 'control_change' || e.type === 'control_start' || e.type === 'pin_control');
-                        else if (eventsListEventFilter === 'possession_pins') displayEvents = displayEvents.filter(e => e.type === 'goal' || e.type === 'turnover' || e.type === 'quadball_start' || e.type === 'pin_possession');
-                        else displayEvents = displayEvents.filter(e => e.type === eventsListEventFilter);
-                      }
-
-
-
-                      return displayEvents.length === 0 ? (
-                        <div className="h-full flex flex-col items-center justify-center text-gray-400 text-center p-8">
-                          <Clock className="w-12 h-12 mb-4 opacity-20" />
-                          <p>{statsFilter === 'verified' ? 'No verified events yet.' : 'No events recorded yet.'}</p>
-                          <p className="text-sm">{statsFilter === 'verified' ? 'Switch to All to see unverified events.' : 'Be the first to track a goal!'}</p>
-                        </div>
-                      ) : (
-                        displayEvents.slice().reverse().map((event) => {
-                          const isPin = event.type.startsWith('pin_');
-                          if (isPin) {
-                            const pinType = event.type.replace('pin_', '');
-                            let colorClass = "bg-gray-400 text-white";
-                            let lineClass = "bg-gray-400";
-                            if (pinType === 'control') { colorClass = "bg-black text-white"; lineClass = "bg-black"; }
-                            else if (pinType === 'general') { colorClass = "bg-yellow-400 text-yellow-900"; lineClass = "bg-yellow-400"; }
-                            else if (pinType === 'possession') { colorClass = "bg-purple-600 text-white"; lineClass = "bg-purple-600"; }
-                            else if (pinType === 'sub') { colorClass = "bg-cyan-600 text-white"; lineClass = "bg-cyan-600"; }
-
-                            return (
-                              <div key={event.id} className="flex items-center gap-1.5 group w-full py-1 relative">
-                                <div className={`flex-1 h-[2px] ${lineClass} opacity-30 group-hover:opacity-100 transition-opacity`}></div>
-                                <button 
-                                  onClick={() => player?.seekTo(event.videoTime)}
-                                  className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider ${colorClass} hover:opacity-80 transition-opacity flex items-center gap-1 shadow-sm shrink-0`}
-                                >
-                                  <MapPin className="w-2.5 h-2.5" />
-                                  {pinType} @ {formatTime(event.videoTime)}
-                                </button>
-                                <button 
-                                  onClick={(e) => { e.stopPropagation(); setPins(prev => prev.filter(pin => pin.id !== event.id)); }} 
-                                  className="text-gray-400 hover:text-red-500 transition-colors p-0.5 opacity-0 group-hover:opacity-100 shrink-0" 
-                                  title="Dismiss Pin"
-                                >
-                                  <X className="w-3 h-3" />
-                                </button>
-                                <div className={`flex-1 h-[2px] ${lineClass} opacity-30 group-hover:opacity-100 transition-opacity`}></div>
-                              </div>
-                            );
-                          }
-
-                          const eventConfig = EVENT_CONFIG[event.type as EventType] || { label: event.type, icon: <AlertCircle className="w-4 h-4" />, color: 'bg-neutral-500' };
-                          const dynamicLabel = (event.type === 'sub_in' && event.position) ? `${event.position} In` : (event.type === 'sub_out' && event.position) ? `${event.position} Out` : eventConfig.label;
-                          return (
-                            <div
-                              key={event.id}
-                              data-event-time={event.videoTime}
-                              className={cn(
-                                "group border rounded-xl p-3 transition-all",
-                                event.teamId === currentGame?.homeTeamId ? "bg-red-50/50 border-red-100 hover:border-red-200" :
-                                  event.teamId === currentGame?.awayTeamId ? "bg-blue-50/50 border-blue-100 hover:border-blue-200" :
-                                    "bg-white border-gray-200 hover:border-gray-300",
-                                event.status === 'rejected' && "opacity-50 grayscale"
-                              )}
-                            >
-                              <div className="flex items-start justify-between mb-2">
-                                <div className="flex items-center gap-2">
-                                  <div className={cn("p-1.5 rounded-md", eventConfig.color)}>
-                                    {React.cloneElement(eventConfig.icon as React.ReactElement<any>, { className: 'w-3 h-3' })}
-                                  </div>
-                                  <div className="flex flex-col items-center">
-                                    <p className="font-mono text-xs font-bold text-gray-800 w-12 text-center">{formatTime(event.gameTime || 0)}</p>
-                                    <p className="font-mono text-[9px] text-gray-400 w-12 text-center">({formatTime(event.videoTime)})</p>
-                                  </div>
-                                  <div className="flex flex-col justify-center gap-0.5 ml-1">
-                                    <div className="flex items-center gap-1.5">
-                                      <p className="text-sm font-bold capitalize">
-                                        {dynamicLabel}
-                                      </p>
-                                      {event.status === 'verified' && (
-                                        <ShieldCheck className="w-3.5 h-3.5 text-amber-500" />
-                                      )}
-                                    </div>
-                                    {(event.playerId || event.teamId) && (
-                                      <div className="text-xs">
-                                        {event.playerId ? (() => {
-                                          const p = allPlayers.find(pl => pl.id === event.playerId);
-                                          return p ? (
-                                            <span className={cn("font-bold tracking-tight", event.teamId === currentGame?.homeTeamId ? "text-red-700" : event.teamId === currentGame?.awayTeamId ? "text-blue-700" : "text-gray-700")}>
-                                              {p.firstName.charAt(0)}. {p.lastName}
-                                            </span>
-                                          ) : 'Player';
-                                        })() : (() => {
-                                          const t = teams.find(tm => tm.id === event.teamId);
-                                          return t ? (
-                                            <span className={cn("font-bold text-[9px] uppercase tracking-wider", event.teamId === currentGame?.homeTeamId ? "text-red-700" : event.teamId === currentGame?.awayTeamId ? "text-blue-700" : "text-gray-500")}>
-                                              {t.name}
-                                            </span>
-                                          ) : 'Team';
-                                        })()}
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  {(isAdmin || (event.userId === user?.uid && event.status !== 'verified')) && (
-                                    <>
-                                      <button
-                                        onClick={() => handleEditRecordedEvent(event.id)}
-                                        className="p-1 text-gray-400 hover:text-blue-500 hover:bg-blue-50 transition-colors rounded flex items-center justify-center border border-transparent hover:border-blue-100"
-                                        title="Edit Event"
-                                      >
-                                        <Edit2 className="w-3.5 h-3.5" />
-                                      </button>
-                                      <button
-                                        onClick={() => { if (window.confirm('Delete this event permanently?')) handleDeleteRecordedEvent(event.id) }}
-                                        className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors rounded flex items-center justify-center border border-transparent hover:border-red-100"
-                                        title="Delete Event"
-                                      >
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                      </button>
-                                    </>
-                                  )}
-                                  {event.status !== 'verified' && event.type === 'goal' && !event.playerId && ['trusted', 'moderator', 'author'].includes(effectiveRole) && (
-                                    <button
-                                      onClick={() => {
-                                        const searchName = prompt("Enter player name or ID for goal:");
-                                        if (searchName) {
-                                          const p = allPlayers.find(pl => `${pl.firstName} ${pl.lastName}`.toLowerCase().includes(searchName.toLowerCase()) || pl.id === searchName);
-                                          if (p) {
-                                            handleUpdateEventPlayerId(event.id, p.id);
-                                          } else {
-                                            toast.error("Player not found.");
-                                          }
-                                        }
-                                      }}
-                                      className="text-[10px] bg-red-600/10 text-red-500 px-2 py-1 rounded hover:bg-red-600/20 transition-all font-bold tracking-tight uppercase border border-red-600/20"
-                                      title="Add Player"
-                                    >
-                                      + Player
-                                    </button>
-                                  )}
-                                  {event.status !== 'verified' && event.type === 'goal' && !enrichedEvents.some(e => e.type === 'assist' && e.relatedEventId === event.id) && ['trusted', 'moderator', 'author'].includes(effectiveRole) && (
-                                    <button
-                                      onClick={() => {
-                                        setRightPanelTab('record');
-                                        setDraftEvents(prev => [{
-                                          id: crypto.randomUUID(), type: 'assist', videoTime: event.videoTime, gameTime: event.gameTime || 0, teamId: event.teamId || null, playerId: null, relatedEventId: event.id, assistedByPlayerId: null, position: null
-                                        }, ...prev]);
-                                      }}
-                                      className="text-[10px] bg-blue-600/10 text-blue-500 px-2 py-1 rounded hover:bg-blue-600/20 transition-all font-bold tracking-tight uppercase border border-blue-600/20"
-                                      title="Add Assist Event"
-                                    >
-                                      + Assist
-                                    </button>
-                                  )}
-                                  <button
-                                    onClick={() => player?.seekTo(event.videoTime)}
-                                    className="text-[10px] font-mono bg-gray-100 hover:bg-red-600 px-2 py-1 rounded transition-colors"
-                                  >
-                                    Seek {formatTime(event.videoTime)}
-                                  </button>
-                                </div>
-                              </div>
-
-                              {event.relatedEventId && (
-                                <div className="mb-2 pl-8 border-l-2 border-gray-200 text-[10px] text-gray-400 italic">
-                                  Assisting: {enrichedEvents.find(e => e.id === event.relatedEventId)?.type || 'Event'}
-                                  ({formatTime(enrichedEvents.find(e => e.id === event.relatedEventId)?.gameTime || 0)})
-                                </div>
-                              )}
-
-                              <div className="flex items-center justify-between pt-2 border-t border-gray-200/50">
-                                <div className="flex items-center gap-3">
-                                  {isAdmin && (
-                                    <button
-                                      onClick={async () => {
-                                        if (!user || !currentVideo) return;
-                                        const newStatus = event.status === 'verified' ? 'unverified' : 'verified';
-                                        // Optimistic local update
-                                        setEvents(prev => prev.map(e => e.id === event.id ? { ...e, status: newStatus } : e));
-                                        try {
-                                          const gameRef = doc(db, 'gameEvents', currentVideo.gameId);
-                                          const gameSnap = await getDoc(gameRef);
-                                          if (!gameSnap.exists()) { toast.error('Game doc not found'); return; }
-                                          const gameData = gameSnap.data();
-                                          const currentEvents = gameData.events as GameEvent[] || [];
-                                          const eventIndex = currentEvents.findIndex(e => e.id === event.id);
-                                          if (eventIndex !== -1) {
-                                            currentEvents[eventIndex] = { ...currentEvents[eventIndex], status: newStatus };
-                                            await updateDoc(gameRef, { events: currentEvents });
-                                            toast.success(newStatus === 'verified' ? '✓ Event verified' : 'Verification removed');
-                                          }
-                                        } catch (e) {
-                                          console.error(e);
-                                          toast.error('Failed to update verification');
-                                          // Revert optimistic update
-                                          setEvents(prev => prev.map(ev => ev.id === event.id ? { ...ev, status: event.status } : ev));
-                                        }
-                                      }}
-                                      className={cn("p-1.5 rounded-lg transition-all border", event.status === 'verified' ? 'bg-amber-500/15 text-amber-500 border-amber-500/30 shadow-sm' : 'bg-gray-50 text-gray-300 border-gray-200 hover:text-amber-500 hover:border-amber-500 hover:bg-amber-50')}
-                                      title={event.status === 'verified' ? "Remove Verification" : "Verify Event (Trusted Only)"}
-                                    >
-                                      <ShieldCheck className="w-4 h-4" />
-                                    </button>
-                                  )}
-                                  <div className="flex items-center gap-1">
-                                    <span className="text-xs font-bold text-green-500">{event.upvotes || 0}</span>
-                                    <CheckCircle2 className="w-3 h-3 text-green-500 opacity-50" />
-                                  </div>
-                                  <div className="flex items-center gap-1">
-                                    <span className="text-xs font-bold text-red-500">{event.downvotes || 0}</span>
-                                    <XCircle className="w-3 h-3 text-red-500 opacity-50" />
-                                  </div>
-                                  <div className="h-3 w-px bg-gray-100 mx-1" />
-                                  <span className={cn(
-                                    "text-xs font-bold",
-                                    event.votes > 0 ? "text-green-500" : event.votes < 0 ? "text-red-500" : "text-gray-400"
-                                  )}>
-                                    {event.votes > 0 ? `+${event.votes}` : event.votes}
-                                  </span>
-                                  <span className="text-[10px] text-gray-300 uppercase font-bold tracking-tighter">Net</span>
-                                </div>
-                                {(
-                                  <div className="flex items-center gap-1">
-                                    <button
-                                      onClick={() => handleVote(event.id, true)}
-                                      className={cn(
-                                        'p-1.5 rounded transition-all',
-                                        event.upvoterIds?.includes(voterId)
-                                          ? 'bg-green-500/20 text-green-600 ring-1 ring-green-500/30'
-                                          : 'hover:bg-green-500/20 text-gray-400 hover:text-green-500'
-                                      )}
-                                      title="Accurate"
-                                    >
-                                      <CheckCircle2 className="w-4 h-4" />
-                                    </button>
-                                    <button
-                                      onClick={() => handleVote(event.id, false)}
-                                      className={cn(
-                                        'p-1.5 rounded transition-all',
-                                        event.downvoterIds?.includes(voterId)
-                                          ? 'bg-red-500/20 text-red-600 ring-1 ring-red-500/30'
-                                          : 'hover:bg-red-500/20 text-gray-400 hover:text-red-500'
-                                      )}
-                                      title="Inaccurate"
-                                    >
-                                      <XCircle className="w-4 h-4" />
-                                    </button>
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })
-                      );
-                    })()}
-                    </div>
-                  </div>
-
-                  <div className={cn("absolute inset-0 overflow-y-auto custom-scrollbar bg-white", rightPanelTab === 'momentum' ? "block" : "hidden")}>
-                    {rightPanelTab === 'momentum' && <MatchMomentumView events={enrichedEvents} teams={teams} homeTeamId={currentGame?.homeTeamId || ''} awayTeamId={currentGame?.awayTeamId || ''} currentTime={player?.getCurrentTime() || 0} onSeek={(t) => player?.seekTo(t, true)} />}
+                  <div className={cn(isExpandedLayout ? "flex flex-col h-full relative" : "absolute inset-0", (rightPanelTab === 'momentum' || isExpandedLayout) ? "block" : "hidden", "overflow-y-auto custom-scrollbar bg-white")}>
+                    {(rightPanelTab === 'momentum' || isExpandedLayout) && <MatchMomentumView events={enrichedEvents} teams={teams} homeTeamId={currentGame?.homeTeamId || ''} awayTeamId={currentGame?.awayTeamId || ''} currentTime={player?.getCurrentTime() || 0} onSeek={(t) => player?.seekTo(t, true)} />}
                   </div>
                 </div>
 
