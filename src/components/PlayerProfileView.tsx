@@ -158,6 +158,19 @@ export default function PlayerProfileView({
     return endEvent ? endEvent.videoTime : Math.max(...timelineGameEvents.map(e => e.videoTime));
   }, [timelineGameEvents]);
 
+  const { gameStartTime, gameDuration } = useMemo(() => {
+    if (timelineGameEvents.length === 0) return { gameStartTime: 0, gameDuration: 1 };
+    const gameStartEvent = timelineGameEvents.find(e => (e.type || '').toLowerCase() === 'gamestart');
+    const start = gameStartEvent?.videoTime ?? timelineGameEvents[0]?.videoTime ?? 0;
+    const dur = Math.max(1, timelineGameEndTime - start);
+    return { gameStartTime: start, gameDuration: dur };
+  }, [timelineGameEvents, timelineGameEndTime]);
+
+  const getPercent = (t: number) => {
+    const tRel = Math.max(0, t - gameStartTime);
+    return (tRel / gameDuration) * 100;
+  };
+
   const timelineStints = useMemo(() => {
     if (!activeTimelineGameId || !timelinePlayerTeamId) return [];
     const map = buildPlayerTeamMap(timelineGameEvents);
@@ -200,14 +213,14 @@ export default function PlayerProfileView({
     }
 
     const gameStartEvent = gameEvents.find(e => (e.type || '').toLowerCase() === 'gamestart');
-    const gameStartTime = gameStartEvent?.videoTime ?? gameEvents[0]?.videoTime ?? 0;
+    const chaserGameStart = gameStartEvent?.videoTime ?? gameEvents[0]?.videoTime ?? 0;
 
     const stints: { playerId: string; teamId: string; gameId: string; startTime: number; endTime: number; position?: string }[] = [];
     let currentStart: { time: number; position?: string } | null = null;
 
     if (started) {
       const firstOutSub = gameEvents.find(e => e.type === 'sub_out' && e.playerId === playerId);
-      currentStart = { time: gameStartTime, position: firstOutSub?.position };
+      currentStart = { time: chaserGameStart, position: firstOutSub?.position };
     }
 
     // Go through all events to track subs
@@ -247,24 +260,128 @@ export default function PlayerProfileView({
     return stints.filter(s => s.position !== 'beater' && s.position !== 'seeker');
   }, [timelineGameEvents, activeTimelineGameId, timelinePlayerTeamId, timelineGameEndTime, activePlayerId]);
 
-
   const timelineControlPeriods = useMemo(() => {
     if (!activeTimelineGameId) return [];
     return computeControlPeriodsFromEvents(timelineGameEvents);
   }, [timelineGameEvents, activeTimelineGameId]);
 
-  const { gameStartTime, gameDuration } = useMemo(() => {
-    if (timelineGameEvents.length === 0) return { gameStartTime: 0, gameDuration: 1 };
-    const gameStartEvent = timelineGameEvents.find(e => (e.type || '').toLowerCase() === 'gamestart');
-    const start = gameStartEvent?.videoTime ?? timelineGameEvents[0]?.videoTime ?? 0;
-    const dur = Math.max(1, timelineGameEndTime - start);
-    return { gameStartTime: start, gameDuration: dur };
-  }, [timelineGameEvents, timelineGameEndTime]);
+  // gameStartTime, gameDuration, and getPercent moved above to prevent initialization TDZ issues
 
-  const getPercent = (t: number) => {
-    const tRel = Math.max(0, t - gameStartTime);
-    return (tRel / gameDuration) * 100;
+  const seekerStints = useMemo(() => {
+    if (!activeTimelineGameId || !timelinePlayerTeamId) return [];
+    
+    const gameEvents = timelineGameEvents;
+    const playerId = activePlayerId;
+    const teamId = timelinePlayerTeamId;
+    
+    const stints: { playerId: string; teamId: string; gameId: string; startTime: number; endTime: number; position?: string }[] = [];
+    let onField = false;
+    let stintStart = 0;
+
+    for (const e of gameEvents) {
+      if (e.playerId !== playerId) continue;
+      if (e.type === 'sub_in' && e.position === 'seeker') {
+        if (!onField) {
+          onField = true;
+          stintStart = e.videoTime;
+        }
+      } else if (e.type === 'sub_out') {
+        if (onField) {
+          stints.push({
+            playerId,
+            teamId,
+            gameId: activeTimelineGameId,
+            startTime: stintStart,
+            endTime: e.videoTime,
+            position: 'seeker'
+          });
+          onField = false;
+        }
+      }
+    }
+    
+    if (onField) {
+      stints.push({
+        playerId,
+        teamId,
+        gameId: activeTimelineGameId,
+        startTime: stintStart,
+        endTime: timelineGameEndTime,
+        position: 'seeker'
+      });
+    }
+
+    if (stints.length === 0) {
+      const flagReleased = gameEvents.find(e => e.type === 'flag_released');
+      const catchEvent = gameEvents.find(e => e.type === 'flag_catch' && e.playerId === playerId);
+      if (flagReleased) {
+        stints.push({
+          playerId,
+          teamId,
+          gameId: activeTimelineGameId,
+          startTime: flagReleased.videoTime,
+          endTime: catchEvent?.videoTime ?? timelineGameEndTime,
+          position: 'seeker'
+        });
+      }
+    }
+
+    return stints;
+  }, [timelineGameEvents, activeTimelineGameId, timelinePlayerTeamId, timelineGameEndTime, activePlayerId]);
+
+  const flagTimelineData = useMemo(() => {
+    if (!activeTimelineGameId || timelineGameEvents.length === 0) {
+      return { flagStartTime: null, flagEndTime: null, flagDuration: 1, flagCatchEvent: null };
+    }
+    const flagReleasedEvent = timelineGameEvents.find(e => e.type === 'flag_released');
+    const flagCatchEvent = timelineGameEvents.find(e => e.type === 'flag_catch');
+    
+    const start = flagReleasedEvent ? flagReleasedEvent.videoTime : (seekerStints[0]?.startTime ?? gameStartTime);
+    const end = flagCatchEvent ? flagCatchEvent.videoTime : timelineGameEndTime;
+    const duration = Math.max(1, end - start);
+    
+    return {
+      flagStartTime: start,
+      flagEndTime: end,
+      flagDuration: duration,
+      flagCatchEvent
+    };
+  }, [timelineGameEvents, activeTimelineGameId, seekerStints, gameStartTime, timelineGameEndTime]);
+
+  const flagStints = useMemo(() => {
+    const { flagStartTime: fStart, flagEndTime: fEnd } = flagTimelineData;
+    if (fStart === null || fEnd === null) return [];
+    return seekerStints.map(s => {
+      const start = Math.max(fStart, s.startTime);
+      const end = Math.min(fEnd, s.endTime);
+      if (start < end) {
+        return { ...s, displayStart: start, displayEnd: end };
+      }
+      return null;
+    }).filter((s): s is NonNullable<typeof s> => s !== null);
+  }, [seekerStints, flagTimelineData]);
+
+  const flagControlPeriods = useMemo(() => {
+    const { flagStartTime: fStart, flagEndTime: fEnd } = flagTimelineData;
+    if (fStart === null || fEnd === null) return [];
+    return timelineControlPeriods.map(cp => {
+      const start = Math.max(fStart, cp.startTime);
+      const end = Math.min(fEnd, cp.endTime);
+      if (start < end) {
+        return { ...cp, displayStart: start, displayEnd: end };
+      }
+      return null;
+    }).filter((cp): cp is NonNullable<typeof cp> => cp !== null);
+  }, [timelineControlPeriods, flagTimelineData]);
+
+  const getFlagPercent = (t: number) => {
+    const { flagStartTime, flagEndTime, flagDuration } = flagTimelineData;
+    if (flagStartTime === null || flagEndTime === null) return 0;
+    const clampedT = Math.max(flagStartTime, Math.min(flagEndTime, t));
+    const tRel = clampedT - flagStartTime;
+    return (tRel / flagDuration) * 100;
   };
+
 
   const stintGoals = (startTime: number, endTime: number) => {
     const goals = timelineGameEvents.filter(e => {
@@ -1113,6 +1230,178 @@ export default function PlayerProfileView({
                   <div className="flex flex-col items-center justify-center flex-1 py-10">
                     <p className="text-center text-gray-400 text-xs px-6">
                       No recorded dodgeball stints found for this player.
+                    </p>
+                  </div>
+                )}
+                
+                {onSeekToGameVideo && (
+                  <p className="text-[10px] text-gray-400 font-semibold italic text-center mt-3 border-t border-gray-50 pt-2 select-none">
+                    💡 Click any stint or control period block to instantly load the match video at that moment!
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {positionTab === 'flag' && flagStats && (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mb-6">
+              {/* Flag Seeker Gantt Timeline (12 cols) */}
+              <div className="lg:col-span-12 bg-white border border-gray-200 rounded-2xl shadow-sm p-5 flex flex-col justify-between min-h-[300px]">
+                <div className="w-full flex items-center justify-between border-b border-gray-100 pb-2 mb-4">
+                  <div className="flex flex-col">
+                    <h4 className="text-xs font-bold text-gray-800 uppercase tracking-wider">Seeker Gantt Timeline</h4>
+                    <span className="text-[10px] text-gray-400 font-semibold">Pitch Presence vs Bludger Control during Flag Period</span>
+                  </div>
+                  {dodgeGames.length > 0 && (
+                    <select
+                      value={activeTimelineGameId}
+                      onChange={e => setTimelineGameId(e.target.value)}
+                      className="bg-gray-50 border text-xs font-bold tracking-wide shadow-sm border-gray-200 text-gray-700 rounded-lg px-2 py-1 outline-none focus:border-neutral-900"
+                    >
+                      {dodgeGames.map(g => {
+                        const gameEvents = events.filter(e => e.gameId === g.id);
+                        const map = buildPlayerTeamMap(gameEvents);
+                        const teamId = map.get(activePlayerId) || gameEvents.find(e => e.playerId === activePlayerId && e.teamId && e.teamId !== 'null')?.teamId;
+                        const opp = g.homeTeamId === teamId ? g.awayTeamId : g.homeTeamId;
+                        const oppName = teams.find(t => t.id === opp)?.name || 'Opponent';
+                        return (
+                          <option key={g.id} value={g.id}>
+                            vs {oppName} ({g.tag || 'Game'})
+                          </option>
+                        );
+                      })}
+                    </select>
+                  )}
+                </div>
+
+                {activeTimelineGameId && flagTimelineData.flagStartTime !== null ? (
+                  <div className="flex flex-col gap-6 flex-1 justify-center my-2">
+                    {/* Track 1: Seeker Pitch presence */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Seeker Stints</span>
+                        <span className="text-[10px] font-medium text-gray-400">
+                          {flagStints.length} stints • Flag Pitch Time {formatTime(flagTimelineData.flagDuration)}
+                        </span>
+                      </div>
+                      <div className="w-full bg-gray-100 border border-gray-200 rounded-xl relative overflow-hidden h-8 shadow-inner">
+                        {/* Bench default background */}
+                        <div className="absolute inset-0 bg-gray-100 flex items-center px-3 select-none pointer-events-none">
+                          <span className="text-[9px] text-gray-300 font-bold uppercase tracking-widest">OFF PITCH (DURING FLAG)</span>
+                        </div>
+                        {/* Stints overlay */}
+                        {flagStints.map((s, idx) => {
+                          const left = getFlagPercent(s.displayStart);
+                          const right = getFlagPercent(s.displayEnd);
+                          const width = Math.max(0.5, right - left);
+                          const durSec = s.endTime - s.startTime;
+                          
+                          // Let's compute goals during seeker stint as well
+                          const { teamGoals, oppGoals } = stintGoals(s.startTime, s.endTime);
+                          const diff = teamGoals - oppGoals;
+                          const diffSign = diff > 0 ? `+${diff}` : `${diff}`;
+                          const isGoldCatch = timelineGameEvents.some(e => e.type === 'flag_catch' && e.playerId === activePlayerId && e.videoTime >= s.startTime - 1 && e.videoTime <= s.endTime + 1);
+
+                          return (
+                            <button
+                              key={idx}
+                              onClick={() => onSeekToGameVideo?.(activeTimelineGameId, s.startTime)}
+                              disabled={!onSeekToGameVideo}
+                              className={cn(
+                                "absolute top-0 bottom-0 bg-yellow-400 hover:bg-yellow-300 transition-all border-r border-yellow-500/30 flex items-center justify-center font-bold text-black text-[10px] shadow-sm select-none",
+                                onSeekToGameVideo && "cursor-pointer hover:scale-[1.01]"
+                              )}
+                              style={{ left: `${left}%`, width: `${width}%` }}
+                              title={`Seeker Stint: ${formatTime(durSec)} (${formatTime(s.startTime)} - ${formatTime(s.endTime)}) • Goals: ${diffSign} ${isGoldCatch ? '• Caught Snitch! 🎯' : ''}`}
+                            >
+                              {width > 6 && (
+                                <span className="truncate px-0.5">
+                                  {isGoldCatch ? '🎯 CAUGHT' : 'SEEKING'} ({diffSign})
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Track 2: Team Bludger Control */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Dodgeball Control Periods</span>
+                        <div className="flex items-center gap-2 select-none">
+                          <span className="inline-flex items-center gap-1 text-[9px] font-semibold text-gray-400">
+                            <span className="w-2 h-2 rounded bg-cyan-500" /> Control
+                          </span>
+                          <span className="inline-flex items-center gap-1 text-[9px] font-semibold text-gray-400">
+                            <span className="w-2 h-2 rounded bg-rose-500" /> Opponent
+                          </span>
+                        </div>
+                      </div>
+                      <div className="w-full bg-gray-100 border border-gray-200 rounded-xl relative overflow-hidden h-8 shadow-inner">
+                        {/* Control periods overlay */}
+                        {flagControlPeriods.map((cp, idx) => {
+                          const left = getFlagPercent(cp.displayStart);
+                          const right = getFlagPercent(cp.displayEnd);
+                          const width = Math.max(0.5, right - left);
+                          const isOurControl = cp.teamId === timelinePlayerTeamId;
+                          const durSec = cp.endTime - cp.startTime;
+
+                          return (
+                            <button
+                              key={idx}
+                              onClick={() => onSeekToGameVideo?.(activeTimelineGameId, cp.startTime)}
+                              disabled={!onSeekToGameVideo}
+                              className={cn(
+                                "absolute top-0 bottom-0 transition-all flex items-center justify-center font-bold text-white text-[9px] shadow-sm select-none border-r border-white/10",
+                                isOurControl ? "bg-cyan-500 hover:bg-cyan-400" : "bg-rose-500 hover:bg-rose-400",
+                                onSeekToGameVideo && "cursor-pointer hover:scale-[1.01]"
+                              )}
+                              style={{ left: `${left}%`, width: `${width}%` }}
+                              title={`${isOurControl ? 'Our Control' : 'Opponent Control'}: ${formatTime(durSec)} (${formatTime(cp.startTime)} - ${formatTime(cp.endTime)})`}
+                            >
+                              {width > 6 && (
+                                <span className="truncate px-0.5">
+                                  {isOurControl ? 'CTRL' : 'OPP'}
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Timeline Axis Ticks */}
+                    <div className="relative w-full h-4 mt-1 border-t border-gray-200">
+                      {/* Start Snitch Release tick */}
+                      <span className="absolute left-0 top-1 text-[9px] font-bold text-gray-400 select-none">
+                        - {formatTime(flagTimelineData.flagStartTime)} (Released)
+                      </span>
+                      
+                      {/* Dynamic ticks every 60s */}
+                      {Array.from({ length: Math.floor(flagTimelineData.flagDuration / 60) }).map((_, i) => {
+                        const tickTime = (i + 1) * 60;
+                        if (tickTime >= flagTimelineData.flagDuration) return null;
+                        const left = getFlagPercent(flagTimelineData.flagStartTime! + tickTime);
+                        return (
+                          <div key={i} className="absolute top-0 h-1 border-l border-gray-300" style={{ left: `${left}%` }}>
+                            <span className="absolute top-1 -translate-x-1/2 text-[9px] font-bold text-gray-400 select-none">
+                              +{i + 1}m
+                            </span>
+                          </div>
+                        );
+                      })}
+
+                      {/* End tick (Caught / Game End) */}
+                      <span className="absolute right-0 top-1 text-[9px] font-bold text-gray-400 select-none">
+                        {formatTime(flagTimelineData.flagEndTime!)} ({flagTimelineData.flagCatchEvent ? 'Caught' : 'Game End'}) -
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center flex-1 py-10">
+                    <p className="text-center text-gray-400 text-xs px-6">
+                      No snitch release event found in this match's timeline.
                     </p>
                   </div>
                 )}
