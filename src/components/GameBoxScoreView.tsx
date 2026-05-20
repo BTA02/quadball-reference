@@ -128,7 +128,7 @@ export default function GameBoxScoreView({
 
   if (!game) return <div>Game not found.</div>;
 
-  const renderTableHeader = (onSort: any, sortKey: string, sortDir: string) => (
+  const renderTableHeader = (onSort: any, sortKey: string, sortDir: SortDir) => (
     <tr className="border-b border-gray-200 bg-gray-100">
       <th className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-left text-gray-500 sticky left-0 bg-gray-100 z-10 min-w-48">Player</th>
       <SortHeader label="MIN" sortKey="minutesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={onSort} />
@@ -164,7 +164,7 @@ export default function GameBoxScoreView({
     </tr>
   );
 
-  const renderPairHeader = (onSort: any, sortKey: string, sortDir: string) => (
+  const renderPairHeader = (onSort: any, sortKey: string, sortDir: SortDir) => (
     <tr className="border-b border-gray-200 bg-gray-100">
       <th className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-left text-gray-500 sticky left-0 bg-gray-100 z-10 min-w-48">Beater Pair</th>
       <SortHeader label="MIN" sortKey="totalMinutes" currentSort={sortKey} currentDir={sortDir} onSort={onSort} />

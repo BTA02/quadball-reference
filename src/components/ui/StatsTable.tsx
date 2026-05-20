@@ -1,6 +1,7 @@
 import React from 'react';
 import { ChevronUp, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '../../lib/utils';
+export { cn };
 
 export type SortDir = 'asc' | 'desc';
 

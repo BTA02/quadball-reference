@@ -1,6 +1,11 @@
 import React, { useState, useMemo } from 'react';
 import { ChevronLeft } from 'lucide-react';
-import { computeExtendedStats, computeTeamQuadballStats, computeBeaterSoloStats, computeBeaterPairStats, computeSeekerStats, AdvancedPlayerStats, getScoreboardName } from '../lib/statsComputations';
+import { 
+  computeExtendedStats, computeTeamQuadballStats, computeBeaterSoloStats, 
+  computeBeaterPairStats, computeSeekerStats, AdvancedPlayerStats, 
+  getScoreboardName, computeBeaterStints, buildPlayerTeamMap, 
+  computeControlPeriodsFromEvents, BeaterStint 
+} from '../lib/statsComputations';
 
 interface Player { id: string; firstName: string; lastName: string; preferredName?: string; nickname?: string; [k: string]: any; }
 interface GameEvent { id: string; videoId: string; gameId: string; type: string; videoTime: number; status: string; playerId?: string; teamId?: string; [k: string]: any; }
@@ -21,6 +26,20 @@ function getSeasonLabel(s: Season, leagues: League[]): string {
   return parts.length > 0 ? parts.join(' ') : (s.name || s.id);
 }
 
+function formatMinutes(min: number): string {
+  if (min <= 0) return '—';
+  return `${min.toFixed(1)}`;
+}
+
+function formatTime(seconds: number): string {
+  if (seconds <= 0) return '—';
+  const rounded = Math.round(seconds);
+  const m = Math.floor(rounded / 60);
+  const s = rounded % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+
 import { 
   cn, SortDir, sortBy, SortHeader, Cell, SplitHeader, SplitCell,
   StatsTabSelector, StatsTabButton
@@ -28,12 +47,13 @@ import {
 
 export default function PlayerProfileView({
   players, events, games, seasons, teams, activePlayerId, initialSeasonId, leagues,
-  onBack, onTeamSelect, onGameSelect, jerseyNumbers, statsFilter
+  onBack, onTeamSelect, onGameSelect, jerseyNumbers, statsFilter, onSeekToGameVideo
 }: {
   players: Player[]; events: GameEvent[]; games: Game[]; seasons: Season[]; teams: Team[];
   activePlayerId: string; initialSeasonId?: string; onBack: () => void;
   onTeamSelect?: (id: string) => void; onGameSelect?: (id: string) => void;
   jerseyNumbers?: string[]; statsFilter?: string; leagues?: League[];
+  onSeekToGameVideo?: (gameId: string, videoTime: number) => void;
 }) {
   const leaguesList = leagues || [];
   const player = players.find(p => p.id === activePlayerId);
@@ -42,6 +62,7 @@ export default function PlayerProfileView({
   const [dodgeTab, setDodgeTab] = useState<'solo' | 'pairs'>('solo');
   const [pairSortKey, setPairSortKey] = useState('totalMinutes');
   const [pairSortDir, setPairSortDir] = useState<SortDir>('desc');
+  const [timelineGameId, setTimelineGameId] = useState<string>('');
 
   const { playedGames, validSeasons } = useMemo(() => {
     const played = games.filter(g => events.some(e => e.gameId === g.id && (e.playerId === activePlayerId || e.subPlayerId === activePlayerId)));
@@ -56,7 +77,7 @@ export default function PlayerProfileView({
   const [sortKey, setSortKey] = useState('minutesPlayed');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
 
-  const baseFilters = useMemo(() => ({ skipRapm: statsFilter === 'verified_events', outlierFilter: 'include' }), [statsFilter]);
+  const baseFilters = useMemo(() => ({ skipRapm: statsFilter === 'verified_events', outlierFilter: 'include' as const }), [statsFilter]);
 
   const activeGames = activeSeasonId === 'all' ? playedGames : playedGames.filter(g => g.seasonId === activeSeasonId);
   const activeEvents = events.filter(e => activeGames.some(g => g.id === e.gameId));
@@ -73,6 +94,195 @@ export default function PlayerProfileView({
     const stats = computeBeaterSoloStats(activeEvents, players, activeGames, baseFilters);
     return stats.find(s => s.playerId === activePlayerId) || null;
   }, [activeEvents, players, activeGames, activePlayerId, positionTab, baseFilters]);
+
+  const allBeatersStats = useMemo(() => {
+    if (positionTab !== 'dodgeball' || activeGames.length === 0) return [];
+    return computeBeaterSoloStats(activeEvents, players, activeGames, baseFilters);
+  }, [activeEvents, players, activeGames, positionTab, baseFilters]);
+
+  const beaterPercentiles = useMemo(() => {
+    if (!dodgeSoloStats || allBeatersStats.length === 0) return null;
+    
+    const relevantBeaters = allBeatersStats.filter(s => s.totalMinutes > 0.5);
+    if (relevantBeaters.length === 0) return null;
+
+    const getPercentile = (field: 'bcl' | 'rapm' | 'controlPct', value: number) => {
+      const values = relevantBeaters.map(b => b[field] as number).sort((a, b) => a - b);
+      const count = values.length;
+      if (count <= 1) return 50; 
+
+      const rank = values.findIndex(v => v >= value);
+      const pct = (rank / (count - 1)) * 100;
+      return Math.round(pct);
+    };
+
+    const activePer20 = dodgeSoloStats.totalMinutes > 0 ? (dodgeSoloStats.plusMinus / dodgeSoloStats.totalMinutes) * 20 : 0;
+    const allPer20s = relevantBeaters.map(b => b.totalMinutes > 0 ? (b.plusMinus / b.totalMinutes) * 20 : 0).sort((a, b) => a - b);
+    const per20Rank = allPer20s.findIndex(v => v >= activePer20);
+    const per20Pct = allPer20s.length > 1 ? Math.round((per20Rank / (allPer20s.length - 1)) * 100) : 50;
+
+    return {
+      bcl: getPercentile('bcl', dodgeSoloStats.bcl),
+      rapm: getPercentile('rapm', dodgeSoloStats.rapm),
+      controlPct: getPercentile('controlPct', dodgeSoloStats.controlPct),
+      plusMinusPerTwenty: per20Pct,
+      bclVal: dodgeSoloStats.bcl,
+      rapmVal: dodgeSoloStats.rapm,
+      controlPctVal: dodgeSoloStats.controlPct,
+      plusMinusPerTwentyVal: activePer20
+    };
+  }, [dodgeSoloStats, allBeatersStats]);
+
+  const dodgeGames = useMemo(() => {
+    return activeGames.filter(g => events.some(e => e.gameId === g.id && (e.playerId === activePlayerId || e.subPlayerId === activePlayerId)));
+  }, [activeGames, events, activePlayerId]);
+
+  const activeTimelineGameId = timelineGameId || dodgeGames[0]?.id || '';
+
+  const timelineGameEvents = useMemo(() => {
+    if (!activeTimelineGameId) return [];
+    return events.filter(e => e.gameId === activeTimelineGameId).sort((a,b) => a.videoTime - b.videoTime);
+  }, [events, activeTimelineGameId]);
+
+  const timelinePlayerTeamId = useMemo(() => {
+    if (timelineGameEvents.length === 0) return '';
+    const map = buildPlayerTeamMap(timelineGameEvents);
+    const pidTeam = map.get(activePlayerId);
+    if (pidTeam) return pidTeam;
+    return timelineGameEvents.find(e => e.playerId === activePlayerId && e.teamId && e.teamId !== 'null')?.teamId || '';
+  }, [timelineGameEvents, activePlayerId]);
+
+  const timelineGameEndTime = useMemo(() => {
+    if (timelineGameEvents.length === 0) return 0;
+    const endEvent = timelineGameEvents.find(e => e.type === 'gameend' || e.type === 'periodend');
+    return endEvent ? endEvent.videoTime : Math.max(...timelineGameEvents.map(e => e.videoTime));
+  }, [timelineGameEvents]);
+
+  const timelineStints = useMemo(() => {
+    if (!activeTimelineGameId || !timelinePlayerTeamId) return [];
+    const map = buildPlayerTeamMap(timelineGameEvents);
+    return computeBeaterStints(timelineGameEvents, timelinePlayerTeamId, activeTimelineGameId, timelineGameEndTime, map);
+  }, [timelineGameEvents, activeTimelineGameId, timelinePlayerTeamId, timelineGameEndTime]);
+
+  const playerStints = useMemo(() => {
+    return timelineStints.filter(s => s.playerId === activePlayerId);
+  }, [timelineStints, activePlayerId]);
+
+  const chaserStints = useMemo(() => {
+    if (!activeTimelineGameId || !timelinePlayerTeamId) return [];
+    
+    const gameEvents = timelineGameEvents;
+    const playerId = activePlayerId;
+    const teamId = timelinePlayerTeamId;
+    
+    // Find if the player started the game on the pitch
+    let started = false;
+    const firstSub = gameEvents.find(e => (e.type === 'sub_in' || e.type === 'sub_out') && e.playerId === playerId);
+    if (firstSub) {
+      if (firstSub.type === 'sub_out') {
+        started = true;
+      }
+    } else {
+      // If there are game events recorded for them, they must have started
+      const hasEvents = gameEvents.some(e => e.playerId === playerId && e.type !== 'sub_in' && e.type !== 'sub_out');
+      if (hasEvents) {
+        started = true;
+      }
+    }
+
+    // But wait, what if they had a game event before their first sub_in?
+    const firstSubIn = gameEvents.find(e => e.type === 'sub_in' && e.playerId === playerId);
+    if (firstSubIn) {
+      const hasEventBeforeSubIn = gameEvents.some(e => e.playerId === playerId && e.type !== 'sub_in' && e.type !== 'sub_out' && e.videoTime < firstSubIn.videoTime);
+      if (hasEventBeforeSubIn) {
+        started = true;
+      }
+    }
+
+    const gameStartEvent = gameEvents.find(e => (e.type || '').toLowerCase() === 'gamestart');
+    const gameStartTime = gameStartEvent?.videoTime ?? gameEvents[0]?.videoTime ?? 0;
+
+    const stints: { playerId: string; teamId: string; gameId: string; startTime: number; endTime: number; position?: string }[] = [];
+    let currentStart: { time: number; position?: string } | null = null;
+
+    if (started) {
+      const firstOutSub = gameEvents.find(e => e.type === 'sub_out' && e.playerId === playerId);
+      currentStart = { time: gameStartTime, position: firstOutSub?.position };
+    }
+
+    // Go through all events to track subs
+    const subs = gameEvents.filter(e => (e.type === 'sub_in' || e.type === 'sub_out') && e.playerId === playerId)
+                           .sort((a, b) => a.videoTime - b.videoTime);
+
+    for (const e of subs) {
+      if (e.type === 'sub_out') {
+        if (currentStart) {
+          stints.push({
+            playerId,
+            teamId,
+            gameId: activeTimelineGameId,
+            startTime: currentStart.time,
+            endTime: e.videoTime,
+            position: currentStart.position || e.position
+          });
+          currentStart = null;
+        }
+      } else if (e.type === 'sub_in') {
+        currentStart = { time: e.videoTime, position: e.position };
+      }
+    }
+
+    if (currentStart) {
+      stints.push({
+        playerId,
+        teamId,
+        gameId: activeTimelineGameId,
+        startTime: currentStart.time,
+        endTime: timelineGameEndTime,
+        position: currentStart.position
+      });
+    }
+
+    // Filter out any stints where the position was explicitly 'beater' or 'seeker'
+    return stints.filter(s => s.position !== 'beater' && s.position !== 'seeker');
+  }, [timelineGameEvents, activeTimelineGameId, timelinePlayerTeamId, timelineGameEndTime, activePlayerId]);
+
+
+  const timelineControlPeriods = useMemo(() => {
+    if (!activeTimelineGameId) return [];
+    return computeControlPeriodsFromEvents(timelineGameEvents);
+  }, [timelineGameEvents, activeTimelineGameId]);
+
+  const { gameStartTime, gameDuration } = useMemo(() => {
+    if (timelineGameEvents.length === 0) return { gameStartTime: 0, gameDuration: 1 };
+    const gameStartEvent = timelineGameEvents.find(e => (e.type || '').toLowerCase() === 'gamestart');
+    const start = gameStartEvent?.videoTime ?? timelineGameEvents[0]?.videoTime ?? 0;
+    const dur = Math.max(1, timelineGameEndTime - start);
+    return { gameStartTime: start, gameDuration: dur };
+  }, [timelineGameEvents, timelineGameEndTime]);
+
+  const getPercent = (t: number) => {
+    const tRel = Math.max(0, t - gameStartTime);
+    return (tRel / gameDuration) * 100;
+  };
+
+  const stintGoals = (startTime: number, endTime: number) => {
+    const goals = timelineGameEvents.filter(e => {
+      const type = (e.type || '').toLowerCase();
+      const isGoal = type.includes('goal') || type === 'away_goal' || type === 'home_goal';
+      return isGoal && e.videoTime >= startTime && e.videoTime <= endTime;
+    });
+    let teamGoals = 0;
+    let oppGoals = 0;
+    goals.forEach(g => {
+      if (g.teamId === timelinePlayerTeamId) {
+        teamGoals++;
+      } else {
+        oppGoals++;
+      }
+    });
+    return { teamGoals, oppGoals };
+  };
 
   const dodgePairStats = useMemo(() => {
     if (positionTab !== 'dodgeball' || activeGames.length === 0) return [];
@@ -120,7 +330,8 @@ export default function PlayerProfileView({
          const opponent = g.homeTeamId === playerTeamId ? g.awayTeamId : g.homeTeamId;
          const oppName = getScoreboardName?.(teams.find(t => t.id === opponent)) || teams.find(t => t.id === opponent)?.name || 'Unknown';
 
-         if (pStat && ((pStat.gamesPlayed || 0) > 0 || (pStat.minutesPlayed || 0) > 0 || (pStat.totalMinutes || 0) > 0 || (pStat.stints || 0) > 0)) {
+         const pStatAny = pStat as any;
+         if (pStat && ((pStatAny.gamesPlayed || 0) > 0 || (pStatAny.minutesPlayed || 0) > 0 || (pStatAny.totalMinutes || 0) > 0 || (pStatAny.stints || 0) > 0)) {
            return {
              ...pStat,
              gameId: g.id,
@@ -145,7 +356,8 @@ export default function PlayerProfileView({
       const sEvents = events.filter(e => sGames.some(g => g.id === e.gameId));
       const stat = fn(sEvents, players, sGames, baseFilters);
       const pStat = stat.find((st: any) => st.playerId === activePlayerId);
-      if (pStat && ((pStat.gamesPlayed || 0) > 0 || (pStat.minutesPlayed || 0) > 0 || (pStat.totalMinutes || 0) > 0 || (pStat.stints || 0) > 0)) {
+      const pStatAny = pStat as any;
+      if (pStat && ((pStatAny.gamesPlayed || 0) > 0 || (pStatAny.minutesPlayed || 0) > 0 || (pStatAny.totalMinutes || 0) > 0 || (pStatAny.stints || 0) > 0)) {
         const l = s.league || 'Other';
         if (!leagues[l]) leagues[l] = [];
         leagues[l].push({ ...pStat, seasonLabel: getSeasonLabel(s, leaguesList) });
@@ -164,7 +376,8 @@ export default function PlayerProfileView({
     const fn = getStatsFn(positionTab);
     const stat = fn(cEvents, players, playedGames, baseFilters);
     const pStat = stat.find((st: any) => st.playerId === activePlayerId);
-    return pStat && ((pStat.gamesPlayed || 0) > 0 || (pStat.minutesPlayed || 0) > 0 || (pStat.totalMinutes || 0) > 0 || (pStat.stints || 0) > 0) ? pStat : null;
+    const pStatAny = pStat as any;
+    return pStat && ((pStatAny.gamesPlayed || 0) > 0 || (pStatAny.minutesPlayed || 0) > 0 || (pStatAny.totalMinutes || 0) > 0 || (pStatAny.stints || 0) > 0) ? pStat : null;
   }, [playedGames, events, players, activePlayerId, positionTab, baseFilters]);
 
   const handleSort = (k: string) => {
@@ -197,14 +410,17 @@ export default function PlayerProfileView({
           <SortHeader label="+" sortKey="plus" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
           <SortHeader label="−" sortKey="minus" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
           <SortHeader label="+/−" sortKey="plusMinus" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
+          <SortHeader label="BCL" sortKey="bcl" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
         </>
       )}
       {positionTab === 'flag' && (
         <>
-          <SortHeader label="STINTS" sortKey="stints" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
-          <SortHeader label="TIME/STINT" sortKey="timePerStint" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
-          <SortHeader label="TIME TO CH" sortKey="catchTimeSec" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
-          <SortHeader label="REL TO CH" sortKey="releaseToCatchSec" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
+          <SortHeader label="CTH" sortKey="catches" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Flag Catches" />
+          <SortHeader label="OpCTH" sortKey="opponentCatches" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Opponent Catches While On Pitch" />
+          <SortHeader label="C%" sortKey="catchPct" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Catch %" />
+          <SortHeader label="AVG CTH" sortKey="avgTimeToCatch" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Avg Time to Catch (time on field)" />
+          <SortHeader label="FROM REL" sortKey="avgTimeFromRelease" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Avg Time from Flag Release" />
+          <SortHeader label="CTRL%" sortKey="controlPct" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Team Bludger Control % While Seeking" />
         </>
       )}
     </tr>
@@ -233,14 +449,17 @@ export default function PlayerProfileView({
           <Cell value={row.plus} />
           <Cell value={row.minus} />
           <Cell value={row.plusMinus} highlight={row.plusMinus > 0 ? 'pos' : row.plusMinus < 0 ? 'neg' : undefined} bold />
+          <Cell value={row.bcl > 0 ? `+${row.bcl}` : row.bcl || '0'} bold highlight={row.bcl > 0 ? 'pos' : row.bcl < 0 ? 'neg' : undefined} />
         </>
       )}
       {positionTab === 'flag' && (
         <>
-          <Cell value={row.stints} />
-          <Cell value={row.timePerStint} />
-          <Cell value={row.catchTimeSec} />
-          <Cell value={row.releaseToCatchSec} />
+          <Cell value={row.catches} highlight={row.catches > 0 ? 'gold' : undefined} bold />
+          <Cell value={row.opponentCatches} highlight={row.opponentCatches > 0 ? 'neg' : undefined} />
+          <Cell value={`${row.catchPct}%`} highlight={row.catchPct >= 60 ? 'pos' : row.catchPct <= 30 ? 'neg' : undefined} bold />
+          <Cell value={formatTime(row.avgTimeToCatch)} />
+          <Cell value={formatTime(row.avgTimeFromRelease)} />
+          <Cell value={`${row.controlPct}%`} highlight={row.controlPct >= 60 ? 'pos' : row.controlPct <= 30 ? 'neg' : undefined} />
         </>
       )}
     </tr>
@@ -270,14 +489,17 @@ export default function PlayerProfileView({
           <SortHeader label="−" sortKey="minus" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
           <SortHeader label="+/− RATIO" sortKey="plusMinusRatio" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
           <SortHeader label="+/− / 20" sortKey="plusMinusPerTwenty" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
+          <SortHeader label="BCL" sortKey="bcl" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
         </>
       )}
       {positionTab === 'flag' && (
         <>
-          <SortHeader label="STINTS" sortKey="stints" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
-          <SortHeader label="TIME/STINT" sortKey="timePerStint" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
-          <SortHeader label="TIME TO CH" sortKey="catchTimeSec" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
-          <SortHeader label="REL TO CH" sortKey="releaseToCatchSec" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
+          <SortHeader label="CTH" sortKey="catches" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Flag Catches" />
+          <SortHeader label="OpCTH" sortKey="opponentCatches" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Opponent Catches While On Pitch" />
+          <SortHeader label="C%" sortKey="catchPct" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Catch %" />
+          <SortHeader label="AVG CTH" sortKey="avgTimeToCatch" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Avg Time to Catch (time on field)" />
+          <SortHeader label="FROM REL" sortKey="avgTimeFromRelease" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Avg Time from Flag Release" />
+          <SortHeader label="CTRL%" sortKey="controlPct" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Team Bludger Control % While Seeking" />
         </>
       )}
     </tr>
@@ -306,15 +528,18 @@ export default function PlayerProfileView({
           <Cell value={row.plus} />
           <Cell value={row.minus} />
           <Cell value={row.plusMinusRatio > 0 ? `+${row.plusMinusRatio}` : row.plusMinusRatio} highlight={row.plusMinusRatio > 0 ? 'pos' : row.plusMinusRatio < 0 ? 'neg' : undefined} bold />
-          <Cell value={row.plusMinusPerTwenty} />
+          <Cell value={row.totalMinutes > 0 ? Math.round((row.plusMinus / row.totalMinutes) * 20 * 10) / 10 : 0} />
+          <Cell value={row.bcl > 0 ? `+${row.bcl}` : row.bcl || '0'} bold highlight={row.bcl > 0 ? 'pos' : row.bcl < 0 ? 'neg' : undefined} />
         </>
       )}
       {positionTab === 'flag' && (
         <>
-          <Cell value={row.stints} />
-          <Cell value={row.timePerStint} />
-          <Cell value={row.catchTimeSec} />
-          <Cell value={row.releaseToCatchSec} />
+          <Cell value={row.catches} highlight={row.catches > 0 ? 'gold' : undefined} bold />
+          <Cell value={row.opponentCatches} highlight={row.opponentCatches > 0 ? 'neg' : undefined} />
+          <Cell value={`${row.catchPct}%`} highlight={row.catchPct >= 60 ? 'pos' : row.catchPct <= 30 ? 'neg' : undefined} bold />
+          <Cell value={formatTime(row.avgTimeToCatch)} />
+          <Cell value={formatTime(row.avgTimeFromRelease)} />
+          <Cell value={`${row.controlPct}%`} highlight={row.controlPct >= 60 ? 'pos' : row.controlPct <= 30 ? 'neg' : undefined} />
         </>
       )}
     </tr>
@@ -322,7 +547,7 @@ export default function PlayerProfileView({
 
   // Compute teams played for, grouped by league
   const teamsByLeague = useMemo(() => {
-    const leagues: Record<string, { id: string; name: string; nickname?: string; colorPrimary?: string }[]> = {};
+    const leagues: Record<string, { id: string; name: string; nickname?: string; colorPrimary?: string; colorPrimaryDark?: string }[]> = {};
     // Find all teams this player has played for via events
     const playerTeamIds = new Set<string>();
     events.forEach(e => {
@@ -444,7 +669,463 @@ export default function PlayerProfileView({
               </StatsTabSelector>
             )}
           </div>
-          
+          {positionTab === 'quadball' && quadStats && (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mb-6">
+              {/* Chaser Gantt Timeline (12 cols) */}
+              <div className="lg:col-span-12 bg-white border border-gray-200 rounded-2xl shadow-sm p-5 flex flex-col justify-between min-h-[300px]">
+                <div className="w-full flex items-center justify-between border-b border-gray-100 pb-2 mb-4">
+                  <div className="flex flex-col">
+                    <h4 className="text-xs font-bold text-gray-800 uppercase tracking-wider">Chaser Gantt Timeline</h4>
+                    <span className="text-[10px] text-gray-400 font-semibold">Pitch Presence vs Bludger Control</span>
+                  </div>
+                  {dodgeGames.length > 0 && (
+                    <select
+                      value={activeTimelineGameId}
+                      onChange={e => setTimelineGameId(e.target.value)}
+                      className="bg-gray-50 border text-xs font-bold tracking-wide shadow-sm border-gray-200 text-gray-700 rounded-lg px-2 py-1 outline-none focus:border-neutral-900"
+                    >
+                      {dodgeGames.map(g => {
+                        const gameEvents = events.filter(e => e.gameId === g.id);
+                        const map = buildPlayerTeamMap(gameEvents);
+                        const teamId = map.get(activePlayerId) || gameEvents.find(e => e.playerId === activePlayerId && e.teamId && e.teamId !== 'null')?.teamId;
+                        const opp = g.homeTeamId === teamId ? g.awayTeamId : g.homeTeamId;
+                        const oppName = teams.find(t => t.id === opp)?.name || 'Opponent';
+                        return (
+                          <option key={g.id} value={g.id}>
+                            vs {oppName} ({g.tag || 'Game'})
+                          </option>
+                        );
+                      })}
+                    </select>
+                  )}
+                </div>
+
+                {activeTimelineGameId ? (
+                  <div className="flex flex-col gap-6 flex-1 justify-center my-2">
+                    {/* Track 1: Player Pitch presence */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Pitch Presence (Stints)</span>
+                        <span className="text-[10px] font-medium text-gray-400">
+                          {chaserStints.length} stints • Total {formatMinutes(quadStats?.minutesPlayed || 0)}m
+                        </span>
+                      </div>
+                      <div className="w-full bg-gray-100 border border-gray-200 rounded-xl relative overflow-hidden h-8 shadow-inner">
+                        {/* Bench default background */}
+                        <div className="absolute inset-0 bg-gray-100 flex items-center px-3 select-none pointer-events-none">
+                          <span className="text-[9px] text-gray-300 font-bold uppercase tracking-widest">BENCH</span>
+                        </div>
+                        {/* Stints overlay */}
+                        {chaserStints.map((s, idx) => {
+                          const left = getPercent(s.startTime);
+                          const right = getPercent(s.endTime);
+                          const width = Math.max(0.5, right - left);
+                          const { teamGoals, oppGoals } = stintGoals(s.startTime, s.endTime);
+                          const diff = teamGoals - oppGoals;
+                          const durSec = s.endTime - s.startTime;
+                          return (
+                            <button
+                              key={idx}
+                              onClick={() => onSeekToGameVideo?.(activeTimelineGameId, s.startTime)}
+                              disabled={!onSeekToGameVideo}
+                              className={cn(
+                                "absolute top-0 bottom-0 bg-blue-500 hover:bg-blue-400 transition-all border-r border-blue-600/30 flex items-center justify-center font-bold text-white text-[10px] shadow-sm select-none",
+                                onSeekToGameVideo && "cursor-pointer hover:scale-[1.01]"
+                              )}
+                              style={{ left: `${left}%`, width: `${width}%` }}
+                              title={`Stint ${idx + 1}: ${formatTime(durSec)} (${formatTime(s.startTime)} - ${formatTime(s.endTime)}) | Stint Goals: +${teamGoals} -${oppGoals} (${diff > 0 ? '+' : ''}${diff})`}
+                            >
+                              {width > 6 && (
+                                <span className="truncate px-0.5">
+                                  {formatTime(durSec)} ({diff > 0 ? '+' : ''}{diff})
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Track 2: Control Periods */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Dodgeball Control Periods</span>
+                        <div className="flex items-center gap-2 select-none">
+                          <span className="inline-flex items-center gap-1 text-[9px] font-semibold text-gray-400">
+                            <span className="w-2 h-2 rounded bg-cyan-500" /> Control
+                          </span>
+                          <span className="inline-flex items-center gap-1 text-[9px] font-semibold text-gray-400">
+                            <span className="w-2 h-2 rounded bg-rose-500" /> Opponent
+                          </span>
+                        </div>
+                      </div>
+                      <div className="w-full bg-gray-100 border border-gray-200 rounded-xl relative overflow-hidden h-8 shadow-inner">
+                        {/* Control periods overlay */}
+                        {timelineControlPeriods.map((cp, idx) => {
+                          const left = getPercent(cp.startTime);
+                          const right = getPercent(cp.endTime);
+                          const width = Math.max(0.5, right - left);
+                          const isOurControl = cp.teamId === timelinePlayerTeamId;
+                          const durSec = cp.endTime - cp.startTime;
+                          return (
+                            <button
+                              key={idx}
+                              onClick={() => onSeekToGameVideo?.(activeTimelineGameId, cp.startTime)}
+                              disabled={!onSeekToGameVideo}
+                              className={cn(
+                                "absolute top-0 bottom-0 transition-all flex items-center justify-center font-bold text-white text-[9px] shadow-sm select-none border-r border-white/10",
+                                isOurControl ? "bg-cyan-500 hover:bg-cyan-400" : "bg-rose-500 hover:bg-rose-400",
+                                onSeekToGameVideo && "cursor-pointer hover:scale-[1.01]"
+                              )}
+                              style={{ left: `${left}%`, width: `${width}%` }}
+                              title={`${isOurControl ? 'Our Control' : 'Opponent Control'}: ${formatTime(durSec)} (${formatTime(cp.startTime)} - ${formatTime(cp.endTime)})`}
+                            >
+                              {width > 6 && (
+                                <span className="truncate px-0.5">
+                                  {isOurControl ? 'CTRL' : 'OPP'}
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Timeline Axis Ticks */}
+                    <div className="relative w-full h-4 mt-1 border-t border-gray-200">
+                      {/* 0m tick */}
+                      <span className="absolute left-0 top-1 text-[9px] font-bold text-gray-400 select-none">- 0:00</span>
+                      
+                      {/* Dynamic ticks */}
+                      {Array.from({ length: Math.floor(gameDuration / 300) }).map((_, i) => {
+                        const tickTime = (i + 1) * 300;
+                        if (tickTime >= gameDuration) return null;
+                        const left = getPercent(gameStartTime + tickTime);
+                        return (
+                          <div key={i} className="absolute top-0 h-1 border-l border-gray-300" style={{ left: `${left}%` }}>
+                            <span className="absolute top-1 -translate-x-1/2 text-[9px] font-bold text-gray-400 select-none">
+                              {i + 1}m
+                            </span>
+                          </div>
+                        );
+                      })}
+
+                      {/* End game tick */}
+                      <span className="absolute right-0 top-1 text-[9px] font-bold text-gray-400 select-none">
+                        {formatTime(timelineGameEndTime - gameStartTime)} -
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center flex-1 py-10">
+                    <p className="text-center text-gray-400 text-xs px-6">
+                      No recorded quadball stints found for this player.
+                    </p>
+                  </div>
+                )}
+                
+                {onSeekToGameVideo && (
+                  <p className="text-[10px] text-gray-400 font-semibold italic text-center mt-3 border-t border-gray-50 pt-2 select-none">
+                    💡 Click any stint or control period block to instantly load the match video at that moment!
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {positionTab === 'dodgeball' && dodgeTab === 'solo' && dodgeSoloStats && (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mb-6">
+              {/* Radar Chart (5 cols) */}
+              <div className="lg:col-span-5 bg-white border border-gray-200 rounded-2xl shadow-sm p-5 flex flex-col items-center justify-between min-h-[360px]">
+                <div className="w-full flex items-center justify-between border-b border-gray-100 pb-2">
+                  <h4 className="text-xs font-bold text-gray-800 uppercase tracking-wider">Beater Percentile Radar</h4>
+                  <span className="text-[10px] text-gray-400 font-semibold uppercase">vs League Beaters</span>
+                </div>
+                {beaterPercentiles ? (
+                  <div className="flex flex-col items-center justify-center w-full py-2">
+                    <svg width="260" height="260" className="overflow-visible">
+                      {/* Grid Lines */}
+                      {[25, 50, 75, 100].map(pct => (
+                        <circle
+                          key={pct}
+                          cx="130"
+                          cy="130"
+                          r={(pct / 100) * 80}
+                          fill="none"
+                          stroke={pct === 100 ? '#d1d5db' : '#e5e7eb'}
+                          strokeWidth={pct === 100 ? '1.5' : '1'}
+                          strokeDasharray={pct === 100 ? 'none' : '3,3'}
+                        />
+                      ))}
+                      
+                      {/* Grid Labels */}
+                      {[25, 50, 75].map(pct => (
+                        <text
+                          key={pct}
+                          x="134"
+                          y={130 - (pct / 100) * 80 + 3}
+                          className="fill-gray-300 text-[8px] font-semibold select-none"
+                        >
+                          {pct}
+                        </text>
+                      ))}
+
+                      {/* Axes */}
+                      {[0, 1, 2, 3].map(i => {
+                        const angle = -Math.PI / 2 + (i * Math.PI) / 2;
+                        const x = 130 + 80 * Math.cos(angle);
+                        const y = 130 + 80 * Math.sin(angle);
+                        return (
+                          <line
+                            key={i}
+                            x1="130"
+                            y1="130"
+                            x2={x}
+                            y2={y}
+                            stroke="#e5e7eb"
+                            strokeWidth="1"
+                          />
+                        );
+                      })}
+
+                      {/* Axis Labels */}
+                      {/* BCL Top */}
+                      <text x="130" y="32" textAnchor="middle" className="fill-gray-700 text-[9px] font-extrabold select-none uppercase tracking-wider">
+                        Net BCL
+                      </text>
+                      <text x="130" y="43" textAnchor="middle" className="fill-emerald-600 text-[8px] font-bold select-none">
+                        {beaterPercentiles.bclVal > 0 ? '+' : ''}{beaterPercentiles.bclVal.toFixed(1)} ({beaterPercentiles.bcl}%)
+                      </text>
+
+                      {/* RAPM Right */}
+                      <text x="218" y="127" textAnchor="start" className="fill-gray-700 text-[9px] font-extrabold select-none uppercase tracking-wider">
+                        RAPM
+                      </text>
+                      <text x="218" y="138" textAnchor="start" className="fill-emerald-600 text-[8px] font-bold select-none">
+                        {beaterPercentiles.rapmVal > 0 ? '+' : ''}{beaterPercentiles.rapmVal.toFixed(2)} ({beaterPercentiles.rapm}%)
+                      </text>
+
+                      {/* Control % Bottom */}
+                      <text x="130" y="222" textAnchor="middle" className="fill-gray-700 text-[9px] font-extrabold select-none uppercase tracking-wider">
+                        Control %
+                      </text>
+                      <text x="130" y="233" textAnchor="middle" className="fill-emerald-600 text-[8px] font-bold select-none">
+                        {beaterPercentiles.controlPctVal.toFixed(1)}% ({beaterPercentiles.controlPct}%)
+                      </text>
+
+                      {/* PM/20 Left */}
+                      <text x="42" y="127" textAnchor="end" className="fill-gray-700 text-[9px] font-extrabold select-none uppercase tracking-wider">
+                        +/− / 20
+                      </text>
+                      <text x="42" y="138" textAnchor="end" className="fill-emerald-600 text-[8px] font-bold select-none">
+                        {beaterPercentiles.plusMinusPerTwentyVal > 0 ? '+' : ''}{beaterPercentiles.plusMinusPerTwentyVal.toFixed(1)} ({beaterPercentiles.plusMinusPerTwenty}%)
+                      </text>
+
+                      {/* Data Polygon */}
+                      {(() => {
+                        const rBcl = Math.max(0, Math.min(100, beaterPercentiles.bcl));
+                        const rRapm = Math.max(0, Math.min(100, beaterPercentiles.rapm));
+                        const rCtrl = Math.max(0, Math.min(100, beaterPercentiles.controlPct));
+                        const rPm = Math.max(0, Math.min(100, beaterPercentiles.plusMinusPerTwenty));
+
+                        const px0 = 130;
+                        const py0 = 130 - (rBcl / 100) * 80;
+                        const px1 = 130 + (rRapm / 100) * 80;
+                        const py1 = 130;
+                        const px2 = 130;
+                        const py2 = 130 + (rCtrl / 100) * 80;
+                        const px3 = 130 - (rPm / 100) * 80;
+                        const py3 = 130;
+
+                        return (
+                          <>
+                            <polygon
+                              points={`${px0},${py0} ${px1},${py1} ${px2},${py2} ${px3},${py3}`}
+                              fill="rgba(16, 185, 129, 0.18)"
+                              stroke="#10b981"
+                              strokeWidth="2.5"
+                              className="animate-pulse"
+                            />
+                            <circle cx={px0} cy={py0} r="4" fill="#10b981" stroke="#ffffff" strokeWidth="1.5" />
+                            <circle cx={px1} cy={py1} r="4" fill="#10b981" stroke="#ffffff" strokeWidth="1.5" />
+                            <circle cx={px2} cy={py2} r="4" fill="#10b981" stroke="#ffffff" strokeWidth="1.5" />
+                            <circle cx={px3} cy={py3} r="4" fill="#10b981" stroke="#ffffff" strokeWidth="1.5" />
+                          </>
+                        );
+                      })()}
+                    </svg>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center flex-1 py-10">
+                    <p className="text-center text-gray-400 text-xs px-6">
+                      Not enough beater pitch time to calculate percentile ranks (requires &gt;0.5 mins of pitch time).
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Gantt Timeline (7 cols) */}
+              <div className="lg:col-span-7 bg-white border border-gray-200 rounded-2xl shadow-sm p-5 flex flex-col justify-between min-h-[360px]">
+                <div className="w-full flex items-center justify-between border-b border-gray-100 pb-2 mb-4">
+                  <div className="flex flex-col">
+                    <h4 className="text-xs font-bold text-gray-800 uppercase tracking-wider">Beater Gantt Timeline</h4>
+                    <span className="text-[10px] text-gray-400 font-semibold">Pitch Presence vs Bludger Control</span>
+                  </div>
+                  {dodgeGames.length > 0 && (
+                    <select
+                      value={activeTimelineGameId}
+                      onChange={e => setTimelineGameId(e.target.value)}
+                      className="bg-gray-50 border text-xs font-bold tracking-wide shadow-sm border-gray-200 text-gray-700 rounded-lg px-2 py-1 outline-none focus:border-neutral-900"
+                    >
+                      {dodgeGames.map(g => {
+                        const gameEvents = events.filter(e => e.gameId === g.id);
+                        const map = buildPlayerTeamMap(gameEvents);
+                        const teamId = map.get(activePlayerId) || gameEvents.find(e => e.playerId === activePlayerId && e.teamId && e.teamId !== 'null')?.teamId;
+                        const opp = g.homeTeamId === teamId ? g.awayTeamId : g.homeTeamId;
+                        const oppName = teams.find(t => t.id === opp)?.name || 'Opponent';
+                        return (
+                          <option key={g.id} value={g.id}>
+                            vs {oppName} ({g.tag || 'Game'})
+                          </option>
+                        );
+                      })}
+                    </select>
+                  )}
+                </div>
+
+                {activeTimelineGameId ? (
+                  <div className="flex flex-col gap-6 flex-1 justify-center my-2">
+                    {/* Track 1: Player Pitch presence */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Pitch Presence (Stints)</span>
+                        <span className="text-[10px] font-medium text-gray-400">
+                          {playerStints.length} stints • Total {formatMinutes(dodgeSoloStats?.totalMinutes || 0)}m
+                        </span>
+                      </div>
+                      <div className="w-full bg-gray-100 border border-gray-200 rounded-xl relative overflow-hidden h-8 shadow-inner">
+                        {/* Bench default background */}
+                        <div className="absolute inset-0 bg-gray-100 flex items-center px-3 select-none pointer-events-none">
+                          <span className="text-[9px] text-gray-300 font-bold uppercase tracking-widest">BENCH</span>
+                        </div>
+                        {/* Stints overlay */}
+                        {playerStints.map((s, idx) => {
+                          const left = getPercent(s.startTime);
+                          const right = getPercent(s.endTime);
+                          const width = Math.max(0.5, right - left);
+                          const { teamGoals, oppGoals } = stintGoals(s.startTime, s.endTime);
+                          const diff = teamGoals - oppGoals;
+                          const durSec = s.endTime - s.startTime;
+                          return (
+                            <button
+                              key={idx}
+                              onClick={() => onSeekToGameVideo?.(activeTimelineGameId, s.startTime)}
+                              disabled={!onSeekToGameVideo}
+                              className={cn(
+                                "absolute top-0 bottom-0 bg-emerald-500 hover:bg-emerald-400 transition-all border-r border-emerald-600/30 flex items-center justify-center font-bold text-white text-[10px] shadow-sm select-none",
+                                onSeekToGameVideo && "cursor-pointer hover:scale-[1.01]"
+                              )}
+                              style={{ left: `${left}%`, width: `${width}%` }}
+                              title={`Stint ${idx + 1}: ${formatTime(durSec)} (${formatTime(s.startTime)} - ${formatTime(s.endTime)}) | Stint Goals: +${teamGoals} -${oppGoals} (${diff > 0 ? '+' : ''}${diff})`}
+                            >
+                              {width > 6 && (
+                                <span className="truncate px-0.5">
+                                  {formatTime(durSec)} ({diff > 0 ? '+' : ''}{diff})
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Track 2: Control Periods */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Dodgeball Control Periods</span>
+                        <div className="flex items-center gap-2 select-none">
+                          <span className="inline-flex items-center gap-1 text-[9px] font-semibold text-gray-400">
+                            <span className="w-2 h-2 rounded bg-cyan-500" /> Control
+                          </span>
+                          <span className="inline-flex items-center gap-1 text-[9px] font-semibold text-gray-400">
+                            <span className="w-2 h-2 rounded bg-rose-500" /> Opponent
+                          </span>
+                        </div>
+                      </div>
+                      <div className="w-full bg-gray-100 border border-gray-200 rounded-xl relative overflow-hidden h-8 shadow-inner">
+                        {/* Control periods overlay */}
+                        {timelineControlPeriods.map((cp, idx) => {
+                          const left = getPercent(cp.startTime);
+                          const right = getPercent(cp.endTime);
+                          const width = Math.max(0.5, right - left);
+                          const isOurControl = cp.teamId === timelinePlayerTeamId;
+                          const durSec = cp.endTime - cp.startTime;
+                          return (
+                            <button
+                              key={idx}
+                              onClick={() => onSeekToGameVideo?.(activeTimelineGameId, cp.startTime)}
+                              disabled={!onSeekToGameVideo}
+                              className={cn(
+                                "absolute top-0 bottom-0 transition-all flex items-center justify-center font-bold text-white text-[9px] shadow-sm select-none border-r border-white/10",
+                                isOurControl ? "bg-cyan-500 hover:bg-cyan-400" : "bg-rose-500 hover:bg-rose-400",
+                                onSeekToGameVideo && "cursor-pointer hover:scale-[1.01]"
+                              )}
+                              style={{ left: `${left}%`, width: `${width}%` }}
+                              title={`${isOurControl ? 'Our Control' : 'Opponent Control'}: ${formatTime(durSec)} (${formatTime(cp.startTime)} - ${formatTime(cp.endTime)})`}
+                            >
+                              {width > 6 && (
+                                <span className="truncate px-0.5">
+                                  {isOurControl ? 'CTRL' : 'OPP'}
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Timeline Axis Ticks */}
+                    <div className="relative w-full h-4 mt-1 border-t border-gray-200">
+                      {/* 0m tick */}
+                      <span className="absolute left-0 top-1 text-[9px] font-bold text-gray-400 select-none">- 0:00</span>
+                      
+                      {/* Dynamic ticks */}
+                      {Array.from({ length: Math.floor(gameDuration / 300) }).map((_, i) => {
+                        const tickTime = (i + 1) * 300;
+                        if (tickTime >= gameDuration) return null;
+                        const left = getPercent(gameStartTime + tickTime);
+                        return (
+                          <div key={i} className="absolute top-0 h-1 border-l border-gray-300" style={{ left: `${left}%` }}>
+                            <span className="absolute top-1 -translate-x-1/2 text-[9px] font-bold text-gray-400 select-none">
+                              {i + 1}m
+                            </span>
+                          </div>
+                        );
+                      })}
+
+                      {/* End game tick */}
+                      <span className="absolute right-0 top-1 text-[9px] font-bold text-gray-400 select-none">
+                        {formatTime(timelineGameEndTime - gameStartTime)} -
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center flex-1 py-10">
+                    <p className="text-center text-gray-400 text-xs px-6">
+                      No recorded dodgeball stints found for this player.
+                    </p>
+                  </div>
+                )}
+                
+                {onSeekToGameVideo && (
+                  <p className="text-[10px] text-gray-400 font-semibold italic text-center mt-3 border-t border-gray-50 pt-2 select-none">
+                    💡 Click any stint or control period block to instantly load the match video at that moment!
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
           <div className="border border-gray-200 rounded-lg overflow-hidden bg-white flex flex-col">
             <div className="overflow-x-auto flex-1 bg-white">
             {positionTab === 'quadball' && (!quadStats ? (
@@ -566,6 +1247,7 @@ export default function PlayerProfileView({
                     <SortHeader label="+/−" sortKey="plusMinus" currentSort="" currentDir="asc" onSort={() => {}} />
                     <SortHeader label="RATIO" sortKey="plusMinusRatio" currentSort="" currentDir="asc" onSort={() => {}} />
                     <SortHeader label="+/− / 20" sortKey="plusMinusPerTwenty" currentSort="" currentDir="asc" onSort={() => {}} />
+                    <SortHeader label="BCL" sortKey="bcl" currentSort="" currentDir="asc" onSort={() => {}} />
                   </tr>
                 </thead>
                 <tbody>
@@ -581,7 +1263,8 @@ export default function PlayerProfileView({
                     <Cell value={dodgeSoloStats.minus} />
                     <Cell value={dodgeSoloStats.plusMinus} bold highlight={dodgeSoloStats.plusMinus > 0 ? 'pos' : dodgeSoloStats.plusMinus < 0 ? 'neg' : undefined} />
                     <Cell value={dodgeSoloStats.plusMinusRatio} />
-                    <Cell value={dodgeSoloStats.plusMinusPerTwenty} />
+                    <Cell value={dodgeSoloStats.totalMinutes > 0 ? Math.round((dodgeSoloStats.plusMinus / dodgeSoloStats.totalMinutes) * 20 * 10) / 10 : 0} />
+                    <Cell value={dodgeSoloStats.bcl > 0 ? `+${dodgeSoloStats.bcl}` : dodgeSoloStats.bcl || '0'} bold highlight={dodgeSoloStats.bcl > 0 ? 'pos' : dodgeSoloStats.bcl < 0 ? 'neg' : undefined} />
                   </tr>
                 </tbody>
               </table>
@@ -600,6 +1283,7 @@ export default function PlayerProfileView({
                     <SortHeader label="+" sortKey="plus" currentSort={pairSortKey} currentDir={pairSortDir} onSort={handlePairSort} />
                     <SortHeader label="−" sortKey="minus" currentSort={pairSortKey} currentDir={pairSortDir} onSort={handlePairSort} />
                     <SortHeader label="+/−" sortKey="plusMinus" currentSort={pairSortKey} currentDir={pairSortDir} onSort={handlePairSort} />
+                    <SortHeader label="BCL" sortKey="bcl" currentSort={pairSortKey} currentDir={pairSortDir} onSort={handlePairSort} />
                   </tr>
                 </thead>
                 <tbody>
@@ -617,6 +1301,7 @@ export default function PlayerProfileView({
                       <Cell value={pStat.plus} />
                       <Cell value={pStat.minus} />
                       <Cell value={pStat.plusMinus} bold highlight={pStat.plusMinus > 0 ? 'pos' : pStat.plusMinus < 0 ? 'neg' : undefined} />
+                      <Cell value={pStat.bcl > 0 ? `+${pStat.bcl}` : pStat.bcl || '0'} bold highlight={pStat.bcl > 0 ? 'pos' : pStat.bcl < 0 ? 'neg' : undefined} />
                     </tr>
                   ))}
                 </tbody>
@@ -630,13 +1315,16 @@ export default function PlayerProfileView({
                 <thead>
                   <tr className="border-b border-gray-100 bg-gray-50/80">
                     <th className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-left text-gray-400 sticky left-0 bg-gray-50 z-10 w-48">Player</th>
-                    <SortHeader label="STINTS" sortKey="stints" currentSort="" currentDir="asc" onSort={() => {}} />
-                    <SortHeader label="TIME/STINT" sortKey="timePerStint" currentSort="" currentDir="asc" onSort={() => {}} />
-                    <SortHeader label="CTH" sortKey="catches" currentSort="" currentDir="asc" onSort={() => {}} />
-                    <SortHeader label="OpCTH" sortKey="oppCatchesOnPitch" currentSort="" currentDir="asc" onSort={() => {}} />
-                    <SortHeader label="TIME TO CH" sortKey="catchTimeSec" currentSort="" currentDir="asc" onSort={() => {}} />
-                    <SortHeader label="REL TO CH" sortKey="releaseToCatchSec" currentSort="" currentDir="asc" onSort={() => {}} />
-                    <SortHeader label="CTRL %" sortKey="controlPctOnPitch" currentSort="" currentDir="asc" onSort={() => {}} />
+                    <SortHeader label="GP" sortKey="gamesPlayed" currentSort="" currentDir="asc" onSort={() => {}} tooltip="Games Played (as Seeker)" />
+                    <SortHeader label="CTH" sortKey="catches" currentSort="" currentDir="asc" onSort={() => {}} tooltip="Flag Catches" />
+                    <SortHeader label="OpCTH" sortKey="opponentCatches" currentSort="" currentDir="asc" onSort={() => {}} tooltip="Opponent Catches While On Pitch" />
+                    <SortHeader label="C%" sortKey="catchPct" currentSort="" currentDir="asc" onSort={() => {}} tooltip="Catch %" />
+                    <SortHeader label="MIN/G" sortKey="avgMinPerGame" currentSort="" currentDir="asc" onSort={() => {}} tooltip="Avg Minutes Per Game as Seeker" />
+                    <SortHeader label="AVG CTH" sortKey="avgTimeToCatch" currentSort="" currentDir="asc" onSort={() => {}} tooltip="Avg Time to Catch (time on field)" />
+                    <SortHeader label="FROM REL" sortKey="avgTimeFromRelease" currentSort="" currentDir="asc" onSort={() => {}} tooltip="Avg Time from Flag Release" />
+                    <SortHeader label="CTRL%" sortKey="controlPct" currentSort="" currentDir="asc" onSort={() => {}} tooltip="Team Bludger Control % While Seeking" />
+                    <SortHeader label="DIFF" sortKey="avgPointDiff" currentSort="" currentDir="asc" onSort={() => {}} tooltip="Avg Point Diff at Catch" />
+                    <SortHeader label="GWC" sortKey="gameWinningCatches" currentSort="" currentDir="asc" onSort={() => {}} tooltip="Game Winning Catches" />
                   </tr>
                 </thead>
                 <tbody>
@@ -644,13 +1332,16 @@ export default function PlayerProfileView({
                     <td className="px-2 py-1.5 sticky left-0 bg-white z-10 font-bold text-gray-900 text-xs truncate">
                       {player.firstName} {player.lastName}
                     </td>
-                    <Cell value={flagStats.stints} />
-                    <Cell value={flagStats.timePerStint} />
-                    <Cell value={flagStats.catches} />
-                    <Cell value={flagStats.oppCatchesOnPitch} />
-                    <Cell value={flagStats.catchTimeSec} />
-                    <Cell value={flagStats.releaseToCatchSec} />
-                    <Cell value={flagStats.controlPctOnPitch} />
+                    <Cell value={flagStats.gamesPlayed} />
+                    <Cell value={flagStats.catches} highlight={flagStats.catches > 0 ? 'gold' : undefined} bold />
+                    <Cell value={flagStats.opponentCatches} highlight={flagStats.opponentCatches > 0 ? 'neg' : undefined} />
+                    <Cell value={`${flagStats.catchPct}%`} highlight={flagStats.catchPct >= 60 ? 'pos' : flagStats.catchPct <= 30 ? 'neg' : undefined} bold />
+                    <Cell value={formatMinutes(flagStats.avgMinPerGame)} />
+                    <Cell value={formatTime(flagStats.avgTimeToCatch)} />
+                    <Cell value={formatTime(flagStats.avgTimeFromRelease)} />
+                    <Cell value={`${flagStats.controlPct}%`} highlight={flagStats.controlPct >= 60 ? 'pos' : flagStats.controlPct <= 30 ? 'neg' : undefined} />
+                    <Cell value={flagStats.avgPointDiff > 0 ? `+${flagStats.avgPointDiff}` : flagStats.avgPointDiff || '—'} highlight={flagStats.avgPointDiff > 0 ? 'pos' : flagStats.avgPointDiff < 0 ? 'neg' : undefined} />
+                    <Cell value={flagStats.gameWinningCatches} highlight={flagStats.gameWinningCatches > 0 ? 'gold' : undefined} />
                   </tr>
                 </tbody>
               </table>

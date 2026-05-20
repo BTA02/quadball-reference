@@ -79,10 +79,11 @@ import TeamProfileView from './components/TeamProfileView';
 import GameBoxScoreView from './components/GameBoxScoreView';
 import StatsFilters from './components/StatsFilters';
 import LandingHero from './components/LandingHero';
+import GameCastView from './components/GameCastView';
 import { enrichEventsWithGameTime, getScoreboardName } from './lib/statsComputations';
 // --- Types ---
 
-type EventType = 'goal' | 'assist' | 'shot' | 'attempt' | 'miss_ko' | 'gameStart' | 'gamePause' | 'gameEnd' | 'foul' | 'card' | 'sub_in' | 'sub_out' | 'control_change' | 'turnover' | 'flag_released' | 'flag_catch' | 'control_start' | 'quadball_start';
+export type EventType = 'goal' | 'assist' | 'shot' | 'attempt' | 'miss_ko' | 'gameStart' | 'gamePause' | 'gameEnd' | 'foul' | 'card' | 'sub_in' | 'sub_out' | 'control_change' | 'turnover' | 'flag_released' | 'flag_catch' | 'control_start' | 'quadball_start';
 
 type PositionType = 'chaser' | 'keeper' | 'beater' | 'seeker';
 
@@ -138,6 +139,8 @@ interface Season {
   year?: string;
   description?: string;
   createdAt: any;
+  league?: string;
+  tournamentId?: string;
 }
 
 /** Format a season for display: "<league> <division?> <year>"
@@ -233,7 +236,6 @@ interface Game {
   leagueId?: string;
   division?: string;
   tournamentId?: string;
-  division?: string;
   homeTeamId: string;
   awayTeamId: string;
   tag?: string;
@@ -1953,7 +1955,7 @@ function ManagementView({
   onAddRole,
   onRemoveRole
 }: ManagementViewProps) {
-  const [activeTab, setActiveTab] = useState<'leagues' | 'tournaments' | 'teams' | 'seasons' | 'players' | 'rosters' | 'games' | 'import' | 'roles' | 'events'>('teams');
+  const [activeTab, setActiveTab] = useState<'leagues' | 'tournaments' | 'search' | 'teams' | 'seasons' | 'players' | 'rosters' | 'games' | 'videos' | 'roles' | 'events' | 'import'>('teams');
   const [newItemFirstName, setNewItemFirstName] = useState('');
   const [newItemLastName, setNewItemLastName] = useState('');
   const [newPlayerPreferredName, setNewPlayerPreferredName] = useState('');
@@ -2001,7 +2003,7 @@ function ManagementView({
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [isImporting, setIsImporting] = useState(false);
   const [importProgress, setImportProgress] = useState(0);
-  const [importType, setImportType] = useState<'stats' | 'players' | 'teams' | 'rosters' | 'videos' | 'local_sim' | 'deduplicator'>('local_sim');
+  const [importType, setImportType] = useState<'stats' | 'players' | 'teams' | 'rosters' | 'videos' | 'local_sim' | 'deduplicator' | 'team_roster_builder'>('local_sim');
   const [useLocalSimMode, setUseLocalSimMode] = useState<boolean>(true);
   const [uploadSimToLive, setUploadSimToLive] = useState<boolean>(false);
   const [filterTeamId, setFilterTeamId] = useState('');
@@ -2144,11 +2146,6 @@ function ManagementView({
                   <option value="local_sim">Sandbox Local Simulator</option>
                   <option value="team_roster_builder">Team Roster Builder (CSV)</option>
                   <option value="deduplicator">Targeted Team Game Extractor</option>
-                  <option value="stats">Legacy: Import Stats</option>
-                  <option value="players">Legacy: Import Players</option>
-                  <option value="teams">Legacy: Import Teams</option>
-                  <option value="rosters">Legacy: Import Rosters</option>
-                  <option value="videos">Legacy: Import Videos</option>
                 </select>
               </div>
 
@@ -2795,7 +2792,7 @@ function ManagementView({
                     ) : (
                       <div className="space-y-4">
                         <h4 className="font-bold text-red-400 uppercase text-xs tracking-widest">Fixed Schema</h4>
-                        <p className="text-sm text-gray-500">Columns are pre-mapped for this legacy database format. Ensure you have selected the correct CSV file.</p>
+                        <p className="text-sm text-gray-500">Columns are pre-mapped for this database format. Ensure you have selected the correct CSV file.</p>
                       </div>
                     )}
 
@@ -4663,13 +4660,84 @@ const getPlayerShortName = (p: Player | undefined | null, rosterPool: { player?:
   return `${p.firstName.charAt(0)}. ${p.lastName}`;
 };
 
+function LeaderboardView({ events }: { events: any[] }) {
+  const leaderboardStats = useMemo(() => {
+    const statsByUser = new Map<string, { userName: string; totalEvents: number; verifiedEvents: number; rejectedEvents: number; upvotes: number; downvotes: number }>();
+    events.forEach(e => {
+      if (!e.userId) return;
+      const u = statsByUser.get(e.userId) || { userName: e.userName || 'Anonymous', totalEvents: 0, verifiedEvents: 0, rejectedEvents: 0, upvotes: 0, downvotes: 0 };
+      u.totalEvents++;
+      if (e.status === 'verified') u.verifiedEvents++;
+      if (e.status === 'rejected') u.rejectedEvents++;
+      u.upvotes += (e.upvotes || 0);
+      u.downvotes += (e.downvotes || 0);
+      statsByUser.set(e.userId, u);
+    });
+    
+    return Array.from(statsByUser.values())
+      .map(s => ({
+        ...s,
+        netUpvotes: s.upvotes - s.downvotes,
+        accuracy: s.totalEvents > 0 ? (s.verifiedEvents / s.totalEvents) * 100 : 0
+      }))
+      .sort((a, b) => b.verifiedEvents - a.verifiedEvents || b.totalEvents - a.totalEvents);
+  }, [events]);
+
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+      <div className="p-6 border-b border-gray-100 bg-amber-50/30">
+        <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+          <Trophy className="w-5 h-5 text-amber-500" /> Community Leaderboard
+        </h3>
+        <p className="text-sm text-gray-500 mt-1">Ranking by verified events contributed</p>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-left border-collapse">
+          <thead>
+            <tr className="bg-gray-50/80 border-b border-gray-200 text-xs uppercase tracking-wider text-gray-500">
+              <th className="px-6 py-3 font-bold">Rank</th>
+              <th className="px-6 py-3 font-bold">User Name</th>
+              <th className="px-6 py-3 font-bold text-right">Verified</th>
+              <th className="px-6 py-3 font-bold text-right">Total Submissions</th>
+              <th className="px-6 py-3 font-bold text-right">Accuracy</th>
+              <th className="px-6 py-3 font-bold text-right">Net Upvotes</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {leaderboardStats.map((u, i) => (
+              <tr key={u.userName + i} className="hover:bg-gray-50/50 transition-colors">
+                <td className="px-6 py-4 font-bold text-gray-900">
+                  {i === 0 ? <span className="text-amber-500 flex items-center gap-1"><Trophy className="w-4 h-4" /> 1</span> : 
+                   i === 1 ? <span className="text-gray-400 flex items-center gap-1"><Trophy className="w-4 h-4" /> 2</span> :
+                   i === 2 ? <span className="text-amber-700 flex items-center gap-1"><Trophy className="w-4 h-4" /> 3</span> :
+                   <span className="text-gray-500">{i + 1}</span>}
+                </td>
+                <td className="px-6 py-4 font-semibold text-gray-900">{u.userName}</td>
+                <td className="px-6 py-4 text-right font-bold text-emerald-600">{u.verifiedEvents}</td>
+                <td className="px-6 py-4 text-right text-gray-600">{u.totalEvents}</td>
+                <td className="px-6 py-4 text-right text-gray-600">{u.accuracy.toFixed(1)}%</td>
+                <td className="px-6 py-4 text-right font-medium text-amber-600">{u.netUpvotes > 0 ? `+${u.netUpvotes}` : u.netUpvotes}</td>
+              </tr>
+            ))}
+            {leaderboardStats.length === 0 && (
+              <tr>
+                <td colSpan={6} className="px-6 py-12 text-center text-gray-500">No events contributed yet.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function CreateView({
-  teams, seasons, players, leagues, tournaments,
+  teams, seasons, players, leagues, tournaments, events,
   searchQuery, setSearchQuery, newVideoData, setNewVideoData, isAddingGame, setIsAddingGame, onAddGame,
   onAddTeam, onAddPlayer, onAddPlayerToRoster, onRemovePlayerFromRoster,
   onCreateRoster, onDeleteRoster, onEditPlayer, onDeletePlayer
 }: any) {
-  const [activeTab, setActiveTab] = useState<'rosters' | 'teams' | 'players' | 'games'>('rosters');
+  const [activeTab, setActiveTab] = useState<'rosters' | 'teams' | 'players' | 'games' | 'leaderboard'>('rosters');
   const [selectedRosterId, setSelectedRosterId] = useState('');
   const [rosters, setRosters] = useState<Roster[]>([]);
   const [rosterPlayers, setRosterPlayers] = useState<(RosterPlayer & { player?: Player })[]>([]);
@@ -4720,7 +4788,7 @@ function CreateView({
       <div className="flex items-center justify-between">
         <h2 className="text-3xl font-bold">Moderator - Creation Tools</h2>
         <div className="flex bg-gray-50 p-1 rounded-xl border border-gray-200">
-          {(['rosters', 'teams', 'players', 'games'] as const).map(tab => (
+          {(['rosters', 'teams', 'players', 'games', 'leaderboard'] as const).map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -4735,7 +4803,9 @@ function CreateView({
         </div>
       </div>
 
-      {activeTab === 'rosters' ? (
+      {activeTab === 'leaderboard' ? (
+        <LeaderboardView events={events} />
+      ) : activeTab === 'rosters' ? (
         <UnifiedRosterEditor
           teams={teams}
           seasons={seasons}
@@ -5053,6 +5123,7 @@ export default function App() {
   const [isExpandedLayout, setIsExpandedLayout] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const hasAutoSeekedRef = useRef<boolean>(false);
+  const pendingSeekTimeRef = useRef<number | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
   const [popupTimeOffset, setPopupTimeOffset] = useState<number>(0);
@@ -5239,6 +5310,12 @@ export default function App() {
   const [eventsListFilterMode, setEventsListFilterMode] = useState<'now' | 'all'>('now');
   const [eventsFilterSet, setEventsFilterSet] = useState<string>('all');
   const [draftEvents, setDraftEvents] = useState<DraftEvent[]>([]);
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [commandPaletteQuery, setCommandPaletteQuery] = useState('');
+  const [commandPaletteSelectedIndex, setCommandPaletteSelectedIndex] = useState(0);
+  const [isListening, setIsListening] = useState(false);
+  const [voiceCommandText, setVoiceCommandText] = useState('');
+  const [voiceStatusMessage, setVoiceStatusMessage] = useState('');
   const [pins, setPins] = useState<Pin[]>([]);
   const [watchLeagueId, setWatchLeagueId] = useState<string>('all');
   const [watchDivision, setWatchDivision] = useState<string>('all');
@@ -5274,19 +5351,26 @@ export default function App() {
   
   const statsSeasons = useMemo(() => {
     const s = demoData ? demoData.seasons : seasons;
-    return [...s].sort((a,b) => (b.description || b.name).localeCompare(a.description || a.name));
+    return [...s]
+      .filter(sea => {
+        const yearMatch = sea.name?.match(/\d{4}/) || sea.year?.match(/\d{4}/);
+        if (!yearMatch) return true;
+        return parseInt(yearMatch[0], 10) > 2020;
+      })
+      .sort((a,b) => (b.description || b.name).localeCompare(a.description || a.name));
   }, [demoData, seasons]);
   // No initialization needed — default '' means "All Seasons", which is correct
   // since dashboardGames already filters out legacy seasons via legacySeasonIds.
   const statsVideos = demoData && demoData.videos.length > 0 ? demoData.videos : videos;
 
   const legacySeasonIds = useMemo(() => {
-    return new Set(statsSeasons.filter(s => {
-      const yearMatch = s.name?.match(/\d{4}/) || s.year?.match(/\d{4}/);
+    const s = demoData ? demoData.seasons : seasons;
+    return new Set(s.filter(sea => {
+      const yearMatch = sea.name?.match(/\d{4}/) || sea.year?.match(/\d{4}/);
       if (!yearMatch) return false;
       return parseInt(yearMatch[0], 10) <= 2020;
-    }).map(s => s.id));
-  }, [statsSeasons]);
+    }).map(sea => sea.id));
+  }, [demoData, seasons]);
 
   const currentUserTeamId = useMemo(() => teams.find(t => t.emails?.includes(user?.email || ''))?.id, [teams, user]);
   const currentSeasonId = ''; // All stats public
@@ -5400,7 +5484,7 @@ export default function App() {
     return statsTeams.filter(t => activeTeamIds.has(t.id));
   }, [statsTeams, dashboardGames]);
 
-  const [newVideoData, setNewVideoData] = useState<{ gameId?: string; seasonId: string; homeTeamId: string; awayTeamId: string; tag?: string; date?: string; leagueId?: string; division?: string; tournamentId?: string; }>({
+  const [newVideoData, setNewVideoData] = useState<{ gameId?: string; videoId?: string; seasonId: string; homeTeamId: string; awayTeamId: string; tag?: string; date?: string; leagueId?: string; division?: string; tournamentId?: string; }>({
     seasonId: '',
     homeTeamId: '',
     awayTeamId: '',
@@ -5835,6 +5919,358 @@ export default function App() {
 
   const handleDeleteDraftEvent = (id: string) => {
     setDraftEvents(prev => prev.filter(d => d.id !== id));
+  };
+
+  // Command Palette & Speech recognition hooks
+  const commandPaletteResults = useMemo(() => {
+    if (!commandPaletteQuery.trim()) return [];
+    const query = commandPaletteQuery.toLowerCase();
+    
+    const matchedPlayers = statsPlayers
+      .filter(p => {
+        const fullName = `${p.firstName} ${p.lastName}`.toLowerCase();
+        return fullName.includes(query) || (p.nickname && p.nickname.toLowerCase().includes(query));
+      })
+      .map(p => ({
+        type: 'player' as const,
+        id: p.id,
+        title: `${p.firstName} ${p.lastName}`,
+        subtitle: p.nickname ? `"${p.nickname}"` : 'Quadball Athlete',
+      }));
+
+    const matchedTeams = statsTeams
+      .filter(t => t.name.toLowerCase().includes(query) || (t.shortName && t.shortName.toLowerCase().includes(query)))
+      .map(t => ({
+        type: 'team' as const,
+        id: t.id,
+        title: t.name,
+        subtitle: `${t.shortName || ''} Quadball Club`,
+      }));
+
+    const matchedGames = statsGames
+      .filter(g => {
+        const homeTeamName = statsTeams.find(t => t.id === g.homeTeamId)?.name || '';
+        const awayTeamName = statsTeams.find(t => t.id === g.awayTeamId)?.name || '';
+        return (
+          homeTeamName.toLowerCase().includes(query) ||
+          awayTeamName.toLowerCase().includes(query) ||
+          (g.tournamentId && g.tournamentId.toLowerCase().includes(query))
+        );
+      })
+      .map(g => {
+        const homeTeam = statsTeams.find(t => t.id === g.homeTeamId);
+        const awayTeam = statsTeams.find(t => t.id === g.awayTeamId);
+        return {
+          type: 'game' as const,
+          id: g.id,
+          title: `${homeTeam?.name || 'Home'} vs ${awayTeam?.name || 'Away'}`,
+          subtitle: `${g.date || ''} ${g.division ? '• ' + g.division : ''} ${g.tag ? '• ' + g.tag : ''}`,
+        };
+      });
+
+    return [...matchedPlayers, ...matchedTeams, ...matchedGames].slice(0, 10);
+  }, [commandPaletteQuery, statsPlayers, statsTeams, statsGames]);
+
+  const handleSelectCommandPaletteItem = (item: { type: 'player' | 'team' | 'game'; id: string }) => {
+    setIsCommandPaletteOpen(false);
+    setCommandPaletteQuery('');
+    if (item.type === 'player') {
+      handlePlayerProfileClick(item.id);
+    } else if (item.type === 'team') {
+      handleTeamProfileClick(item.id);
+    } else if (item.type === 'game') {
+      handleGameProfileClick(item.id);
+    }
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        setIsCommandPaletteOpen(prev => !prev);
+        setCommandPaletteQuery('');
+        setCommandPaletteSelectedIndex(0);
+      }
+      if (isCommandPaletteOpen) {
+        if (e.key === 'Escape') {
+          setIsCommandPaletteOpen(false);
+        } else if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          setCommandPaletteSelectedIndex(prev => 
+            prev < commandPaletteResults.length - 1 ? prev + 1 : 0
+          );
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          setCommandPaletteSelectedIndex(prev => 
+            prev > 0 ? prev - 1 : commandPaletteResults.length - 1
+          );
+        } else if (e.key === 'Enter') {
+          e.preventDefault();
+          const selectedItem = commandPaletteResults[commandPaletteSelectedIndex];
+          if (selectedItem) {
+            handleSelectCommandPaletteItem(selectedItem);
+          }
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isCommandPaletteOpen, commandPaletteResults, commandPaletteSelectedIndex]);
+
+  const findRosterPlayer = (
+    searchStr: string,
+    teamId?: string | null
+  ): { player: Player; number: string; teamId: string } | null => {
+    if (!currentGame) return null;
+    const cleanStr = searchStr.trim().toLowerCase();
+    if (!cleanStr) return null;
+
+    const candidates: { rp: RosterPlayer & { player: Player }; teamId: string }[] = [];
+    if (!teamId || teamId === currentGame.homeTeamId) {
+      homeRosterPlayers.forEach(rp => candidates.push({ rp, teamId: currentGame.homeTeamId }));
+    }
+    if (!teamId || teamId === currentGame.awayTeamId) {
+      awayRosterPlayers.forEach(rp => candidates.push({ rp, teamId: currentGame.awayTeamId }));
+    }
+
+    const matchByNumber = candidates.find(c => c.rp.number === cleanStr);
+    if (matchByNumber) {
+      return { player: matchByNumber.rp.player, number: matchByNumber.rp.number, teamId: matchByNumber.teamId };
+    }
+
+    const matchByLastName = candidates.find(
+      c => c.rp.player.lastName.toLowerCase() === cleanStr || 
+           c.rp.player.lastName.toLowerCase().includes(cleanStr)
+    );
+    if (matchByLastName) {
+      return { player: matchByLastName.rp.player, number: matchByLastName.rp.number, teamId: matchByLastName.teamId };
+    }
+
+    const matchByFirstName = candidates.find(
+      c => c.rp.player.firstName.toLowerCase() === cleanStr ||
+           (c.rp.player.preferredName && c.rp.player.preferredName.toLowerCase() === cleanStr) ||
+           c.rp.player.firstName.toLowerCase().includes(cleanStr)
+    );
+    if (matchByFirstName) {
+      return { player: matchByFirstName.rp.player, number: matchByFirstName.rp.number, teamId: matchByFirstName.teamId };
+    }
+
+    return null;
+  };
+
+  const parseNlpCommand = (commandText: string) => {
+    if (!currentGame) {
+      setVoiceStatusMessage("No active game to log events!");
+      return;
+    }
+
+    const text = commandText.toLowerCase().trim();
+    const vTime = player ? (function(){ try { return player.getCurrentTime(); } catch(e){ return 0; }})() : 0;
+
+    let detectedType: EventType | null = null;
+    let targetTeamId: string | null = null;
+    let targetPlayerId: string | null = null;
+    let assistedByPlayerId: string | null = null;
+    let subPlayerId: string | null = null;
+    let cardColor: string | null = null;
+
+    if (text.includes("home")) {
+      targetTeamId = currentGame.homeTeamId;
+    } else if (text.includes("away")) {
+      targetTeamId = currentGame.awayTeamId;
+    }
+
+    if (text.startsWith("goal") || text.includes("scored")) {
+      detectedType = 'goal';
+      let scorerQuery = text
+        .replace("goal", "")
+        .replace("scored", "")
+        .replace("home", "")
+        .replace("away", "")
+        .replace("assist", "")
+        .split("for")[0]
+        .trim();
+
+      if (text.includes("assist")) {
+        const parts = text.split("assist");
+        scorerQuery = parts[0]
+          .replace("goal", "")
+          .replace("scored", "")
+          .replace("home", "")
+          .replace("away", "")
+          .trim();
+        const assistQuery = parts[1]
+          .replace("by", "")
+          .replace("home", "")
+          .replace("away", "")
+          .trim();
+        
+        const assistPlayer = findRosterPlayer(assistQuery, targetTeamId);
+        if (assistPlayer) {
+          assistedByPlayerId = assistPlayer.player.id;
+          if (!targetTeamId) targetTeamId = assistPlayer.teamId;
+        }
+      }
+
+      const scorerPlayer = findRosterPlayer(scorerQuery, targetTeamId);
+      if (scorerPlayer) {
+        targetPlayerId = scorerPlayer.player.id;
+        if (!targetTeamId) targetTeamId = scorerPlayer.teamId;
+      }
+    }
+    else if (text.startsWith("turnover") || text.includes("turn over")) {
+      detectedType = 'turnover';
+      const playerQuery = text
+        .replace("turnover", "")
+        .replace("turn over", "")
+        .replace("home", "")
+        .replace("away", "")
+        .trim();
+      const p = findRosterPlayer(playerQuery, targetTeamId);
+      if (p) {
+        targetPlayerId = p.player.id;
+        targetTeamId = p.teamId;
+      }
+    }
+    else if (text.includes("card")) {
+      detectedType = 'card';
+      if (text.includes("yellow")) cardColor = 'yellow';
+      else if (text.includes("red")) cardColor = 'red';
+      else if (text.includes("blue")) cardColor = 'blue';
+
+      const playerQuery = text
+        .replace("card", "")
+        .replace("yellow", "")
+        .replace("red", "")
+        .replace("blue", "")
+        .replace("home", "")
+        .replace("away", "")
+        .trim();
+      const p = findRosterPlayer(playerQuery, targetTeamId);
+      if (p) {
+        targetPlayerId = p.player.id;
+        targetTeamId = p.teamId;
+      }
+    }
+    else if (text.startsWith("foul") || text.includes("fouled")) {
+      detectedType = 'foul';
+      const playerQuery = text
+        .replace("foul", "")
+        .replace("fouled", "")
+        .replace("home", "")
+        .replace("away", "")
+        .trim();
+      const p = findRosterPlayer(playerQuery, targetTeamId);
+      if (p) {
+        targetPlayerId = p.player.id;
+        targetTeamId = p.teamId;
+      }
+    }
+    else if (text.startsWith("sub") || text.includes("substitution") || text.includes("replace")) {
+      detectedType = 'sub_out';
+      let inQuery = '';
+      let outQuery = '';
+
+      if (text.includes("in for")) {
+        const parts = text.split("in for");
+        inQuery = parts[0].replace("sub", "").replace("in", "").replace("out", "").trim();
+        outQuery = parts[1].trim();
+      } else if (text.includes("for")) {
+        const parts = text.split("for");
+        inQuery = parts[0].replace("sub", "").replace("in", "").replace("out", "").trim();
+        outQuery = parts[1].trim();
+      } else if (text.includes("replace")) {
+        const parts = text.split("with");
+        outQuery = parts[0].replace("replace", "").trim();
+        inQuery = parts[1].trim();
+      }
+
+      const outPlayer = findRosterPlayer(outQuery, targetTeamId);
+      const inPlayer = findRosterPlayer(inQuery, targetTeamId);
+
+      if (outPlayer) {
+        targetPlayerId = outPlayer.player.id;
+        targetTeamId = outPlayer.teamId;
+      }
+      if (inPlayer) {
+        subPlayerId = inPlayer.player.id;
+        if (!targetTeamId) targetTeamId = inPlayer.teamId;
+      }
+    }
+
+    if (!detectedType) {
+      setVoiceStatusMessage(`Could not recognize event type from: "${commandText}"`);
+      return;
+    }
+
+    const inferredTeam = targetTeamId || currentGame.homeTeamId;
+
+    const newDraft: DraftEvent = {
+      id: crypto.randomUUID(),
+      type: detectedType,
+      videoTime: vTime,
+      gameTime: gameTime,
+      teamId: inferredTeam,
+      playerId: targetPlayerId || null,
+      relatedEventId: null,
+      assistedByPlayerId: assistedByPlayerId || null,
+      position: null,
+      subPlayerId: subPlayerId || null,
+      color: cardColor || null
+    };
+
+    setDraftEvents(prev => [newDraft, ...prev]);
+    setVoiceStatusMessage(`Staged: ${detectedType.toUpperCase()} at ${formatTime(vTime)}!`);
+    toast.success(`Staged ${detectedType.toUpperCase()} event!`);
+  };
+
+  const toggleSpeechRecognition = () => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      toast.error("Speech Recognition is not supported by your browser. Please type commands manually below.");
+      return;
+    }
+
+    if (isListening) {
+      setIsListening(false);
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      recognition.lang = 'en-US';
+
+      recognition.onstart = () => {
+        setIsListening(true);
+        setVoiceStatusMessage("Listening... Speak now!");
+      };
+
+      recognition.onerror = (e: any) => {
+        console.error("Speech Recognition Error:", e);
+        setIsListening(false);
+        setVoiceStatusMessage(`Error: ${e.error || 'Failed to capture speech'}`);
+      };
+
+      recognition.onend = () => {
+        setIsListening(false);
+      };
+
+      recognition.onresult = (event: any) => {
+        const resultText = event.results[0][0].transcript;
+        setVoiceCommandText(resultText);
+        parseNlpCommand(resultText);
+      };
+
+      recognition.start();
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to start microphone listener.");
+    }
   };
 
   const handleDeleteRecordedEvent = async (eventId: string) => {
@@ -7022,7 +7458,17 @@ export default function App() {
       const aTeam = statsTeams.find(t => t.id === g.awayTeamId);
       const hName = hTeam?.nickname || hTeam?.name || g.homeTeamId;
       const aName = aTeam?.nickname || aTeam?.name || g.awayTeamId;
-      return { ...g, displayName: g.tag ? `${hName} vs ${aName} (${g.tag})` : `${hName} vs ${aName}` };
+      
+      const s = statsSeasons.find(sea => sea.id === g.seasonId);
+      const tId = g.tournamentId || s?.tournamentId;
+      const tournament = tournaments.find(t => t.id === tId);
+      const tournamentName = tournament ? tournament.name : null;
+      let subTitle = '';
+      if (tournamentName && g.tag) subTitle = `${tournamentName} - ${g.tag}`;
+      else if (tournamentName) subTitle = tournamentName;
+      else if (g.tag) subTitle = g.tag;
+
+      return { ...g, displayName: `${hName} vs ${aName}`, subTitle };
     }).sort((a, b) => {
       if (a.date && b.date) {
         return new Date(b.date).getTime() - new Date(a.date).getTime();
@@ -7033,7 +7479,7 @@ export default function App() {
       const tB = b.createdAt?.seconds ? b.createdAt.seconds * 1000 : (b.createdAt instanceof Date ? b.createdAt.getTime() : 0);
       return tB - tA;
     });
-  }, [statsGames, statsSeasons, statsTeams, trackerYearId, trackerTeamId, trackerOpponentId, watchLeagueId, watchDivision]);
+  }, [statsGames, statsSeasons, statsTeams, tournaments, trackerYearId, trackerTeamId, trackerOpponentId, watchLeagueId, watchDivision]);
 
   const verifiedTeams = useMemo(() => {
     const tSet = new Set<string>();
@@ -7070,7 +7516,17 @@ export default function App() {
       const aTeam = statsTeams.find(t => t.id === g.awayTeamId);
       const hName = hTeam?.nickname || hTeam?.name || g.homeTeamId;
       const aName = aTeam?.nickname || aTeam?.name || g.awayTeamId;
-      return { ...g, displayName: g.tag ? `${hName} vs ${aName} (${g.tag})` : `${hName} vs ${aName}` };
+      
+      const s = statsSeasons.find(sea => sea.id === g.seasonId);
+      const tId = g.tournamentId || s?.tournamentId;
+      const tournament = tournaments.find(t => t.id === tId);
+      const tournamentName = tournament ? tournament.name : null;
+      let subTitle = '';
+      if (tournamentName && g.tag) subTitle = `${tournamentName} - ${g.tag}`;
+      else if (tournamentName) subTitle = tournamentName;
+      else if (g.tag) subTitle = g.tag;
+
+      return { ...g, displayName: `${hName} vs ${aName}`, subTitle };
     }).sort((a, b) => {
       if (a.date && b.date) {
         return new Date(b.date).getTime() - new Date(a.date).getTime();
@@ -7081,7 +7537,7 @@ export default function App() {
       const tB = b.createdAt?.seconds ? b.createdAt.seconds * 1000 : (b.createdAt instanceof Date ? b.createdAt.getTime() : 0);
       return tB - tA;
     });
-  }, [statsGames, statsSeasons, statsTeams, verifiedYearId, verifiedTeamId]);
+  }, [statsGames, statsSeasons, statsTeams, tournaments, verifiedYearId, verifiedTeamId]);
 
   const trackerActiveVideos = useMemo(() => {
     if (!trackerGameId && trackingFilteredGames.length === 0) return [];
@@ -7106,9 +7562,18 @@ export default function App() {
     hasAutoSeekedRef.current = false;
   }, [currentVideo?.id]);
 
-  // Auto-seek to first event
+  // Auto-seek to first event or pending seek time
   useEffect(() => {
-    if (!player || activeTrackingEvents.length === 0 || hasAutoSeekedRef.current) return;
+    if (!player) return;
+    if (pendingSeekTimeRef.current !== null) {
+      try {
+        player.seekTo(pendingSeekTimeRef.current, true);
+        pendingSeekTimeRef.current = null;
+        hasAutoSeekedRef.current = true;
+      } catch (e) {}
+      return;
+    }
+    if (activeTrackingEvents.length === 0 || hasAutoSeekedRef.current) return;
     
     let firstEventTime = Infinity;
     for (const event of activeTrackingEvents) {
@@ -7417,6 +7882,7 @@ export default function App() {
           />
         ) : view === 'create' ? (
           <CreateView
+            events={statsEventsRaw}
             teams={teams}
             seasons={seasons}
             players={allPlayers}
@@ -7589,6 +8055,15 @@ export default function App() {
             onGameSelect={handleGameProfileClick}
             jerseyNumbers={playerJerseyNumbers}
             statsFilter={statsFilter}
+            onSeekToGameVideo={(gameId, videoTime) => {
+              const game = statsGames.find(g => g.id === gameId);
+              const vid = videos.find(v => v.id === (game as any)?.videoId || v.gameId === gameId);
+              if (vid) {
+                pendingSeekTimeRef.current = videoTime;
+                setCurrentVideo(vid);
+                setView('tracker');
+              }
+            }}
           />
         ) : view === 'teamProfile' && activeTeamId ? (
           <TeamProfileView
@@ -7658,7 +8133,7 @@ export default function App() {
                         </div>
                         <div className="flex-1 min-w-0">
                           <p className="font-bold text-xs leading-snug text-gray-900">{g.displayName}</p>
-                          {g.tag && <p className="text-[9px] font-normal truncate mt-0.5 text-amber-700/60">{g.tag}</p>}
+                          {g.subTitle && <p className="text-[9px] font-normal truncate mt-0.5 text-amber-700/60">{g.subTitle}</p>}
                           <div className="flex items-center gap-2 mt-0.5 text-[10px] font-medium text-amber-600/80">
                             <span className="flex items-center gap-1">
                               <ShieldCheck className="w-2.5 h-2.5" /> Complete
@@ -7765,7 +8240,7 @@ export default function App() {
                         <div className="flex-1 min-w-0 flex items-center justify-between">
                           <div className="min-w-0 pr-4">
                             <p className={cn("font-bold text-sm leading-snug transition-colors", isVerified ? "text-gray-900" : "text-gray-800")}>{g.displayName}</p>
-                            {g.tag && <p className={cn("text-[10px] font-normal truncate mt-0.5", isVerified ? "text-amber-700/60" : "text-gray-500")}>{g.tag}</p>}
+                            {g.subTitle && <p className={cn("text-[10px] font-normal truncate mt-0.5", isVerified ? "text-amber-700/60" : "text-gray-500")}>{g.subTitle}</p>}
                             <div className="flex items-center gap-2 mt-0.5">
                               <p className={cn("text-[11px] flex items-center gap-1 font-medium", isVerified ? "text-amber-600/80" : "text-gray-500")}>
                                 <Clock className="w-3 h-3" />
@@ -8342,6 +8817,66 @@ export default function App() {
                   </div>
 
                   <div className={cn(isExpandedLayout ? "flex flex-col h-full relative" : "absolute inset-0", (rightPanelTab === 'record' || isExpandedLayout) ? "block" : "hidden", "overflow-y-auto custom-scrollbar p-4 bg-white")}>
+
+                    {/* Voice & NLP Event Logger (Hidden for production deploy) */}
+                    {/*
+                    <div className="bg-slate-900 text-white rounded-2xl p-4 mb-4 shadow-lg border border-slate-800 relative overflow-hidden transition-all duration-300 hover:shadow-emerald-950/20">
+                      <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/10 rounded-full blur-2xl pointer-events-none" />
+                      
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <span className="flex h-2 w-2 relative">
+                            {isListening ? (
+                              <>
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                                <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+                              </>
+                            ) : (
+                              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400 animate-pulse"></span>
+                            )}
+                          </span>
+                          <h4 className="text-[11px] font-bold uppercase tracking-widest text-slate-300">Voice & NLP Event Logger</h4>
+                        </div>
+                        <button
+                          onClick={toggleSpeechRecognition}
+                          className={cn(
+                            "flex items-center justify-center p-2 rounded-xl transition-all duration-300 active:scale-95",
+                            isListening 
+                              ? "bg-red-500 text-white shadow-md shadow-red-500/30 animate-pulse" 
+                              : "bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-600/20 hover:scale-105"
+                          )}
+                          title="Click to dictate an event"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" />
+                          </svg>
+                        </button>
+                      </div>
+
+                      <form onSubmit={(e) => { e.preventDefault(); if (voiceCommandText.trim()) { parseNlpCommand(voiceCommandText); setVoiceCommandText(''); } }} className="flex gap-2">
+                        <input
+                          type="text"
+                          value={voiceCommandText}
+                          onChange={(e) => setVoiceCommandText(e.target.value)}
+                          placeholder='Try: "goal home 10, assist 5" or "sub 12 in for 8"'
+                          className="flex-1 bg-slate-800/90 text-white border border-slate-700/80 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500/50 transition-all font-medium placeholder-slate-500"
+                        />
+                        <button
+                          type="submit"
+                          className="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700/80 px-3 py-2 rounded-xl text-xs font-semibold hover:text-white transition-all active:scale-95 shadow-sm"
+                        >
+                          Send
+                        </button>
+                      </form>
+
+                      {voiceStatusMessage && (
+                        <div className="mt-2.5 text-[10px] font-medium text-slate-400 bg-slate-800/40 rounded-lg py-1.5 px-2.5 border border-slate-800/50 flex items-center gap-1.5 animate-pulse">
+                          <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+                          <span>{voiceStatusMessage}</span>
+                        </div>
+                      )}
+                    </div>
+                    */}
 
                     {/* Event Type Grid ALWAYS visible because Player Actions are now local popups */}
                     <div className="flex flex-col gap-3 mb-2">
@@ -9141,6 +9676,115 @@ export default function App() {
           background: #404040;
         }
       `}</style>
+
+      {/* Global Command Palette (Cmd+K) */}
+      {isCommandPaletteOpen && (
+        <div className="fixed inset-0 z-[100] flex items-start justify-center pt-[15vh] px-4">
+          <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-sm transition-opacity" onClick={() => setIsCommandPaletteOpen(false)} />
+          
+          <div className="relative w-full max-w-lg bg-slate-900/95 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden backdrop-blur-md flex flex-col max-h-[50vh]">
+            {/* Search Input */}
+            <div className="flex items-center gap-3 px-4 py-3.5 border-b border-slate-800">
+              <svg className="w-5 h-5 text-slate-400 shrink-0" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.602 10.602z" />
+              </svg>
+              <input
+                type="text"
+                autoFocus
+                value={commandPaletteQuery}
+                onChange={(e) => {
+                  setCommandPaletteQuery(e.target.value);
+                  setCommandPaletteSelectedIndex(0);
+                }}
+                placeholder="Search players, teams, or matches..."
+                className="w-full bg-transparent text-white placeholder-slate-500 border-none outline-none focus:outline-none focus:ring-0 text-sm font-medium"
+              />
+              <span className="text-[10px] font-bold text-slate-500 bg-slate-800 px-2 py-1 rounded-lg select-none">
+                ESC
+              </span>
+            </div>
+
+            {/* Results */}
+            <div className="flex-1 overflow-y-auto custom-scrollbar p-2">
+              {commandPaletteResults.length > 0 ? (
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500 px-3 py-1.5 select-none">
+                    Search Results ({commandPaletteResults.length})
+                  </span>
+                  {commandPaletteResults.map((item, idx) => {
+                    const isSelected = idx === commandPaletteSelectedIndex;
+                    return (
+                      <button
+                        key={`${item.type}-${item.id}`}
+                        onClick={() => handleSelectCommandPaletteItem(item)}
+                        className={cn(
+                          "w-full flex items-center justify-between px-3 py-2.5 rounded-xl transition-all text-left",
+                          isSelected
+                            ? "bg-emerald-600/90 text-white font-medium shadow-md shadow-emerald-700/15 scale-[1.01]"
+                            : "text-slate-300 hover:bg-slate-800/70 hover:text-white"
+                        )}
+                      >
+                        <div className="flex flex-col min-w-0">
+                          <span className={cn("text-xs font-semibold truncate", isSelected ? "text-white" : "text-slate-200")}>
+                            {item.title}
+                          </span>
+                          <span className={cn("text-[10px] truncate", isSelected ? "text-emerald-100" : "text-slate-500")}>
+                            {item.subtitle}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0 ml-4">
+                          <span className={cn(
+                            "text-[8px] font-extrabold uppercase px-1.5 py-0.5 rounded-md tracking-wider border select-none",
+                            isSelected
+                              ? "bg-emerald-700/80 border-emerald-500 text-emerald-50"
+                              : "bg-slate-800/60 border-slate-700 text-slate-400"
+                          )}>
+                            {item.type}
+                          </span>
+                          {isSelected && (
+                            <svg className="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" strokeWidth="3" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+                            </svg>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="flex flex-col items-center justify-center py-8 px-4 text-center select-none">
+                  <div className="bg-slate-800/40 border border-slate-800 p-2.5 rounded-2xl mb-2.5 text-slate-500">
+                    <svg className="w-6 h-6" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.602 10.602z" />
+                    </svg>
+                  </div>
+                  <span className="text-xs font-semibold text-slate-400">
+                    {commandPaletteQuery.trim() ? "No matches found" : "Type to search..."}
+                  </span>
+                  <span className="text-[10px] text-slate-500 mt-1 max-w-[240px]">
+                    {commandPaletteQuery.trim() 
+                      ? "Check your spelling or search for something else"
+                      : "Quickly jump to any player profile, team roster, or game stats"}
+                  </span>
+                </div>
+              )}
+            </div>
+            
+            {/* Help Footer */}
+            <div className="px-4 py-2 bg-slate-950/60 border-t border-slate-800/80 flex items-center justify-between text-[9px] text-slate-500 select-none">
+              <div className="flex items-center gap-3">
+                <span className="flex items-center gap-1">
+                  <span className="bg-slate-800 px-1 py-0.5 rounded border border-slate-700">↑↓</span> Navigate
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="bg-slate-800 px-1 py-0.5 rounded border border-slate-700">Enter</span> Select
+                </span>
+              </div>
+              <span>Command Palette</span>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

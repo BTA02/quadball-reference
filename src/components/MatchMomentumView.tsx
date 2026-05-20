@@ -134,7 +134,7 @@ export default function MatchMomentumView({
     }
 
     // Determine control periods for background shading
-    const controlPeriods = computeControlPeriodsFromEvents(sorted);
+    const controlPeriods = computeControlPeriodsFromEvents(sorted as any);
 
     return { timeline, maxLeadHome, maxLeadAway, maxRunHome, maxRunAway, leadChanges, controlPeriods };
   }, [events, homeTeamId, awayTeamId]);
@@ -295,6 +295,7 @@ export default function MatchMomentumView({
                   </circle>
                 );
               })}
+
             </svg>
 
             {/* Current Scrub Position */}

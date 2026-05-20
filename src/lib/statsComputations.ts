@@ -305,10 +305,6 @@ export interface AdvancedPlayerStats {
   offPlusMinus: number;
   onOffDt: number;
   offPlusMinusRatio: number;
-  offPlus: number;
-  offMinus: number;
-  offPlusMinus: number;
-  onOffDt: number;
   relPlusMinusRatio: number;
   minutesPlayed: number;
   controlSeconds: number;
@@ -1034,6 +1030,7 @@ export interface ExtendedPlayerStats {
   gamesPlayed: number;
   // Core advanced
   minutesPlayed: number;
+  teamPossessions: number;
   plus: number;
   minus: number;
   plusMinus: number;
@@ -1351,6 +1348,7 @@ export function computeExtendedStats(
       nickname: a.nickname,
       gamesPlayed: a.gamesPlayed,
       minutesPlayed: a.minutesPlayed,
+      teamPossessions: teamPoss,
       plus: a.plus,
       minus: a.minus,
       plusMinus: a.plusMinus,
@@ -1766,7 +1764,7 @@ export interface BeaterStint {
  * placeholder beater IDs, or outgoing player already tracked in a slot).
  * The caller's `teamId` is used only to tag the returned stints.
  */
-function computeBeaterStints(
+export function computeBeaterStints(
   gameEvents: GameEvent[],
   teamId: string,
   gameId: string,
@@ -1946,10 +1944,6 @@ export interface BeaterSoloStats {
   offPlusMinus: number;
   onOffDt: number;
   offPlusMinusRatio: number;
-  offPlus: number;
-  offMinus: number;
-  offPlusMinus: number;
-  onOffDt: number;
   relPlusMinusRatio: number;
   controlMinutes: number;      // minutes their team had control while on field
   totalMinutes: number;        // total game-clock minutes on field
@@ -1957,6 +1951,7 @@ export interface BeaterSoloStats {
   rapm: number;
   epr: number;
   fEpr: number;
+  bcl: number;                 // Bludger Control Leverage rating
 }
 
 export function computeBeaterSoloStats(
@@ -1977,12 +1972,28 @@ export function computeBeaterSoloStats(
     teamPoss: number; oppPoss: number;
     shots: number; attempts: number; oppShotsOn: number; oppAttemptsOn: number;
     emptyTurnovers: number; oppEmptyTurnovers: number; turnovers: number;
+    goalsScoredWithControl: number;
+    goalsConcededWithControl: number;
+    goalsScoredWithoutControl: number;
+    goalsConcededWithoutControl: number;
     gameIds: Set<string>;
   }>();
 
   const getAcc = (pid: string) => {
     if (!accum.has(pid)) {
-      accum.set(pid, { plus: 0, minus: 0, teamGoalsTotal: 0, oppGoalsTotal: 0, controlSeconds: 0, totalSeconds: 0, teamPoss: 0, oppPoss: 0, shots: 0, attempts: 0, oppShotsOn: 0, oppAttemptsOn: 0, emptyTurnovers: 0, oppEmptyTurnovers: 0, turnovers: 0, gameIds: new Set() });
+      accum.set(pid, {
+        plus: 0, minus: 0,
+        teamGoalsTotal: 0, oppGoalsTotal: 0,
+        controlSeconds: 0, totalSeconds: 0,
+        teamPoss: 0, oppPoss: 0,
+        shots: 0, attempts: 0, oppShotsOn: 0, oppAttemptsOn: 0,
+        emptyTurnovers: 0, oppEmptyTurnovers: 0, turnovers: 0,
+        goalsScoredWithControl: 0,
+        goalsConcededWithControl: 0,
+        goalsScoredWithoutControl: 0,
+        goalsConcededWithoutControl: 0,
+        gameIds: new Set()
+      });
     }
     return accum.get(pid)!;
   };
@@ -2090,8 +2101,18 @@ export function computeBeaterSoloStats(
           const isTeamEv = stint.teamId === eventTeamId;
 
           if (isGoal) {
-            if (isTeamEv) acc.plus++;
-            else acc.minus++;
+            const hasControl = controlPeriods.some(cp =>
+              cp.teamId === stint.teamId && e.videoTime >= cp.startTime && e.videoTime <= cp.endTime
+            );
+            if (isTeamEv) {
+              acc.plus++;
+              if (hasControl) acc.goalsScoredWithControl++;
+              else acc.goalsScoredWithoutControl++;
+            } else {
+              acc.minus++;
+              if (hasControl) acc.goalsConcededWithControl++;
+              else acc.goalsConcededWithoutControl++;
+            }
           }
           if (isShot) {
             if (isTeamEv) acc.shots++;
@@ -2146,6 +2167,24 @@ export function computeBeaterSoloStats(
     }
   }
 
+  // Compute minutes-weighted league average net rating with control across all active solo beaters
+  let totalGoalsScoredWithCtrl = 0;
+  let totalGoalsConcededWithCtrl = 0;
+  let totalMinWithCtrl = 0;
+
+  for (const [pid, a] of accum) {
+    const minWithControl = a.controlSeconds / 60;
+    if (minWithControl > 0) {
+      totalGoalsScoredWithCtrl += a.goalsScoredWithControl;
+      totalGoalsConcededWithCtrl += a.goalsConcededWithControl;
+      totalMinWithCtrl += minWithControl;
+    }
+  }
+
+  const leagueAvgNetWithCtrl = totalMinWithCtrl > 0 
+    ? (totalGoalsScoredWithCtrl - totalGoalsConcededWithCtrl) / totalMinWithCtrl 
+    : 0;
+
   const results: BeaterSoloStats[] = [];
   for (const [pid, a] of accum) {
     const p = playerMap.get(pid);
@@ -2161,7 +2200,13 @@ export function computeBeaterSoloStats(
     const offPlusMinusRatio = offMinus > 0 ? Math.round((offPlus / offMinus) * 100) / 100 : (offPlus > 0 ? Infinity : 0);
     const relPlusMinusRatio = Math.round(((a.minus > 0 ? a.plus / a.minus : a.plus > 0 ? 5 : 0) - (offMinus > 0 ? offPlus / offMinus : offPlus > 0 ? 5 : 0)) * 100) / 100;
 
+    const timeWithControl = a.controlSeconds;
+    const minWithControl = timeWithControl / 60;
 
+    const netWithCtrl = minWithControl > 0 
+      ? (a.goalsScoredWithControl - a.goalsConcededWithControl) / minWithControl 
+      : 0;
+    const bcl = Math.round((netWithCtrl - leagueAvgNetWithCtrl) * 100) / 100;
 
     results.push({
       playerId: pid,
@@ -2173,9 +2218,7 @@ export function computeBeaterSoloStats(
       minus: a.minus,
       plusMinus: a.plus - a.minus,
       offPlus,
-
       offMinus,
-
       plusMinusRatio,
       offPlusMinusRatio,
       relPlusMinusRatio,
@@ -2187,6 +2230,7 @@ export function computeBeaterSoloStats(
       rapm: rapmScores.get(pid) || 0,
       epr: a.teamPoss > 0 ? Math.round((a.emptyTurnovers / a.teamPoss) * 1000) / 10 : 0,
       fEpr: a.oppPoss > 0 ? Math.round((a.oppEmptyTurnovers / a.oppPoss) * 1000) / 10 : 0,
+      bcl,
     });
   }
 
@@ -2212,10 +2256,6 @@ export interface BeaterPairStats {
   offPlusMinus: number;
   onOffDt: number;
   offPlusMinusRatio: number;
-  offPlus: number;
-  offMinus: number;
-  offPlusMinus: number;
-  onOffDt: number;
   relPlusMinusRatio: number;
   controlMinutes: number;
   totalMinutes: number;
@@ -2223,6 +2263,7 @@ export interface BeaterPairStats {
   rapm: number;
   epr: number;
   fEpr: number;
+  bcl: number;              // Bludger Control Leverage rating
 }
 
 /**
@@ -2280,6 +2321,10 @@ export function computeBeaterPairStats(
     teamPoss: number; oppPoss: number;
     shots: number; attempts: number; oppShotsOn: number; oppAttemptsOn: number;
     emptyTurnovers: number; oppEmptyTurnovers: number; turnovers: number;
+    goalsScoredWithControl: number;
+    goalsConcededWithControl: number;
+    goalsScoredWithoutControl: number;
+    goalsConcededWithoutControl: number;
     gameIds: Set<string>;
   }>();
 
@@ -2294,6 +2339,7 @@ export function computeBeaterPairStats(
         teamGoalsTotal: 0, oppGoalsTotal: 0,
         controlSeconds: 0, totalSeconds: 0,
         teamPoss: 0, oppPoss: 0, shots: 0, attempts: 0, oppShotsOn: 0, oppAttemptsOn: 0, emptyTurnovers: 0, oppEmptyTurnovers: 0, turnovers: 0,
+        goalsScoredWithControl: 0, goalsConcededWithControl: 0, goalsScoredWithoutControl: 0, goalsConcededWithoutControl: 0,
         gameIds: new Set(),
       });
     }
@@ -2405,8 +2451,18 @@ export function computeBeaterPairStats(
           const isTeamEv = overlap.teamId === eventTeamId;
 
           if (isGoal) {
-            if (isTeamEv) { acc.plus++; }
-            else { acc.minus++; }
+            const hasControl = controlPeriods.some(cp =>
+              cp.teamId === overlap.teamId && e.videoTime >= cp.startTime && e.videoTime <= cp.endTime
+            );
+            if (isTeamEv) {
+              acc.plus++;
+              if (hasControl) acc.goalsScoredWithControl++;
+              else acc.goalsScoredWithoutControl++;
+            } else {
+              acc.minus++;
+              if (hasControl) acc.goalsConcededWithControl++;
+              else acc.goalsConcededWithoutControl++;
+            }
           }
           if (isShot) {
             if (isTeamEv) acc.shots++;
@@ -2467,6 +2523,24 @@ export function computeBeaterPairStats(
     }
   }
 
+  // Compute minutes-weighted cohort average net rating with control across all active beater pairs
+  let totalGoalsScoredWithCtrl = 0;
+  let totalGoalsConcededWithCtrl = 0;
+  let totalMinWithCtrl = 0;
+
+  for (const [key, a] of accum) {
+    const minWithControl = a.controlSeconds / 60;
+    if (minWithControl > 0) {
+      totalGoalsScoredWithCtrl += a.goalsScoredWithControl;
+      totalGoalsConcededWithCtrl += a.goalsConcededWithControl;
+      totalMinWithCtrl += minWithControl;
+    }
+  }
+
+  const cohortAvgNetWithCtrl = totalMinWithCtrl > 0 
+    ? (totalGoalsScoredWithCtrl - totalGoalsConcededWithCtrl) / totalMinWithCtrl 
+    : 0;
+
   const results: BeaterPairStats[] = [];
   for (const [key, a] of accum) {
     const p1 = playerMap.get(a.player1Id);
@@ -2483,7 +2557,13 @@ export function computeBeaterPairStats(
     const offPlusMinusRatio = offMinus > 0 ? Math.round((offPlus / offMinus) * 100) / 100 : (offPlus > 0 ? Infinity : 0);
     const relPlusMinusRatio = Math.round(((a.minus > 0 ? a.plus / a.minus : a.plus > 0 ? 5 : 0) - (offMinus > 0 ? offPlus / offMinus : offPlus > 0 ? 5 : 0)) * 100) / 100;
 
+    const timeWithControl = a.controlSeconds;
+    const minWithControl = timeWithControl / 60;
 
+    const netWithCtrl = minWithControl > 0 
+      ? (a.goalsScoredWithControl - a.goalsConcededWithControl) / minWithControl 
+      : 0;
+    const bcl = Math.round((netWithCtrl - cohortAvgNetWithCtrl) * 100) / 100;
 
     results.push({
       pairKey: key,
@@ -2497,9 +2577,7 @@ export function computeBeaterPairStats(
       minus: a.minus,
       plusMinus: a.plus - a.minus,
       offPlus,
-
       offMinus,
-
       plusMinusRatio,
       offPlusMinusRatio,
       relPlusMinusRatio,
@@ -2511,6 +2589,7 @@ export function computeBeaterPairStats(
       rapm: Math.round(((rapmScores.get(a.player1Id) || 0) + (rapmScores.get(a.player2Id) || 0)) * 10) / 10,
       epr: a.teamPoss > 0 ? Math.round((a.emptyTurnovers / a.teamPoss) * 1000) / 10 : 0,
       fEpr: a.oppPoss > 0 ? Math.round((a.oppEmptyTurnovers / a.oppPoss) * 1000) / 10 : 0,
+      bcl,
     });
   }
 

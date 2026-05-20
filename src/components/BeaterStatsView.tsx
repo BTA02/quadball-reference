@@ -182,6 +182,7 @@ export default function BeaterStatsView({
                   <SortHeader label="RAPM" sortKey="rapm" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Regularized Adjusted Plus-Minus" />
                   <SortHeader label="EPR" sortKey="epr" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Empty Possession Rate (while on field)" />
                   <SortHeader label="fEPR" sortKey="fEpr" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Forced Empty Possession Rate (while on field)" />
+                  <SortHeader label="BCL" sortKey="bcl" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Bludger Control Leverage (Net Rating with Control minus League Average Net Rating with Control)" />
                 </>)}
               </tr>
             </thead>
@@ -227,6 +228,7 @@ export default function BeaterStatsView({
                       <Cell value={row.rapm} bold highlight={row.rapm > 0 ? 'pos' : row.rapm < 0 ? 'neg' : undefined} />
                       <Cell value={`${row.epr}%`} highlight={row.epr < 40 ? 'pos' : row.epr > 55 ? 'neg' : undefined} />
                       <Cell value={`${row.fEpr}%`} highlight={row.fEpr > 55 ? 'pos' : undefined} />
+                      <Cell value={row.bcl > 0 ? `+${row.bcl}` : row.bcl || '0'} bold highlight={row.bcl > 0 ? 'pos' : row.bcl < 0 ? 'neg' : undefined} />
                     </>)}
                   </tr>
                 );
