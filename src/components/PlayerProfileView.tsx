@@ -1453,6 +1453,7 @@ export default function PlayerProfileView({
                       <QuadHeaderCell label="DRTG" sortKey="dRtg" />
                       <QuadHeaderCell label="NET" sortKey="netRtg" />
                       <QuadHeaderCell label="RAPM" sortKey="rapm" />
+                      <QuadHeaderCell label="CVA" sortKey="cva" tooltip="Chaser Value Added (GA/20)" />
                       <QuadHeaderCell label="GmSc" sortKey="gameScore" />
                     </>) : (<>
                       <QuadHeaderCell label="MIN" sortKey="minutesPlayed" />
@@ -1463,7 +1464,6 @@ export default function PlayerProfileView({
                       <QuadHeaderCell label="OFF +/−" sortKey="offPlusMinus" />
                       <QuadHeaderCell label="ON/OFF" sortKey="onOffDt" />
                       <QuadHeaderCell label="REL RATIO" sortKey="relPlusMinusRatio" />
-                      <QuadHeaderCell label="CVA" sortKey="cva" tooltip="Chaser Value Added (GA/20)" />
                       <QuadHeaderCell label="EPR" sortKey="epr" />
                       <QuadHeaderCell label="fEPR" sortKey="fEpr" />
                     </>)}
@@ -1503,6 +1503,7 @@ export default function PlayerProfileView({
                       <QuadCell sortKey="dRtg" value={quadStats.dRtg} />
                       <QuadCell sortKey="netRtg" value={quadStats.netRtg} bold highlight={quadStats.netRtg > 0 ? 'pos' : quadStats.netRtg < 0 ? 'neg' : undefined} />
                       <QuadCell sortKey="rapm" value={quadStats.rapm} bold highlight={quadStats.rapm > 0 ? 'pos' : quadStats.rapm < 0 ? 'neg' : undefined} />
+                      <QuadCell sortKey="cva" value={quadStats.cva > 0 ? `+${quadStats.cva}` : quadStats.cva || '0'} bold highlight={quadStats.cva > 0 ? 'pos' : quadStats.cva < 0 ? 'neg' : undefined} />
                       <QuadCell sortKey="gameScore" value={quadStats.gameScore} />
                     </>) : (<>
                       <QuadCell sortKey="minutesPlayed" value={quadStats.minutesPlayed} />
@@ -1513,7 +1514,6 @@ export default function PlayerProfileView({
                       <QuadCell sortKey="offPlusMinus" value={quadStats.offPlusMinus} />
                       <QuadCell sortKey="onOffDt" value={quadStats.onOffDt} />
                       <QuadCell sortKey="relPlusMinusRatio" value={quadStats.relPlusMinusRatio} />
-                      <QuadCell sortKey="cva" value={quadStats.cva > 0 ? `+${quadStats.cva}` : quadStats.cva || '0'} bold highlight={quadStats.cva > 0 ? 'pos' : quadStats.cva < 0 ? 'neg' : undefined} />
                       <QuadCell sortKey="epr" value={quadStats.epr} />
                       <QuadCell sortKey="fEpr" value={quadStats.fEpr} />
                     </>)}

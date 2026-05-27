@@ -618,6 +618,12 @@ export function computeAdvancedStats(
     goalsConcededWithControl: number;
     goalsScoredWithoutControl: number;
     goalsConcededWithoutControl: number;
+    verifiedMinutesPlayed: number;
+    verifiedControlSeconds: number;
+    verifiedGoalsScoredWithControl: number;
+    verifiedGoalsConcededWithControl: number;
+    verifiedGoalsScoredWithoutControl: number;
+    verifiedGoalsConcededWithoutControl: number;
     gameIds: Set<string>;
   }>();
 
@@ -651,6 +657,12 @@ export function computeAdvancedStats(
         goalsConcededWithControl: 0,
         goalsScoredWithoutControl: 0,
         goalsConcededWithoutControl: 0,
+        verifiedMinutesPlayed: 0,
+        verifiedControlSeconds: 0,
+        verifiedGoalsScoredWithControl: 0,
+        verifiedGoalsConcededWithControl: 0,
+        verifiedGoalsScoredWithoutControl: 0,
+        verifiedGoalsConcededWithoutControl: 0,
         gameIds: new Set(),
       });
     }
@@ -727,6 +739,8 @@ export function computeAdvancedStats(
       };
     };
 
+    const isGameVerified = !!game.isVerified;
+
     if (processHome) {
       homeStints = computePlayerStints(sorted, resolvedHomeId, homePlayerIds, gameEndTime).filter(s => s.position !== 'beater' && s.position !== 'seeker');
       for (const stint of homeStints) {
@@ -735,6 +749,10 @@ export function computeAdvancedStats(
         const activeData = calculateActiveStats(stint, resolvedHomeId);
         accum.minutesPlayed += activeData.activeMinutes;
         accum.controlSeconds += activeData.controlSeconds;
+        if (isGameVerified) {
+          accum.verifiedMinutesPlayed += activeData.activeMinutes;
+          accum.verifiedControlSeconds += activeData.controlSeconds;
+        }
       }
     }
     if (processAway) {
@@ -745,6 +763,10 @@ export function computeAdvancedStats(
         const activeData = calculateActiveStats(stint, resolvedAwayId);
         accum.minutesPlayed += activeData.activeMinutes;
         accum.controlSeconds += activeData.controlSeconds;
+        if (isGameVerified) {
+          accum.verifiedMinutesPlayed += activeData.activeMinutes;
+          accum.verifiedControlSeconds += activeData.controlSeconds;
+        }
       }
     }
 
@@ -803,6 +825,8 @@ export function computeAdvancedStats(
       const activeHome = processHome && homeActive ? getActivePlayersAtTime(homeStints, e.videoTime, filters.position) : new Set<string>();
       const activeAway = processAway && awayActive ? getActivePlayersAtTime(awayStints, e.videoTime, filters.position) : new Set<string>();
 
+      const isGameVerified = !!game.isVerified;
+
       for (const pid of activeHome) {
         const accum = getAccum(pid);
         if (isGoal) {
@@ -812,14 +836,26 @@ export function computeAdvancedStats(
           if (eventTeamId === resolvedHomeId) { 
             accum.plus++; 
             accum.plusMinus++; 
-            if (hasControl) accum.goalsScoredWithControl++;
-            else accum.goalsScoredWithoutControl++;
+            if (hasControl) {
+              accum.goalsScoredWithControl++;
+              if (isGameVerified) accum.verifiedGoalsScoredWithControl++;
+            }
+            else {
+              accum.goalsScoredWithoutControl++;
+              if (isGameVerified) accum.verifiedGoalsScoredWithoutControl++;
+            }
           }
           else if (eventTeamId === resolvedAwayId) { 
             accum.minus++; 
             accum.plusMinus--; 
-            if (hasControl) accum.goalsConcededWithControl++;
-            else accum.goalsConcededWithoutControl++;
+            if (hasControl) {
+              accum.goalsConcededWithControl++;
+              if (isGameVerified) accum.verifiedGoalsConcededWithControl++;
+            }
+            else {
+              accum.goalsConcededWithoutControl++;
+              if (isGameVerified) accum.verifiedGoalsConcededWithoutControl++;
+            }
           }
         }
         if (isShot) {
@@ -861,14 +897,26 @@ export function computeAdvancedStats(
           if (eventTeamId === resolvedAwayId) { 
             accum.plus++; 
             accum.plusMinus++; 
-            if (hasControl) accum.goalsScoredWithControl++;
-            else accum.goalsScoredWithoutControl++;
+            if (hasControl) {
+              accum.goalsScoredWithControl++;
+              if (isGameVerified) accum.verifiedGoalsScoredWithControl++;
+            }
+            else {
+              accum.goalsScoredWithoutControl++;
+              if (isGameVerified) accum.verifiedGoalsScoredWithoutControl++;
+            }
           }
           else if (eventTeamId === resolvedHomeId) { 
             accum.minus++; 
             accum.plusMinus--; 
-            if (hasControl) accum.goalsConcededWithControl++;
-            else accum.goalsConcededWithoutControl++;
+            if (hasControl) {
+              accum.goalsConcededWithControl++;
+              if (isGameVerified) accum.verifiedGoalsConcededWithControl++;
+            }
+            else {
+              accum.goalsConcededWithoutControl++;
+              if (isGameVerified) accum.verifiedGoalsConcededWithoutControl++;
+            }
           }
         }
         if (isShot) {
@@ -977,7 +1025,7 @@ export function computeAdvancedStats(
     }
   }
 
-  // Compute league averages for Chaser/Keeper control-adjusted baselines
+  // Compute league averages for Chaser/Keeper control-adjusted baselines on verified games ONLY
   let totalChaserGoalsScoredWithCtrl = 0;
   let totalChaserGoalsConcededWithCtrl = 0;
   let totalChaserMinWithCtrl = 0;
@@ -986,18 +1034,18 @@ export function computeAdvancedStats(
   let totalChaserMinWithoutCtrl = 0;
 
   for (const [pid, accum] of statsAccum) {
-    const minWithCtrl = accum.controlSeconds / 60;
-    const totalMin = accum.minutesPlayed;
+    const minWithCtrl = accum.verifiedControlSeconds / 60;
+    const totalMin = accum.verifiedMinutesPlayed;
     const minWithoutCtrl = totalMin - minWithCtrl;
 
     if (minWithCtrl > 0) {
-      totalChaserGoalsScoredWithCtrl += accum.goalsScoredWithControl;
-      totalChaserGoalsConcededWithCtrl += accum.goalsConcededWithControl;
+      totalChaserGoalsScoredWithCtrl += accum.verifiedGoalsScoredWithControl;
+      totalChaserGoalsConcededWithCtrl += accum.verifiedGoalsConcededWithControl;
       totalChaserMinWithCtrl += minWithCtrl;
     }
     if (minWithoutCtrl > 0) {
-      totalChaserGoalsScoredWithoutCtrl += accum.goalsScoredWithoutControl;
-      totalChaserGoalsConcededWithoutCtrl += accum.goalsConcededWithoutControl;
+      totalChaserGoalsScoredWithoutCtrl += accum.verifiedGoalsScoredWithoutControl;
+      totalChaserGoalsConcededWithoutCtrl += accum.verifiedGoalsConcededWithoutControl;
       totalChaserMinWithoutCtrl += minWithoutCtrl;
     }
   }
@@ -1069,12 +1117,13 @@ export function computeAdvancedStats(
         ? Math.round((accum.controlSeconds / (minutes * 60)) * 1000) / 10
         : 0,
       cva: (() => {
-        const minWithCtrl = accum.controlSeconds / 60;
-        const minWithoutCtrl = minutes - minWithCtrl;
-        const netWithCtrl = minWithCtrl > 0 ? (accum.goalsScoredWithControl - accum.goalsConcededWithControl) / minWithCtrl : 0;
-        const netWithoutCtrl = minWithoutCtrl > 0 ? (accum.goalsScoredWithoutControl - accum.goalsConcededWithoutControl) / minWithoutCtrl : 0;
-        const ctrlPctFraction = minutes > 0 ? minWithCtrl / minutes : 0;
-        const cva = minutes > 0 ? (ctrlPctFraction * (netWithCtrl - leagueChaserAvgWithCtrl) + (1 - ctrlPctFraction) * (netWithoutCtrl - leagueChaserAvgWithoutCtrl)) * 20 : 0;
+        const minWithCtrl = accum.verifiedControlSeconds / 60;
+        const totalMin = accum.verifiedMinutesPlayed;
+        const minWithoutCtrl = totalMin - minWithCtrl;
+        const netWithCtrl = minWithCtrl > 0 ? (accum.verifiedGoalsScoredWithControl - accum.verifiedGoalsConcededWithControl) / minWithCtrl : 0;
+        const netWithoutCtrl = minWithoutCtrl > 0 ? (accum.verifiedGoalsScoredWithoutControl - accum.verifiedGoalsConcededWithoutControl) / minWithoutCtrl : 0;
+        const ctrlPctFraction = totalMin > 0 ? minWithCtrl / totalMin : 0;
+        const cva = totalMin > 0 ? (ctrlPctFraction * (netWithCtrl - leagueChaserAvgWithCtrl) + (1 - ctrlPctFraction) * (netWithoutCtrl - leagueChaserAvgWithoutCtrl)) * 20 : 0;
         return Math.round(cva * 100) / 100;
       })(),
       goals: accum.goals,
@@ -2054,6 +2103,12 @@ export function computeBeaterSoloStats(
     goalsConcededWithControl: number;
     goalsScoredWithoutControl: number;
     goalsConcededWithoutControl: number;
+    verifiedControlSeconds: number;
+    verifiedTotalSeconds: number;
+    verifiedGoalsScoredWithControl: number;
+    verifiedGoalsConcededWithControl: number;
+    verifiedGoalsScoredWithoutControl: number;
+    verifiedGoalsConcededWithoutControl: number;
     gameIds: Set<string>;
   }>();
 
@@ -2070,6 +2125,12 @@ export function computeBeaterSoloStats(
         goalsConcededWithControl: 0,
         goalsScoredWithoutControl: 0,
         goalsConcededWithoutControl: 0,
+        verifiedControlSeconds: 0,
+        verifiedTotalSeconds: 0,
+        verifiedGoalsScoredWithControl: 0,
+        verifiedGoalsConcededWithControl: 0,
+        verifiedGoalsScoredWithoutControl: 0,
+        verifiedGoalsConcededWithoutControl: 0,
         gameIds: new Set()
       });
     }
@@ -2100,18 +2161,30 @@ export function computeBeaterSoloStats(
     const flagReleaseEvent = sorted.find(ev => ev.type === 'flag_released');
     const flagReleaseTime = flagReleaseEvent?.videoTime ?? Infinity;
 
+    const isGameVerified = !!game.isVerified;
+
     for (const stint of beaterStints) {
       if (teamIdSet && !teamIdSet.has(stint.teamId)) continue;
       const acc = getAcc(stint.playerId);
       acc.gameIds.add(gameId);
 
       if (!filters.flagFilter && !filters.controlFilter) {
-        acc.controlSeconds += getControlSecondsInWindow(controlPeriods, stint.teamId, stint.startTime, stint.endTime, clockIntervals);
-        acc.totalSeconds += getGameSecondsInWindow(clockIntervals, stint.startTime, stint.endTime);
+        const ctrlSec = getControlSecondsInWindow(controlPeriods, stint.teamId, stint.startTime, stint.endTime, clockIntervals);
+        const totSec = getGameSecondsInWindow(clockIntervals, stint.startTime, stint.endTime);
+        acc.controlSeconds += ctrlSec;
+        acc.totalSeconds += totSec;
+        if (isGameVerified) {
+          acc.verifiedControlSeconds += ctrlSec;
+          acc.verifiedTotalSeconds += totSec;
+        }
       } else {
         const { activeSeconds, activeControlSeconds } = getFilteredSecondsInWindow(stint.teamId, stint.startTime, stint.endTime, clockIntervals, controlPeriods, flagReleaseTime, filters);
         acc.totalSeconds += activeSeconds;
         acc.controlSeconds += activeControlSeconds;
+        if (isGameVerified) {
+          acc.verifiedTotalSeconds += activeSeconds;
+          acc.verifiedControlSeconds += activeControlSeconds;
+        }
       }
     }
 
@@ -2170,6 +2243,8 @@ export function computeBeaterSoloStats(
         else if (eventTeamId === resolvedAwayId && isStateActiveForTeam(resolvedAwayId, e.videoTime, controlPeriods, flagReleaseTime, filters)) awayGoalsThisGame++;
       }
 
+      const isGameVerified = !!game.isVerified;
+
       for (const stint of beaterStints) {
         if (teamIdSet && !teamIdSet.has(stint.teamId)) continue;
         if (e.videoTime >= stint.startTime && e.videoTime <= stint.endTime) {
@@ -2184,12 +2259,24 @@ export function computeBeaterSoloStats(
             );
             if (isTeamEv) {
               acc.plus++;
-              if (hasControl) acc.goalsScoredWithControl++;
-              else acc.goalsScoredWithoutControl++;
+              if (hasControl) {
+                acc.goalsScoredWithControl++;
+                if (isGameVerified) acc.verifiedGoalsScoredWithControl++;
+              }
+              else {
+                acc.goalsScoredWithoutControl++;
+                if (isGameVerified) acc.verifiedGoalsScoredWithoutControl++;
+              }
             } else {
               acc.minus++;
-              if (hasControl) acc.goalsConcededWithControl++;
-              else acc.goalsConcededWithoutControl++;
+              if (hasControl) {
+                acc.goalsConcededWithControl++;
+                if (isGameVerified) acc.verifiedGoalsConcededWithControl++;
+              }
+              else {
+                acc.goalsConcededWithoutControl++;
+                if (isGameVerified) acc.verifiedGoalsConcededWithoutControl++;
+              }
             }
           }
           if (isShot) {
@@ -2245,7 +2332,7 @@ export function computeBeaterSoloStats(
     }
   }
 
-  // Compute minutes-weighted league average net rating with and without control across all active solo beaters
+  // Compute minutes-weighted league average net rating with and without control across all active solo beaters on verified games ONLY
   let totalGoalsScoredWithCtrl = 0;
   let totalGoalsConcededWithCtrl = 0;
   let totalMinWithCtrl = 0;
@@ -2254,18 +2341,18 @@ export function computeBeaterSoloStats(
   let totalMinWithoutCtrl = 0;
 
   for (const [pid, a] of accum) {
-    const minWithControl = a.controlSeconds / 60;
-    const totalMin = a.totalSeconds / 60;
+    const minWithControl = a.verifiedControlSeconds / 60;
+    const totalMin = a.verifiedTotalSeconds / 60;
     const minWithoutControl = totalMin - minWithControl;
 
     if (minWithControl > 0) {
-      totalGoalsScoredWithCtrl += a.goalsScoredWithControl;
-      totalGoalsConcededWithCtrl += a.goalsConcededWithControl;
+      totalGoalsScoredWithCtrl += a.verifiedGoalsScoredWithControl;
+      totalGoalsConcededWithCtrl += a.verifiedGoalsConcededWithControl;
       totalMinWithCtrl += minWithControl;
     }
     if (minWithoutControl > 0) {
-      totalGoalsScoredWithoutCtrl += a.goalsScoredWithoutControl;
-      totalGoalsConcededWithoutCtrl += a.goalsConcededWithoutControl;
+      totalGoalsScoredWithoutCtrl += a.verifiedGoalsScoredWithoutControl;
+      totalGoalsConcededWithoutCtrl += a.verifiedGoalsConcededWithoutControl;
       totalMinWithoutCtrl += minWithoutControl;
     }
   }
@@ -2307,10 +2394,17 @@ export function computeBeaterSoloStats(
 
     const bcl = Math.round((netWithCtrl - leagueAvgNetWithCtrl) * 100) / 100;
 
-    const ctrlPctFraction = totalMin > 0 ? minWithControl / totalMin : 0;
-    const bva = totalMin > 0
-      ? (ctrlPctFraction * (netWithCtrl - leagueAvgNetWithCtrl) + 
-         (1 - ctrlPctFraction) * (netWithoutCtrl - leagueAvgNetWithoutCtrl)) * 20
+    const verifiedMinWithCtrl = a.verifiedControlSeconds / 60;
+    const verifiedTotalMin = a.verifiedTotalSeconds / 60;
+    const verifiedMinWithoutCtrl = verifiedTotalMin - verifiedMinWithCtrl;
+
+    const vNetWithCtrl = verifiedMinWithCtrl > 0 ? (a.verifiedGoalsScoredWithControl - a.verifiedGoalsConcededWithControl) / verifiedMinWithCtrl : 0;
+    const vNetWithoutCtrl = verifiedMinWithoutCtrl > 0 ? (a.verifiedGoalsScoredWithoutControl - a.verifiedGoalsConcededWithoutControl) / verifiedMinWithoutCtrl : 0;
+
+    const ctrlPctFraction = verifiedTotalMin > 0 ? verifiedMinWithCtrl / verifiedTotalMin : 0;
+    const bva = verifiedTotalMin > 0
+      ? (ctrlPctFraction * (vNetWithCtrl - leagueAvgNetWithCtrl) + 
+         (1 - ctrlPctFraction) * (vNetWithoutCtrl - leagueAvgNetWithoutCtrl)) * 20
       : 0;
 
     results.push({
@@ -2432,6 +2526,12 @@ export function computeBeaterPairStats(
     goalsConcededWithControl: number;
     goalsScoredWithoutControl: number;
     goalsConcededWithoutControl: number;
+    verifiedControlSeconds: number;
+    verifiedTotalSeconds: number;
+    verifiedGoalsScoredWithControl: number;
+    verifiedGoalsConcededWithControl: number;
+    verifiedGoalsScoredWithoutControl: number;
+    verifiedGoalsConcededWithoutControl: number;
     gameIds: Set<string>;
   }>();
 
@@ -2447,6 +2547,7 @@ export function computeBeaterPairStats(
         controlSeconds: 0, totalSeconds: 0,
         teamPoss: 0, oppPoss: 0, shots: 0, attempts: 0, oppShotsOn: 0, oppAttemptsOn: 0, emptyTurnovers: 0, oppEmptyTurnovers: 0, turnovers: 0,
         goalsScoredWithControl: 0, goalsConcededWithControl: 0, goalsScoredWithoutControl: 0, goalsConcededWithoutControl: 0,
+        verifiedControlSeconds: 0, verifiedTotalSeconds: 0, verifiedGoalsScoredWithControl: 0, verifiedGoalsConcededWithControl: 0, verifiedGoalsScoredWithoutControl: 0, verifiedGoalsConcededWithoutControl: 0,
         gameIds: new Set(),
       });
     }
@@ -2478,18 +2579,30 @@ export function computeBeaterPairStats(
 
     const pairOverlaps = computePairOverlaps(beaterStints);
 
+    const isGameVerified = !!game.isVerified;
+
     for (const overlap of pairOverlaps) {
       if (teamIdSet && !teamIdSet.has(overlap.teamId)) continue;
       const acc = getPairAcc(overlap.player1, overlap.player2, overlap.teamId);
       acc.gameIds.add(gameId);
 
       if (!filters.flagFilter && !filters.controlFilter) {
-        acc.controlSeconds += getControlSecondsInWindow(controlPeriods, overlap.teamId, overlap.start, overlap.end, clockIntervals);
-        acc.totalSeconds += getGameSecondsInWindow(clockIntervals, overlap.start, overlap.end);
+        const ctrlSec = getControlSecondsInWindow(controlPeriods, overlap.teamId, overlap.start, overlap.end, clockIntervals);
+        const totSec = getGameSecondsInWindow(clockIntervals, overlap.start, overlap.end);
+        acc.controlSeconds += ctrlSec;
+        acc.totalSeconds += totSec;
+        if (isGameVerified) {
+          acc.verifiedControlSeconds += ctrlSec;
+          acc.verifiedTotalSeconds += totSec;
+        }
       } else {
         const { activeSeconds, activeControlSeconds } = getFilteredSecondsInWindow(overlap.teamId, overlap.start, overlap.end, clockIntervals, controlPeriods, flagReleaseTime, filters);
         acc.totalSeconds += activeSeconds;
         acc.controlSeconds += activeControlSeconds;
+        if (isGameVerified) {
+          acc.verifiedTotalSeconds += activeSeconds;
+          acc.verifiedControlSeconds += activeControlSeconds;
+        }
       }
     }
 
@@ -2557,18 +2670,31 @@ export function computeBeaterPairStats(
           const acc = getPairAcc(overlap.player1, overlap.player2, overlapTeamRaw);
           const isTeamEv = overlap.teamId === eventTeamId;
 
+          const isGameVerified = !!game.isVerified;
           if (isGoal) {
             const hasControl = controlPeriods.some(cp =>
               cp.teamId === overlap.teamId && e.videoTime >= cp.startTime && e.videoTime <= cp.endTime
             );
             if (isTeamEv) {
               acc.plus++;
-              if (hasControl) acc.goalsScoredWithControl++;
-              else acc.goalsScoredWithoutControl++;
+              if (hasControl) {
+                acc.goalsScoredWithControl++;
+                if (isGameVerified) acc.verifiedGoalsScoredWithControl++;
+              }
+              else {
+                acc.goalsScoredWithoutControl++;
+                if (isGameVerified) acc.verifiedGoalsScoredWithoutControl++;
+              }
             } else {
               acc.minus++;
-              if (hasControl) acc.goalsConcededWithControl++;
-              else acc.goalsConcededWithoutControl++;
+              if (hasControl) {
+                acc.goalsConcededWithControl++;
+                if (isGameVerified) acc.verifiedGoalsConcededWithControl++;
+              }
+              else {
+                acc.goalsConcededWithoutControl++;
+                if (isGameVerified) acc.verifiedGoalsConcededWithoutControl++;
+              }
             }
           }
           if (isShot) {
@@ -2630,7 +2756,7 @@ export function computeBeaterPairStats(
     }
   }
 
-  // Compute minutes-weighted cohort average net rating with and without control across all active beater pairs
+  // Compute minutes-weighted league average net rating with and without control across all active beater pairs on verified games ONLY
   let totalGoalsScoredWithCtrl = 0;
   let totalGoalsConcededWithCtrl = 0;
   let totalMinWithCtrl = 0;
@@ -2639,13 +2765,13 @@ export function computeBeaterPairStats(
   let totalMinWithoutCtrl = 0;
 
   for (const [key, a] of accum) {
-    const minWithControl = a.controlSeconds / 60;
-    const totalMin = a.totalSeconds / 60;
+    const minWithControl = a.verifiedControlSeconds / 60;
+    const totalMin = a.verifiedTotalSeconds / 60;
     const minWithoutControl = totalMin - minWithControl;
 
     if (minWithControl > 0) {
-      totalGoalsScoredWithCtrl += a.goalsScoredWithControl;
-      totalGoalsConcededWithCtrl += a.goalsConcededWithControl;
+      totalGoalsScoredWithCtrl += a.verifiedGoalsScoredWithControl;
+      totalGoalsConcededWithCtrl += a.verifiedGoalsConcededWithControl;
       totalMinWithCtrl += minWithControl;
     }
     if (minWithoutControl > 0) {
@@ -2693,10 +2819,17 @@ export function computeBeaterPairStats(
 
     const bcl = Math.round((netWithCtrl - cohortAvgNetWithCtrl) * 100) / 100;
 
-    const ctrlPctFraction = totalMin > 0 ? minWithControl / totalMin : 0;
-    const bva = totalMin > 0
-      ? (ctrlPctFraction * (netWithCtrl - cohortAvgNetWithCtrl) + 
-         (1 - ctrlPctFraction) * (netWithoutCtrl - cohortAvgNetWithoutCtrl)) * 20
+    const verifiedMinWithCtrl = a.verifiedControlSeconds / 60;
+    const verifiedTotalMin = a.verifiedTotalSeconds / 60;
+    const verifiedMinWithoutCtrl = verifiedTotalMin - verifiedMinWithCtrl;
+
+    const vNetWithCtrl = verifiedMinWithCtrl > 0 ? (a.verifiedGoalsScoredWithControl - a.verifiedGoalsConcededWithControl) / verifiedMinWithCtrl : 0;
+    const vNetWithoutCtrl = verifiedMinWithoutCtrl > 0 ? (a.verifiedGoalsScoredWithoutControl - a.verifiedGoalsConcededWithoutControl) / verifiedMinWithoutCtrl : 0;
+
+    const ctrlPctFraction = verifiedTotalMin > 0 ? verifiedMinWithCtrl / verifiedTotalMin : 0;
+    const bva = verifiedTotalMin > 0
+      ? (ctrlPctFraction * (vNetWithCtrl - cohortAvgNetWithCtrl) + 
+         (1 - ctrlPctFraction) * (vNetWithoutCtrl - cohortAvgNetWithoutCtrl)) * 20
       : 0;
 
     results.push({
