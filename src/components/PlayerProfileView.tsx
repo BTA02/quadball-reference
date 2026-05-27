@@ -106,7 +106,7 @@ export default function PlayerProfileView({
     const relevantBeaters = allBeatersStats.filter(s => s.totalMinutes > 0.5);
     if (relevantBeaters.length === 0) return null;
 
-    const getPercentile = (field: 'bcl' | 'rapm' | 'controlPct', value: number) => {
+    const getPercentile = (field: 'bva' | 'rapm' | 'controlPct', value: number) => {
       const values = relevantBeaters.map(b => b[field] as number).sort((a, b) => a - b);
       const count = values.length;
       if (count <= 1) return 50; 
@@ -122,11 +122,11 @@ export default function PlayerProfileView({
     const per20Pct = allPer20s.length > 1 ? Math.round((per20Rank / (allPer20s.length - 1)) * 100) : 50;
 
     return {
-      bcl: getPercentile('bcl', dodgeSoloStats.bcl),
+      bcl: getPercentile('bva', dodgeSoloStats.bva),
       rapm: getPercentile('rapm', dodgeSoloStats.rapm),
       controlPct: getPercentile('controlPct', dodgeSoloStats.controlPct),
       plusMinusPerTwenty: per20Pct,
-      bclVal: dodgeSoloStats.bcl,
+      bclVal: dodgeSoloStats.bva,
       rapmVal: dodgeSoloStats.rapm,
       controlPctVal: dodgeSoloStats.controlPct,
       plusMinusPerTwentyVal: activePer20
@@ -527,7 +527,7 @@ export default function PlayerProfileView({
           <SortHeader label="+" sortKey="plus" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
           <SortHeader label="−" sortKey="minus" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
           <SortHeader label="+/−" sortKey="plusMinus" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
-          <SortHeader label="BCL" sortKey="bcl" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
+          <SortHeader label="BVA" sortKey="bva" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
         </>
       )}
       {positionTab === 'flag' && (
@@ -566,7 +566,7 @@ export default function PlayerProfileView({
           <Cell value={row.plus} />
           <Cell value={row.minus} />
           <Cell value={row.plusMinus} highlight={row.plusMinus > 0 ? 'pos' : row.plusMinus < 0 ? 'neg' : undefined} bold />
-          <Cell value={row.bcl > 0 ? `+${row.bcl}` : row.bcl || '0'} bold highlight={row.bcl > 0 ? 'pos' : row.bcl < 0 ? 'neg' : undefined} />
+          <Cell value={row.bva > 0 ? `+${row.bva}` : row.bva || '0'} bold highlight={row.bva > 0 ? 'pos' : row.bva < 0 ? 'neg' : undefined} />
         </>
       )}
       {positionTab === 'flag' && (
@@ -1006,9 +1006,9 @@ export default function PlayerProfileView({
                       })}
 
                       {/* Axis Labels */}
-                      {/* BCL Top */}
+                      {/* BVA Top */}
                       <text x="130" y="32" textAnchor="middle" className="fill-gray-700 text-[9px] font-extrabold select-none uppercase tracking-wider">
-                        Net BCL
+                        Net BVA
                       </text>
                       <text x="130" y="43" textAnchor="middle" className="fill-emerald-600 text-[8px] font-bold select-none">
                         {beaterPercentiles.bclVal > 0 ? '+' : ''}{beaterPercentiles.bclVal.toFixed(1)} ({beaterPercentiles.bcl}%)
@@ -1463,6 +1463,7 @@ export default function PlayerProfileView({
                       <QuadHeaderCell label="OFF +/−" sortKey="offPlusMinus" />
                       <QuadHeaderCell label="ON/OFF" sortKey="onOffDt" />
                       <QuadHeaderCell label="REL RATIO" sortKey="relPlusMinusRatio" />
+                      <QuadHeaderCell label="CVA" sortKey="cva" tooltip="Chaser Value Added (GA/20)" />
                       <QuadHeaderCell label="EPR" sortKey="epr" />
                       <QuadHeaderCell label="fEPR" sortKey="fEpr" />
                     </>)}
@@ -1512,6 +1513,7 @@ export default function PlayerProfileView({
                       <QuadCell sortKey="offPlusMinus" value={quadStats.offPlusMinus} />
                       <QuadCell sortKey="onOffDt" value={quadStats.onOffDt} />
                       <QuadCell sortKey="relPlusMinusRatio" value={quadStats.relPlusMinusRatio} />
+                      <QuadCell sortKey="cva" value={quadStats.cva > 0 ? `+${quadStats.cva}` : quadStats.cva || '0'} bold highlight={quadStats.cva > 0 ? 'pos' : quadStats.cva < 0 ? 'neg' : undefined} />
                       <QuadCell sortKey="epr" value={quadStats.epr} />
                       <QuadCell sortKey="fEpr" value={quadStats.fEpr} />
                     </>)}
@@ -1536,7 +1538,7 @@ export default function PlayerProfileView({
                     <SortHeader label="+/−" sortKey="plusMinus" currentSort="" currentDir="asc" onSort={() => {}} />
                     <SortHeader label="RATIO" sortKey="plusMinusRatio" currentSort="" currentDir="asc" onSort={() => {}} />
                     <SortHeader label="+/− / 20" sortKey="plusMinusPerTwenty" currentSort="" currentDir="asc" onSort={() => {}} />
-                    <SortHeader label="BCL" sortKey="bcl" currentSort="" currentDir="asc" onSort={() => {}} />
+                    <SortHeader label="BVA" sortKey="bva" currentSort="" currentDir="asc" onSort={() => {}} />
                   </tr>
                 </thead>
                 <tbody>
@@ -1553,7 +1555,7 @@ export default function PlayerProfileView({
                     <Cell value={dodgeSoloStats.plusMinus} bold highlight={dodgeSoloStats.plusMinus > 0 ? 'pos' : dodgeSoloStats.plusMinus < 0 ? 'neg' : undefined} />
                     <Cell value={dodgeSoloStats.plusMinusRatio} />
                     <Cell value={dodgeSoloStats.totalMinutes > 0 ? Math.round((dodgeSoloStats.plusMinus / dodgeSoloStats.totalMinutes) * 20 * 10) / 10 : 0} />
-                    <Cell value={dodgeSoloStats.bcl > 0 ? `+${dodgeSoloStats.bcl}` : dodgeSoloStats.bcl || '0'} bold highlight={dodgeSoloStats.bcl > 0 ? 'pos' : dodgeSoloStats.bcl < 0 ? 'neg' : undefined} />
+                    <Cell value={dodgeSoloStats.bva > 0 ? `+${dodgeSoloStats.bva}` : dodgeSoloStats.bva || '0'} bold highlight={dodgeSoloStats.bva > 0 ? 'pos' : dodgeSoloStats.bva < 0 ? 'neg' : undefined} />
                   </tr>
                 </tbody>
               </table>
@@ -1572,7 +1574,7 @@ export default function PlayerProfileView({
                     <SortHeader label="+" sortKey="plus" currentSort={pairSortKey} currentDir={pairSortDir} onSort={handlePairSort} />
                     <SortHeader label="−" sortKey="minus" currentSort={pairSortKey} currentDir={pairSortDir} onSort={handlePairSort} />
                     <SortHeader label="+/−" sortKey="plusMinus" currentSort={pairSortKey} currentDir={pairSortDir} onSort={handlePairSort} />
-                    <SortHeader label="BCL" sortKey="bcl" currentSort={pairSortKey} currentDir={pairSortDir} onSort={handlePairSort} />
+                    <SortHeader label="BVA" sortKey="bva" currentSort={pairSortKey} currentDir={pairSortDir} onSort={handlePairSort} />
                   </tr>
                 </thead>
                 <tbody>
@@ -1590,7 +1592,7 @@ export default function PlayerProfileView({
                       <Cell value={pStat.plus} />
                       <Cell value={pStat.minus} />
                       <Cell value={pStat.plusMinus} bold highlight={pStat.plusMinus > 0 ? 'pos' : pStat.plusMinus < 0 ? 'neg' : undefined} />
-                      <Cell value={pStat.bcl > 0 ? `+${pStat.bcl}` : pStat.bcl || '0'} bold highlight={pStat.bcl > 0 ? 'pos' : pStat.bcl < 0 ? 'neg' : undefined} />
+                      <Cell value={pStat.bva > 0 ? `+${pStat.bva}` : pStat.bva || '0'} bold highlight={pStat.bva > 0 ? 'pos' : pStat.bva < 0 ? 'neg' : undefined} />
                     </tr>
                   ))}
                 </tbody>

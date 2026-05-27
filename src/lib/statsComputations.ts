@@ -328,6 +328,7 @@ export interface AdvancedPlayerStats {
   shotPct: number;
   assistToTurnover: number;
   controlPctOnField: number;
+  cva: number;                 // Chaser Value Added (GA/20)
   // Raw counts for ratio computation
   goals: number;
   assists: number;
@@ -613,6 +614,10 @@ export function computeAdvancedStats(
     teamGoalsInGames: number;
     oppGoalsInGames: number;
     controlSeconds: number;
+    goalsScoredWithControl: number;
+    goalsConcededWithControl: number;
+    goalsScoredWithoutControl: number;
+    goalsConcededWithoutControl: number;
     gameIds: Set<string>;
   }>();
 
@@ -642,6 +647,10 @@ export function computeAdvancedStats(
         teamGoalsInGames: 0,
         oppGoalsInGames: 0,
         controlSeconds: 0,
+        goalsScoredWithControl: 0,
+        goalsConcededWithControl: 0,
+        goalsScoredWithoutControl: 0,
+        goalsConcededWithoutControl: 0,
         gameIds: new Set(),
       });
     }
@@ -797,8 +806,21 @@ export function computeAdvancedStats(
       for (const pid of activeHome) {
         const accum = getAccum(pid);
         if (isGoal) {
-          if (eventTeamId === resolvedHomeId) { accum.plus++; accum.plusMinus++; }
-          else if (eventTeamId === resolvedAwayId) { accum.minus++; accum.plusMinus--; }
+          const hasControl = controlPeriods.some(cp =>
+            cp.teamId === resolvedHomeId && e.videoTime >= cp.startTime && e.videoTime <= cp.endTime
+          );
+          if (eventTeamId === resolvedHomeId) { 
+            accum.plus++; 
+            accum.plusMinus++; 
+            if (hasControl) accum.goalsScoredWithControl++;
+            else accum.goalsScoredWithoutControl++;
+          }
+          else if (eventTeamId === resolvedAwayId) { 
+            accum.minus++; 
+            accum.plusMinus--; 
+            if (hasControl) accum.goalsConcededWithControl++;
+            else accum.goalsConcededWithoutControl++;
+          }
         }
         if (isShot) {
           if (eventTeamId === resolvedAwayId) { accum.oppShotsOn++; }
@@ -833,8 +855,21 @@ export function computeAdvancedStats(
       for (const pid of activeAway) {
         const accum = getAccum(pid);
         if (isGoal) {
-          if (eventTeamId === resolvedAwayId) { accum.plus++; accum.plusMinus++; }
-          else if (eventTeamId === resolvedHomeId) { accum.minus++; accum.plusMinus--; }
+          const hasControl = controlPeriods.some(cp =>
+            cp.teamId === resolvedAwayId && e.videoTime >= cp.startTime && e.videoTime <= cp.endTime
+          );
+          if (eventTeamId === resolvedAwayId) { 
+            accum.plus++; 
+            accum.plusMinus++; 
+            if (hasControl) accum.goalsScoredWithControl++;
+            else accum.goalsScoredWithoutControl++;
+          }
+          else if (eventTeamId === resolvedHomeId) { 
+            accum.minus++; 
+            accum.plusMinus--; 
+            if (hasControl) accum.goalsConcededWithControl++;
+            else accum.goalsConcededWithoutControl++;
+          }
         }
         if (isShot) {
           if (eventTeamId === resolvedHomeId) { accum.oppShotsOn++; }
@@ -942,6 +977,39 @@ export function computeAdvancedStats(
     }
   }
 
+  // Compute league averages for Chaser/Keeper control-adjusted baselines
+  let totalChaserGoalsScoredWithCtrl = 0;
+  let totalChaserGoalsConcededWithCtrl = 0;
+  let totalChaserMinWithCtrl = 0;
+  let totalChaserGoalsScoredWithoutCtrl = 0;
+  let totalChaserGoalsConcededWithoutCtrl = 0;
+  let totalChaserMinWithoutCtrl = 0;
+
+  for (const [pid, accum] of statsAccum) {
+    const minWithCtrl = accum.controlSeconds / 60;
+    const totalMin = accum.minutesPlayed;
+    const minWithoutCtrl = totalMin - minWithCtrl;
+
+    if (minWithCtrl > 0) {
+      totalChaserGoalsScoredWithCtrl += accum.goalsScoredWithControl;
+      totalChaserGoalsConcededWithCtrl += accum.goalsConcededWithControl;
+      totalChaserMinWithCtrl += minWithCtrl;
+    }
+    if (minWithoutCtrl > 0) {
+      totalChaserGoalsScoredWithoutCtrl += accum.goalsScoredWithoutControl;
+      totalChaserGoalsConcededWithoutCtrl += accum.goalsConcededWithoutControl;
+      totalChaserMinWithoutCtrl += minWithoutCtrl;
+    }
+  }
+
+  const leagueChaserAvgWithCtrl = totalChaserMinWithCtrl > 0
+    ? (totalChaserGoalsScoredWithCtrl - totalChaserGoalsConcededWithCtrl) / totalChaserMinWithCtrl
+    : 0;
+
+  const leagueChaserAvgWithoutCtrl = totalChaserMinWithoutCtrl > 0
+    ? (totalChaserGoalsScoredWithoutCtrl - totalChaserGoalsConcededWithoutCtrl) / totalChaserMinWithoutCtrl
+    : 0;
+
   // Build final stats — only include players in the players collection
   const results: AdvancedPlayerStats[] = [];
   for (const [pid, accum] of statsAccum) {
@@ -1000,6 +1068,15 @@ export function computeAdvancedStats(
       controlPctOnField: minutes > 0
         ? Math.round((accum.controlSeconds / (minutes * 60)) * 1000) / 10
         : 0,
+      cva: (() => {
+        const minWithCtrl = accum.controlSeconds / 60;
+        const minWithoutCtrl = minutes - minWithCtrl;
+        const netWithCtrl = minWithCtrl > 0 ? (accum.goalsScoredWithControl - accum.goalsConcededWithControl) / minWithCtrl : 0;
+        const netWithoutCtrl = minWithoutCtrl > 0 ? (accum.goalsScoredWithoutControl - accum.goalsConcededWithoutControl) / minWithoutCtrl : 0;
+        const ctrlPctFraction = minutes > 0 ? minWithCtrl / minutes : 0;
+        const cva = minutes > 0 ? (ctrlPctFraction * (netWithCtrl - leagueChaserAvgWithCtrl) + (1 - ctrlPctFraction) * (netWithoutCtrl - leagueChaserAvgWithoutCtrl)) * 20 : 0;
+        return Math.round(cva * 100) / 100;
+      })(),
       goals: accum.goals,
       assists: accum.assists,
       shots: accum.shots, // Explicit thrown shots
@@ -1952,6 +2029,7 @@ export interface BeaterSoloStats {
   epr: number;
   fEpr: number;
   bcl: number;                 // Bludger Control Leverage rating
+  bva: number;                 // Beater Value Added (GA/20)
 }
 
 export function computeBeaterSoloStats(
@@ -2167,22 +2245,37 @@ export function computeBeaterSoloStats(
     }
   }
 
-  // Compute minutes-weighted league average net rating with control across all active solo beaters
+  // Compute minutes-weighted league average net rating with and without control across all active solo beaters
   let totalGoalsScoredWithCtrl = 0;
   let totalGoalsConcededWithCtrl = 0;
   let totalMinWithCtrl = 0;
+  let totalGoalsScoredWithoutCtrl = 0;
+  let totalGoalsConcededWithoutCtrl = 0;
+  let totalMinWithoutCtrl = 0;
 
   for (const [pid, a] of accum) {
     const minWithControl = a.controlSeconds / 60;
+    const totalMin = a.totalSeconds / 60;
+    const minWithoutControl = totalMin - minWithControl;
+
     if (minWithControl > 0) {
       totalGoalsScoredWithCtrl += a.goalsScoredWithControl;
       totalGoalsConcededWithCtrl += a.goalsConcededWithControl;
       totalMinWithCtrl += minWithControl;
     }
+    if (minWithoutControl > 0) {
+      totalGoalsScoredWithoutCtrl += a.goalsScoredWithoutControl;
+      totalGoalsConcededWithoutCtrl += a.goalsConcededWithoutControl;
+      totalMinWithoutCtrl += minWithoutControl;
+    }
   }
 
   const leagueAvgNetWithCtrl = totalMinWithCtrl > 0 
     ? (totalGoalsScoredWithCtrl - totalGoalsConcededWithCtrl) / totalMinWithCtrl 
+    : 0;
+
+  const leagueAvgNetWithoutCtrl = totalMinWithoutCtrl > 0 
+    ? (totalGoalsScoredWithoutCtrl - totalGoalsConcededWithoutCtrl) / totalMinWithoutCtrl 
     : 0;
 
   const results: BeaterSoloStats[] = [];
@@ -2202,11 +2295,23 @@ export function computeBeaterSoloStats(
 
     const timeWithControl = a.controlSeconds;
     const minWithControl = timeWithControl / 60;
+    const minWithoutControl = totalMin - minWithControl;
 
     const netWithCtrl = minWithControl > 0 
       ? (a.goalsScoredWithControl - a.goalsConcededWithControl) / minWithControl 
       : 0;
+
+    const netWithoutCtrl = minWithoutControl > 0
+      ? (a.goalsScoredWithoutControl - a.goalsConcededWithoutControl) / minWithoutControl
+      : 0;
+
     const bcl = Math.round((netWithCtrl - leagueAvgNetWithCtrl) * 100) / 100;
+
+    const ctrlPctFraction = totalMin > 0 ? minWithControl / totalMin : 0;
+    const bva = totalMin > 0
+      ? (ctrlPctFraction * (netWithCtrl - leagueAvgNetWithCtrl) + 
+         (1 - ctrlPctFraction) * (netWithoutCtrl - leagueAvgNetWithoutCtrl)) * 20
+      : 0;
 
     results.push({
       playerId: pid,
@@ -2231,6 +2336,7 @@ export function computeBeaterSoloStats(
       epr: a.teamPoss > 0 ? Math.round((a.emptyTurnovers / a.teamPoss) * 1000) / 10 : 0,
       fEpr: a.oppPoss > 0 ? Math.round((a.oppEmptyTurnovers / a.oppPoss) * 1000) / 10 : 0,
       bcl,
+      bva: Math.round(bva * 100) / 100,
     });
   }
 
@@ -2264,6 +2370,7 @@ export interface BeaterPairStats {
   epr: number;
   fEpr: number;
   bcl: number;              // Bludger Control Leverage rating
+  bva: number;              // Beater Value Added (GA/20)
 }
 
 /**
@@ -2523,22 +2630,37 @@ export function computeBeaterPairStats(
     }
   }
 
-  // Compute minutes-weighted cohort average net rating with control across all active beater pairs
+  // Compute minutes-weighted cohort average net rating with and without control across all active beater pairs
   let totalGoalsScoredWithCtrl = 0;
   let totalGoalsConcededWithCtrl = 0;
   let totalMinWithCtrl = 0;
+  let totalGoalsScoredWithoutCtrl = 0;
+  let totalGoalsConcededWithoutCtrl = 0;
+  let totalMinWithoutCtrl = 0;
 
   for (const [key, a] of accum) {
     const minWithControl = a.controlSeconds / 60;
+    const totalMin = a.totalSeconds / 60;
+    const minWithoutControl = totalMin - minWithControl;
+
     if (minWithControl > 0) {
       totalGoalsScoredWithCtrl += a.goalsScoredWithControl;
       totalGoalsConcededWithCtrl += a.goalsConcededWithControl;
       totalMinWithCtrl += minWithControl;
     }
+    if (minWithoutControl > 0) {
+      totalGoalsScoredWithoutCtrl += a.goalsScoredWithoutControl;
+      totalGoalsConcededWithoutCtrl += a.goalsConcededWithoutControl;
+      totalMinWithoutCtrl += minWithoutControl;
+    }
   }
 
   const cohortAvgNetWithCtrl = totalMinWithCtrl > 0 
     ? (totalGoalsScoredWithCtrl - totalGoalsConcededWithCtrl) / totalMinWithCtrl 
+    : 0;
+
+  const cohortAvgNetWithoutCtrl = totalMinWithoutCtrl > 0 
+    ? (totalGoalsScoredWithoutCtrl - totalGoalsConcededWithoutCtrl) / totalMinWithoutCtrl 
     : 0;
 
   const results: BeaterPairStats[] = [];
@@ -2559,11 +2681,23 @@ export function computeBeaterPairStats(
 
     const timeWithControl = a.controlSeconds;
     const minWithControl = timeWithControl / 60;
+    const minWithoutControl = totalMin - minWithControl;
 
     const netWithCtrl = minWithControl > 0 
       ? (a.goalsScoredWithControl - a.goalsConcededWithControl) / minWithControl 
       : 0;
+
+    const netWithoutCtrl = minWithoutControl > 0
+      ? (a.goalsScoredWithoutControl - a.goalsConcededWithoutControl) / minWithoutControl
+      : 0;
+
     const bcl = Math.round((netWithCtrl - cohortAvgNetWithCtrl) * 100) / 100;
+
+    const ctrlPctFraction = totalMin > 0 ? minWithControl / totalMin : 0;
+    const bva = totalMin > 0
+      ? (ctrlPctFraction * (netWithCtrl - cohortAvgNetWithCtrl) + 
+         (1 - ctrlPctFraction) * (netWithoutCtrl - cohortAvgNetWithoutCtrl)) * 20
+      : 0;
 
     results.push({
       pairKey: key,
@@ -2590,6 +2724,7 @@ export function computeBeaterPairStats(
       epr: a.teamPoss > 0 ? Math.round((a.emptyTurnovers / a.teamPoss) * 1000) / 10 : 0,
       fEpr: a.oppPoss > 0 ? Math.round((a.oppEmptyTurnovers / a.oppPoss) * 1000) / 10 : 0,
       bcl,
+      bva: Math.round(bva * 100) / 100,
     });
   }
 
