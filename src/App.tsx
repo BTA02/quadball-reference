@@ -9567,9 +9567,9 @@ export default function App() {
                                           return updatedDraft;
                                         }));
                                       }}
-                                      className="flex-1 w-0 text-[10px] border border-gray-300 rounded p-1.5 bg-white shadow-sm"
+                                      className={`flex-1 w-0 text-[10px] border rounded p-1.5 shadow-sm ${draft.teamId === currentGame?.homeTeamId ? 'bg-white border-gray-300' : 'bg-red-50 border-red-300 text-red-600 font-bold'}`}
                                     >
-                                      <option value="">Home Team</option>
+                                      <option value="" disabled>⚠ Home Team - Select Player</option>
                                       <option value="TEAM_ONLY" className="font-bold text-gray-500">- {teams.find(t => t.id === currentGame?.homeTeamId)?.nickname || teams.find(t => t.id === currentGame?.homeTeamId)?.name || 'Team'} / No Player -</option>
                                       {homeRosterPlayers
                                         .filter(rp => {
@@ -9580,14 +9580,19 @@ export default function App() {
                                           return activePlayerPositions.has(rp.playerId);
                                         })
                                         .sort((a, b) => {
-                                          if (draft.type === 'sub_in' || !activePlayerPositions.has(a.playerId)) {
+                                          if (draft.type === 'sub_in') {
                                             return (a.player?.lastName || '').localeCompare(b.player?.lastName || '');
-                                          } else {
+                                          }
+                                          const aActive = activePlayerPositions.has(a.playerId);
+                                          const bActive = activePlayerPositions.has(b.playerId);
+                                          if (aActive !== bActive) return aActive ? -1 : 1;
+                                          if (aActive) {
                                             const posA = activePlayerPositions.get(a.playerId) || 'chaser';
                                             const posB = activePlayerPositions.get(b.playerId) || 'chaser';
                                             const order = { chaser: 1, keeper: 2, beater: 3, seeker: 4 } as Record<string, number>;
                                             return order[posA] - order[posB];
                                           }
+                                          return (a.player?.lastName || '').localeCompare(b.player?.lastName || '');
                                         })
                                         .map(rp => (
                                           <option key={rp.playerId} value={rp.playerId}>
@@ -9633,9 +9638,9 @@ export default function App() {
                                           return updatedDraft;
                                         }));
                                       }}
-                                      className="flex-1 w-0 text-[10px] border border-gray-300 rounded p-1.5 bg-white shadow-sm"
+                                      className={`flex-1 w-0 text-[10px] border rounded p-1.5 shadow-sm ${draft.teamId === currentGame?.awayTeamId ? 'bg-white border-gray-300' : 'bg-red-50 border-red-300 text-red-600 font-bold'}`}
                                     >
-                                      <option value="">Away Team</option>
+                                      <option value="" disabled>⚠ Away Team - Select Player</option>
                                       <option value="TEAM_ONLY" className="font-bold text-gray-500">- {teams.find(t => t.id === currentGame?.awayTeamId)?.nickname || teams.find(t => t.id === currentGame?.awayTeamId)?.name || 'Team'} / No Player -</option>
                                       {awayRosterPlayers
                                         .filter(rp => {
@@ -9646,14 +9651,19 @@ export default function App() {
                                           return activePlayerPositions.has(rp.playerId);
                                         })
                                         .sort((a, b) => {
-                                          if (draft.type === 'sub_in' || !activePlayerPositions.has(a.playerId)) {
+                                          if (draft.type === 'sub_in') {
                                             return (a.player?.lastName || '').localeCompare(b.player?.lastName || '');
-                                          } else {
+                                          }
+                                          const aActive = activePlayerPositions.has(a.playerId);
+                                          const bActive = activePlayerPositions.has(b.playerId);
+                                          if (aActive !== bActive) return aActive ? -1 : 1;
+                                          if (aActive) {
                                             const posA = activePlayerPositions.get(a.playerId) || 'chaser';
                                             const posB = activePlayerPositions.get(b.playerId) || 'chaser';
                                             const order = { chaser: 1, keeper: 2, beater: 3, seeker: 4 } as Record<string, number>;
                                             return order[posA] - order[posB];
                                           }
+                                          return (a.player?.lastName || '').localeCompare(b.player?.lastName || '');
                                         })
                                         .map(rp => (
                                           <option key={rp.playerId} value={rp.playerId}>
