@@ -41,7 +41,8 @@ import {
   MapPin,
   RefreshCcw,
   X,
-  Maximize2
+  Maximize2,
+  CornerDownRight
 } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
 import {
@@ -9079,7 +9080,172 @@ export default function App() {
                           break;
                       }
 
+                      // An assist is nested under (rendered inside) its goal's card whenever
+                      // that goal is also present in the current filtered view. Only one
+                      // assist per goal is nested; any others fall back to standalone cards.
+                      const nestedAssistByGoalId = new Map<string, any>();
+                      displayEvents.forEach(e => {
+                        if (e.type === 'assist' && e.relatedEventId && !nestedAssistByGoalId.has(e.relatedEventId)) {
+                          const goal = displayEvents.find(g => g.id === e.relatedEventId && g.type === 'goal');
+                          if (goal) nestedAssistByGoalId.set(goal.id, e);
+                        }
+                      });
+                      const nestedAssistIds = new Set(Array.from(nestedAssistByGoalId.values()).map((e: any) => e.id));
 
+                      const renderTrackingEventBody = (evt: any) => {
+                        const cfg = EVENT_CONFIG[evt.type as EventType] || { label: evt.type, icon: <AlertCircle className="w-4 h-4" />, color: 'bg-neutral-500' };
+                        const label = (evt.type === 'sub_in' && evt.position) ? `${evt.position} In` : (evt.type === 'sub_out' && evt.position) ? `${evt.position} Out` : cfg.label;
+                        return (
+                          <>
+                            <div className="flex items-start justify-between mb-2">
+                              <div className="flex items-center gap-2">
+                                <div className={cn("p-1.5 rounded-md", cfg.color)}>
+                                  {React.cloneElement(cfg.icon as React.ReactElement<any>, { className: 'w-3 h-3' })}
+                                </div>
+                                <div className="flex flex-col items-center">
+                                  <p className="font-mono text-xs font-bold text-gray-800 w-12 text-center">{formatTime(evt.gameTime || 0)}</p>
+                                  <p className="font-mono text-[9px] text-gray-400 w-12 text-center">({formatTime(evt.videoTime)})</p>
+                                </div>
+                                <div className="flex flex-col justify-center gap-0.5 ml-1">
+                                  <div className="flex items-center gap-1.5">
+                                    <p className="text-sm font-bold capitalize">
+                                      {label}
+                                    </p>
+                                    {evt.status === 'verified' && (
+                                      <ShieldCheck className="w-3.5 h-3.5 text-amber-500" />
+                                    )}
+                                  </div>
+                                  {(evt.playerId || evt.teamId) && (
+                                    <div className="text-xs">
+                                      {evt.playerId ? (() => {
+                                        const p = allPlayers.find(pl => pl.id === evt.playerId);
+                                        return p ? (
+                                          <span className={cn("font-bold tracking-tight", evt.teamId === currentGame?.homeTeamId ? "text-red-700" : evt.teamId === currentGame?.awayTeamId ? "text-blue-700" : "text-gray-700")}>
+                                            {p.firstName.charAt(0)}. {p.lastName}
+                                          </span>
+                                        ) : 'Player';
+                                      })() : (() => {
+                                        const t = teams.find(tm => tm.id === evt.teamId);
+                                        return t ? (
+                                          <span className={cn("font-bold text-[9px] uppercase tracking-wider", evt.teamId === currentGame?.homeTeamId ? "text-red-700" : evt.teamId === currentGame?.awayTeamId ? "text-blue-700" : "text-gray-500")}>
+                                            {t.name}
+                                          </span>
+                                        ) : 'Team';
+                                      })()}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {(isAdmin || (evt.userId === user?.uid && evt.status !== 'verified')) && (
+                                  <>
+                                    <button
+                                      onClick={() => handleEditRecordedEvent(evt.id)}
+                                      className="p-1 text-gray-400 hover:text-blue-500 hover:bg-blue-50 transition-colors rounded flex items-center justify-center border border-transparent hover:border-blue-100"
+                                      title="Edit Event"
+                                    >
+                                      <Edit2 className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button
+                                      onClick={() => { if (window.confirm('Delete this event permanently?')) handleDeleteRecordedEvent(evt.id) }}
+                                      className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors rounded flex items-center justify-center border border-transparent hover:border-red-100"
+                                      title="Delete Event"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </>
+                                )}
+
+                                <button
+                                  onClick={() => player?.seekTo(evt.videoTime)}
+                                  className="text-[10px] font-mono bg-gray-100 hover:bg-red-600 px-2 py-1 rounded transition-colors"
+                                >
+                                  Seek {formatTime(evt.videoTime)}
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center justify-between pt-2 border-t border-gray-200/50">
+                              <div className="flex items-center gap-3">
+                                {(isAdmin || effectiveRole === 'moderator') && (
+                                  <button
+                                    onClick={async () => {
+                                      if (!user || !currentVideo) return;
+                                      const newStatus = evt.status === 'verified' ? 'unverified' : 'verified';
+                                      // Optimistic local update
+                                      setEvents(prev => prev.map(e => e.id === evt.id ? { ...e, status: newStatus } : e));
+                                      try {
+                                        const gameRef = doc(db, 'gameEvents', currentVideo.gameId);
+                                        const gameSnap = await getDoc(gameRef);
+                                        if (!gameSnap.exists()) { toast.error('Game doc not found'); return; }
+                                        const gameData = gameSnap.data();
+                                        const currentEvents = gameData.events as GameEvent[] || [];
+                                        const eventIndex = currentEvents.findIndex(e => e.id === evt.id);
+                                        if (eventIndex !== -1) {
+                                          currentEvents[eventIndex] = { ...currentEvents[eventIndex], status: newStatus };
+                                          await updateDoc(gameRef, { events: currentEvents });
+                                          toast.success(newStatus === 'verified' ? '✓ Event verified' : 'Verification removed');
+                                        }
+                                      } catch (e) {
+                                        console.error(e);
+                                        toast.error('Failed to update verification');
+                                        // Revert optimistic update
+                                        setEvents(prev => prev.map(ev => ev.id === evt.id ? { ...ev, status: evt.status } : ev));
+                                      }
+                                    }}
+                                    className={cn("p-1.5 rounded-lg transition-all border", evt.status === 'verified' ? 'bg-amber-500/15 text-amber-500 border-amber-500/30 shadow-sm' : 'bg-gray-50 text-gray-300 border-gray-200 hover:text-amber-500 hover:border-amber-500 hover:bg-amber-50')}
+                                    title={evt.status === 'verified' ? "Remove Verification" : "Verify Event (Trusted Only)"}
+                                  >
+                                    <ShieldCheck className="w-4 h-4" />
+                                  </button>
+                                )}
+                                <div className="flex items-center gap-1">
+                                  <span className="text-xs font-bold text-green-500">{evt.upvotes || 0}</span>
+                                  <CheckCircle2 className="w-3 h-3 text-green-500 opacity-50" />
+                                </div>
+                                <div className="flex items-center gap-1">
+                                  <span className="text-xs font-bold text-red-500">{evt.downvotes || 0}</span>
+                                  <XCircle className="w-3 h-3 text-red-500 opacity-50" />
+                                </div>
+                                <div className="h-3 w-px bg-gray-100 mx-1" />
+                                <span className={cn(
+                                  "text-xs font-bold",
+                                  evt.votes > 0 ? "text-green-500" : evt.votes < 0 ? "text-red-500" : "text-gray-400"
+                                )}>
+                                  {evt.votes > 0 ? `+${evt.votes}` : evt.votes}
+                                </span>
+                                <span className="text-[10px] text-gray-300 uppercase font-bold tracking-tighter">Net</span>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() => handleVote(evt.id, true)}
+                                  className={cn(
+                                    'p-1.5 rounded transition-all',
+                                    evt.upvoterIds?.includes(voterId)
+                                      ? 'bg-green-500/20 text-green-600 ring-1 ring-green-500/30'
+                                      : 'hover:bg-green-500/20 text-gray-400 hover:text-green-500'
+                                  )}
+                                  title="Accurate"
+                                >
+                                  <CheckCircle2 className="w-4 h-4" />
+                                </button>
+                                <button
+                                  onClick={() => handleVote(evt.id, false)}
+                                  className={cn(
+                                    'p-1.5 rounded transition-all',
+                                    evt.downvoterIds?.includes(voterId)
+                                      ? 'bg-red-500/20 text-red-600 ring-1 ring-red-500/30'
+                                      : 'hover:bg-red-500/20 text-gray-400 hover:text-red-500'
+                                  )}
+                                  title="Inaccurate"
+                                >
+                                  <XCircle className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </div>
+                          </>
+                        );
+                      };
 
                       return displayEvents.length === 0 ? (
                         <div className="h-full flex flex-col items-center justify-center text-gray-400 text-center p-8">
@@ -9121,8 +9287,13 @@ export default function App() {
                             );
                           }
 
-                          const eventConfig = EVENT_CONFIG[event.type as EventType] || { label: event.type, icon: <AlertCircle className="w-4 h-4" />, color: 'bg-neutral-500' };
-                          const dynamicLabel = (event.type === 'sub_in' && event.position) ? `${event.position} In` : (event.type === 'sub_out' && event.position) ? `${event.position} Out` : eventConfig.label;
+                          if (nestedAssistIds.has(event.id)) {
+                            // Rendered nested inside its goal's card below instead.
+                            return null;
+                          }
+
+                          const nestedAssist = event.type === 'goal' ? nestedAssistByGoalId.get(event.id) : undefined;
+
                           return (
                             <div
                               key={event.id}
@@ -9135,161 +9306,17 @@ export default function App() {
                                 event.status === 'rejected' && "opacity-50 grayscale"
                               )}
                             >
-                              <div className="flex items-start justify-between mb-2">
-                                <div className="flex items-center gap-2">
-                                  <div className={cn("p-1.5 rounded-md", eventConfig.color)}>
-                                    {React.cloneElement(eventConfig.icon as React.ReactElement<any>, { className: 'w-3 h-3' })}
+                              {renderTrackingEventBody(event)}
+                              {nestedAssist && (
+                                <>
+                                  <div className="flex items-center gap-2 my-2">
+                                    <div className="flex-1 border-t border-dashed border-gray-300" />
+                                    <CornerDownRight className="w-3.5 h-3.5 text-gray-300 shrink-0" />
+                                    <div className="flex-1 border-t border-dashed border-gray-300" />
                                   </div>
-                                  <div className="flex flex-col items-center">
-                                    <p className="font-mono text-xs font-bold text-gray-800 w-12 text-center">{formatTime(event.gameTime || 0)}</p>
-                                    <p className="font-mono text-[9px] text-gray-400 w-12 text-center">({formatTime(event.videoTime)})</p>
-                                  </div>
-                                  <div className="flex flex-col justify-center gap-0.5 ml-1">
-                                    <div className="flex items-center gap-1.5">
-                                      <p className="text-sm font-bold capitalize">
-                                        {dynamicLabel}
-                                      </p>
-                                      {event.status === 'verified' && (
-                                        <ShieldCheck className="w-3.5 h-3.5 text-amber-500" />
-                                      )}
-                                    </div>
-                                    {(event.playerId || event.teamId) && (
-                                      <div className="text-xs">
-                                        {event.playerId ? (() => {
-                                          const p = allPlayers.find(pl => pl.id === event.playerId);
-                                          return p ? (
-                                            <span className={cn("font-bold tracking-tight", event.teamId === currentGame?.homeTeamId ? "text-red-700" : event.teamId === currentGame?.awayTeamId ? "text-blue-700" : "text-gray-700")}>
-                                              {p.firstName.charAt(0)}. {p.lastName}
-                                            </span>
-                                          ) : 'Player';
-                                        })() : (() => {
-                                          const t = teams.find(tm => tm.id === event.teamId);
-                                          return t ? (
-                                            <span className={cn("font-bold text-[9px] uppercase tracking-wider", event.teamId === currentGame?.homeTeamId ? "text-red-700" : event.teamId === currentGame?.awayTeamId ? "text-blue-700" : "text-gray-500")}>
-                                              {t.name}
-                                            </span>
-                                          ) : 'Team';
-                                        })()}
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  {(isAdmin || (event.userId === user?.uid && event.status !== 'verified')) && (
-                                    <>
-                                      <button
-                                        onClick={() => handleEditRecordedEvent(event.id)}
-                                        className="p-1 text-gray-400 hover:text-blue-500 hover:bg-blue-50 transition-colors rounded flex items-center justify-center border border-transparent hover:border-blue-100"
-                                        title="Edit Event"
-                                      >
-                                        <Edit2 className="w-3.5 h-3.5" />
-                                      </button>
-                                      <button
-                                        onClick={() => { if (window.confirm('Delete this event permanently?')) handleDeleteRecordedEvent(event.id) }}
-                                        className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors rounded flex items-center justify-center border border-transparent hover:border-red-100"
-                                        title="Delete Event"
-                                      >
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                      </button>
-                                    </>
-                                  )}
-
-                                  <button
-                                    onClick={() => player?.seekTo(event.videoTime)}
-                                    className="text-[10px] font-mono bg-gray-100 hover:bg-red-600 px-2 py-1 rounded transition-colors"
-                                  >
-                                    Seek {formatTime(event.videoTime)}
-                                  </button>
-                                </div>
-                              </div>
-
-                              {event.relatedEventId && (
-                                <div className="mb-2 pl-8 border-l-2 border-gray-200 text-[10px] text-gray-400 italic">
-                                  Assisting: {enrichedEvents.find(e => e.id === event.relatedEventId)?.type || 'Event'}
-                                  ({formatTime(enrichedEvents.find(e => e.id === event.relatedEventId)?.gameTime || 0)})
-                                </div>
+                                  {renderTrackingEventBody(nestedAssist)}
+                                </>
                               )}
-
-                              <div className="flex items-center justify-between pt-2 border-t border-gray-200/50">
-                                <div className="flex items-center gap-3">
-                                  {(isAdmin || effectiveRole === 'moderator') && (
-                                    <button
-                                      onClick={async () => {
-                                        if (!user || !currentVideo) return;
-                                        const newStatus = event.status === 'verified' ? 'unverified' : 'verified';
-                                        // Optimistic local update
-                                        setEvents(prev => prev.map(e => e.id === event.id ? { ...e, status: newStatus } : e));
-                                        try {
-                                          const gameRef = doc(db, 'gameEvents', currentVideo.gameId);
-                                          const gameSnap = await getDoc(gameRef);
-                                          if (!gameSnap.exists()) { toast.error('Game doc not found'); return; }
-                                          const gameData = gameSnap.data();
-                                          const currentEvents = gameData.events as GameEvent[] || [];
-                                          const eventIndex = currentEvents.findIndex(e => e.id === event.id);
-                                          if (eventIndex !== -1) {
-                                            currentEvents[eventIndex] = { ...currentEvents[eventIndex], status: newStatus };
-                                            await updateDoc(gameRef, { events: currentEvents });
-                                            toast.success(newStatus === 'verified' ? '✓ Event verified' : 'Verification removed');
-                                          }
-                                        } catch (e) {
-                                          console.error(e);
-                                          toast.error('Failed to update verification');
-                                          // Revert optimistic update
-                                          setEvents(prev => prev.map(ev => ev.id === event.id ? { ...ev, status: event.status } : ev));
-                                        }
-                                      }}
-                                      className={cn("p-1.5 rounded-lg transition-all border", event.status === 'verified' ? 'bg-amber-500/15 text-amber-500 border-amber-500/30 shadow-sm' : 'bg-gray-50 text-gray-300 border-gray-200 hover:text-amber-500 hover:border-amber-500 hover:bg-amber-50')}
-                                      title={event.status === 'verified' ? "Remove Verification" : "Verify Event (Trusted Only)"}
-                                    >
-                                      <ShieldCheck className="w-4 h-4" />
-                                    </button>
-                                  )}
-                                  <div className="flex items-center gap-1">
-                                    <span className="text-xs font-bold text-green-500">{event.upvotes || 0}</span>
-                                    <CheckCircle2 className="w-3 h-3 text-green-500 opacity-50" />
-                                  </div>
-                                  <div className="flex items-center gap-1">
-                                    <span className="text-xs font-bold text-red-500">{event.downvotes || 0}</span>
-                                    <XCircle className="w-3 h-3 text-red-500 opacity-50" />
-                                  </div>
-                                  <div className="h-3 w-px bg-gray-100 mx-1" />
-                                  <span className={cn(
-                                    "text-xs font-bold",
-                                    event.votes > 0 ? "text-green-500" : event.votes < 0 ? "text-red-500" : "text-gray-400"
-                                  )}>
-                                    {event.votes > 0 ? `+${event.votes}` : event.votes}
-                                  </span>
-                                  <span className="text-[10px] text-gray-300 uppercase font-bold tracking-tighter">Net</span>
-                                </div>
-                                {(
-                                  <div className="flex items-center gap-1">
-                                    <button
-                                      onClick={() => handleVote(event.id, true)}
-                                      className={cn(
-                                        'p-1.5 rounded transition-all',
-                                        event.upvoterIds?.includes(voterId)
-                                          ? 'bg-green-500/20 text-green-600 ring-1 ring-green-500/30'
-                                          : 'hover:bg-green-500/20 text-gray-400 hover:text-green-500'
-                                      )}
-                                      title="Accurate"
-                                    >
-                                      <CheckCircle2 className="w-4 h-4" />
-                                    </button>
-                                    <button
-                                      onClick={() => handleVote(event.id, false)}
-                                      className={cn(
-                                        'p-1.5 rounded transition-all',
-                                        event.downvoterIds?.includes(voterId)
-                                          ? 'bg-red-500/20 text-red-600 ring-1 ring-red-500/30'
-                                          : 'hover:bg-red-500/20 text-gray-400 hover:text-red-500'
-                                      )}
-                                      title="Inaccurate"
-                                    >
-                                      <XCircle className="w-4 h-4" />
-                                    </button>
-                                  </div>
-                                )}
-                              </div>
                             </div>
                           );
                         })
