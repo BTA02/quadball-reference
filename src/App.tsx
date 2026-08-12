@@ -85,7 +85,7 @@ import { StatsTabSelector, StatsTabButton } from './components/ui/StatsTable';
 import { enrichEventsWithGameTime, getScoreboardName } from './lib/statsComputations';
 // --- Types ---
 
-export type EventType = 'goal' | 'assist' | 'shot' | 'attempt' | 'miss_ko' | 'gameStart' | 'gamePause' | 'gameEnd' | 'foul' | 'card' | 'sub_in' | 'sub_out' | 'control_change' | 'turnover' | 'flag_released' | 'flag_catch' | 'control_start' | 'quadball_start' | 'placeholder_goal' | 'placeholder_shot' | 'placeholder_possession' | 'placeholder_control' | 'placeholder_sub' | 'placeholder_general';
+export type EventType = 'goal' | 'assist' | 'shot' | 'attempt' | 'miss_ko' | 'gameStart' | 'gamePause' | 'gameEnd' | 'foul' | 'card' | 'sub_in' | 'sub_out' | 'control_change' | 'turnover' | 'flag_released' | 'flag_catch' | 'control_start' | 'quadball_start';
 
 type PositionType = 'chaser' | 'keeper' | 'beater' | 'seeker';
 
@@ -191,16 +191,6 @@ interface RosterPlayer {
   createdAt: any;
 }
 
-export interface PossessionMarker {
-  id: string;
-  videoId: string;
-  gameId: string;
-  userId: string;
-  userName: string;
-  videoTime: number;
-  createdAt: any;
-}
-
 interface GameEvent {
   id: string;
   videoId: string; // Firestore ID of the video
@@ -223,7 +213,6 @@ interface GameEvent {
   teamId?: string; // The ID of the team if the event is team-based
   position?: PositionType; // For substitutions: the position being filled
   color?: string | null; // For cards: blue, yellow, red
-  tempType?: EventType; // Persisted type intent for quick recording
 }
 
 export interface DraftEvent {
@@ -237,11 +226,16 @@ export interface DraftEvent {
   assistedByPlayerId?: string | null;
   position?: PositionType | null;
   subPlayerId?: string | null;
-  tempType?: EventType | null;
   color?: string | null;
 }
 
-
+export type PinType = 'sub' | 'control' | 'possession' | 'general';
+export interface Pin {
+  id: string;
+  videoId: string;
+  time: number;
+  type: PinType;
+}
 
 interface Game {
   id: string; // Unique Game ID
@@ -291,13 +285,6 @@ const EVENT_CONFIG: Record<EventType, { label: string; icon: React.ReactNode; co
   flag_catch: { label: 'Flag Caught', icon: <Flag className="w-4 h-4" />, color: 'bg-yellow-400' },
   // Game state
   gameEnd: { label: 'Game End', icon: <Trophy className="w-4 h-4" />, color: 'bg-neutral-500' },
-  // Placeholders
-  placeholder_goal: { label: 'Goal (Placeholder)', icon: <MapPin className="w-4 h-4" />, color: 'bg-gray-400' },
-  placeholder_shot: { label: 'Shot (Placeholder)', icon: <MapPin className="w-4 h-4" />, color: 'bg-gray-400' },
-  placeholder_possession: { label: 'Possession (Placeholder)', icon: <MapPin className="w-4 h-4" />, color: 'bg-gray-400' },
-  placeholder_control: { label: 'Control (Placeholder)', icon: <MapPin className="w-4 h-4" />, color: 'bg-gray-400' },
-  placeholder_sub: { label: 'Sub (Placeholder)', icon: <MapPin className="w-4 h-4" />, color: 'bg-gray-400' },
-  placeholder_general: { label: 'General (Placeholder)', icon: <MapPin className="w-4 h-4" />, color: 'bg-gray-400' },
 };
 
 // --- Inline Roster Builder UI ---
@@ -2037,10 +2024,10 @@ function MergePlayersTab({
       // 1. Fetch gameEvents
       addLog('Fetching gameEvents documents...');
       const gameEventsSnap = await getDocs(collection(db, 'gameEvents'));
-      
+
       let gameEventsCount = 0;
       let gameEventsModified = 0;
-      
+
       let batch = writeBatch(db);
       let batchOpCount = 0;
 
@@ -2056,7 +2043,7 @@ function MergePlayersTab({
       gameEventsSnap.forEach(gameDoc => {
         const eventsArray = gameDoc.data().events || [];
         let modified = false;
-        
+
         const newEventsArray = eventsArray.map((evt: any) => {
           let changed = false;
           const updated = { ...evt };
@@ -2088,7 +2075,7 @@ function MergePlayersTab({
       addLog('Fetching legacy events...');
       const legacySnap = await getDocs(collection(db, 'events'));
       let legacyCount = 0;
-      
+
       legacySnap.forEach(evtDoc => {
         const data = evtDoc.data();
         let modified = false;
@@ -2130,7 +2117,7 @@ function MergePlayersTab({
           // Transfer to new player (create new and delete old)
           const oldRpDoc = await getDoc(doc(db, 'rosters', rosterId, 'players', oldId));
           const oldNumber = oldRpDoc.exists() ? (oldRpDoc.data()?.number || '') : '';
-          
+
           batch.set(doc(db, 'rosters', rosterId, 'players', newId), {
             playerId: newId,
             number: oldNumber,
@@ -2193,7 +2180,7 @@ function MergePlayersTab({
               1. Player to Remove (OLD PROFILE)
             </h4>
             <p className="text-xs text-gray-400">All events and roster memberships of this player will be merged into the profile on the right, and this profile will be permanently deleted.</p>
-            
+
             {selectedOldPlayer ? (
               <div className="flex items-center justify-between bg-red-50 border border-red-100 rounded-xl p-4">
                 <div>
@@ -5783,40 +5770,17 @@ export default function App() {
     videos: Video[];
     fileName: string;
   } | null>(null);
-  const [rightPanelTab, setRightPanelTab] = useState<'live_events' | 'record' | 'momentum' | 'rosters' | 'temps'>('live_events');
+  const [rightPanelTab, setRightPanelTab] = useState<'live_events' | 'record' | 'momentum' | 'rosters'>('live_events');
   const [eventsListFilterMode, setEventsListFilterMode] = useState<'now' | 'all'>('now');
   const [eventsFilterSet, setEventsFilterSet] = useState<string>('all');
   const [draftEvents, setDraftEvents] = useState<DraftEvent[]>([]);
-
-  // Possession markers and Quick Record states
-  const [possessionMarkers, setPossessionMarkers] = useState<PossessionMarker[]>([]);
-  const [videoDuration, setVideoDuration] = useState<number>(0);
-  const [quickRecordState, setQuickRecordState] = useState<{
-    type: 'goal' | 'shot' | 'sub_in' | 'control_change' | 'turnover';
-    videoTime: number;
-    teamId: string | null;
-    playerId: string | null;
-    position: PositionType | null;
-    subPlayerId: string | null;
-    assistedByPlayerId: string | null;
-  } | null>(null);
-
-  // Temps panel inline editing states
-  const [expandedPlaceholderId, setExpandedPlaceholderId] = useState<string | null>(null);
-  const [tempType, setTempType] = useState<EventType | null>(null);
-  const [tempTeamId, setTempTeamId] = useState<string | null>(null);
-  const [tempPlayerId, setTempPlayerId] = useState<string | null>(null);
-  const [tempAssistedByPlayerId, setTempAssistedByPlayerId] = useState<string | null>(null);
-  const [tempPosition, setTempPosition] = useState<PositionType | null>(null);
-  const [tempSubPlayerId, setTempSubPlayerId] = useState<string | null>(null);
-  const [tempVideoTime, setTempVideoTime] = useState<number>(0);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [commandPaletteQuery, setCommandPaletteQuery] = useState('');
   const [commandPaletteSelectedIndex, setCommandPaletteSelectedIndex] = useState(0);
   const [isListening, setIsListening] = useState(false);
   const [voiceCommandText, setVoiceCommandText] = useState('');
   const [voiceStatusMessage, setVoiceStatusMessage] = useState('');
-
+  const [pins, setPins] = useState<Pin[]>([]);
   const [watchLeagueId, setWatchLeagueId] = useState<string>('all');
   const [watchDivision, setWatchDivision] = useState<string>('all');
   const [trackerYearId, setTrackerYearId] = useState<string>('all');
@@ -6019,19 +5983,11 @@ export default function App() {
     if (!currentVideo) return;
 
     const unsubscribe = onSnapshot(doc(db, 'gameEvents', currentVideo.gameId), (docSnap) => {
-      const data = docSnap.data();
-      const gameEvs = (data?.events || []) as GameEvent[];
-      const markers = (data?.possessionMarkers || []) as PossessionMarker[];
-
+      const gameEvs = (docSnap.data()?.events || []) as GameEvent[];
       const newEvents = gameEvs
         .filter(e => e.videoId === currentVideo.id)
         .sort((a, b) => a.videoTime - b.videoTime);
       setEvents(newEvents);
-
-      const newMarkers = markers
-        .filter(m => m.videoId === currentVideo.id)
-        .sort((a, b) => a.videoTime - b.videoTime);
-      setPossessionMarkers(newMarkers);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, `gameEvents/${currentVideo.gameId}`);
     });
@@ -6217,8 +6173,6 @@ export default function App() {
     const interval = setInterval(() => {
       try {
         setCurrentTime(player.getCurrentTime());
-        const dur = player.getDuration();
-        if (dur > 0) setVideoDuration(dur);
       } catch (err) {
         // Iframe unmounted or disconnected
       }
@@ -6227,7 +6181,85 @@ export default function App() {
     return () => clearInterval(interval);
   }, [player]);
 
+  const handleRegeneratePossessionPins = () => {
+    if (!currentVideo) return;
+    const possTypes = ['goal', 'shot', 'attempt', 'turnover', 'miss_ko'];
+    
+    // Sort events chronologically
+    const videoEvents = events
+      .filter(e => e.videoId === currentVideo.id && e.type && possTypes.includes(e.type))
+      .sort((a, b) => a.videoTime - b.videoTime);
+      
+    const newPins: Pin[] = [];
+    let lastTeamId: string | null = null;
+    let lastType: string | null = null;
+    let lastTime: number = 0;
+    
+    for (const e of videoEvents) {
+      if (!e.teamId) continue;
+      
+      // If the team changed, a transition occurred.
+      if (lastTeamId && lastTeamId !== e.teamId) {
+        if (lastType === 'shot' || lastType === 'attempt' || lastType === 'miss_ko') {
+          newPins.push({
+            id: crypto.randomUUID(),
+            videoId: currentVideo.id,
+            time: lastTime + 1,
+            type: 'possession'
+          });
+        }
+      }
+      
+      // Explicit possession ends
+      if (e.type === 'goal' || e.type === 'turnover') {
+        newPins.push({
+          id: crypto.randomUUID(),
+          videoId: currentVideo.id,
+          time: e.videoTime + 1,
+          type: 'possession'
+        });
+      }
+      
+      lastTeamId = e.teamId;
+      lastType = e.type;
+      lastTime = e.videoTime;
+    }
 
+    // Generate missing control pins
+    const controlTypes = ['control_change', 'control_start'];
+    const controlEvents = events
+      .filter(e => e.videoId === currentVideo.id && e.type && controlTypes.includes(e.type))
+      .sort((a, b) => a.videoTime - b.videoTime);
+
+    let lastControlTeamId: string | null = null;
+    let lastControlTime: number = 0;
+
+    for (const e of controlEvents) {
+      if (!e.teamId) continue;
+
+      if (lastControlTeamId && lastControlTeamId === e.teamId) {
+        // Missing control transition (same team retained control across two control events)
+        const midTime = (lastControlTime + e.videoTime) / 2;
+        newPins.push({
+          id: crypto.randomUUID(),
+          videoId: currentVideo.id,
+          time: midTime,
+          type: 'control'
+        });
+      }
+
+      lastControlTeamId = e.teamId;
+      lastControlTime = e.videoTime;
+    }
+    
+    // Replace only the possession and control pins for the current video, keeping others intact
+    setPins(prev => [
+      ...prev.filter(p => p.videoId !== currentVideo.id || (p.type !== 'possession' && p.type !== 'control')),
+      ...newPins
+    ]);
+    
+    toast.success(`Regenerated ${newPins.length} auto-pins`);
+  };
 
 
   const handleAddEvent = async (
@@ -6278,52 +6310,6 @@ export default function App() {
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'events');
       return null;
-    }
-  };
-
-  const handleCreatePossessionMarker = async (providedVideoTime?: number) => {
-    if (!user || !currentVideo || (!player && providedVideoTime === undefined)) return null;
-    const videoTime = providedVideoTime !== undefined ? providedVideoTime : player ? player.getCurrentTime() : 0;
-    const markerId = crypto.randomUUID();
-
-    try {
-      const markerData = {
-        id: markerId,
-        videoId: currentVideo.id,
-        gameId: currentVideo.gameId,
-        userId: user.uid,
-        userName: user.displayName || 'Anonymous',
-        videoTime,
-        createdAt: new Date().toISOString()
-      };
-
-      const gameEventsRef = doc(db, 'gameEvents', currentVideo.gameId);
-      await setDoc(gameEventsRef, {
-        possessionMarkers: arrayUnion(markerData)
-      }, { merge: true });
-
-      toast.success(`Possession Marker dropped at ${formatTime(videoTime)}`);
-      return markerId;
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, 'possessionMarkers');
-      return null;
-    }
-  };
-
-  const handleDeletePossessionMarker = async (markerId: string) => {
-    if (!currentVideo) return;
-    try {
-      const gameEventsRef = doc(db, 'gameEvents', currentVideo.gameId);
-      const snap = await getDoc(gameEventsRef);
-      if (snap.exists()) {
-        const markers = snap.data().possessionMarkers || [];
-        const updated = markers.filter((m: any) => m.id !== markerId);
-        await updateDoc(gameEventsRef, { possessionMarkers: updated });
-        toast.success("Possession Marker deleted");
-      }
-    } catch (error) {
-      console.error(error);
-      toast.error("Failed to delete Possession Marker");
     }
   };
 
@@ -6508,8 +6494,6 @@ export default function App() {
     };
   }, [isCommandPaletteOpen, commandPaletteResults, commandPaletteSelectedIndex]);
 
-
-
   const findRosterPlayer = (
     searchStr: string,
     teamId?: string | null
@@ -6551,320 +6535,170 @@ export default function App() {
     return null;
   };
 
-  const parseNlpCommandLocal = (commandText: string) => {
-    const text = commandText.toLowerCase().trim();
-    
-    let action: 'goal' | 'miss' | 'turnover' | 'control_change' | 'sub' | 'possession_marker' | 'general' = 'general';
-    let team: 'home' | 'away' | 'unknown' = 'unknown';
-    let playerNumber: string | null = null;
-    let playerName: string | null = null;
-    let subPlayerNumber: string | null = null;
-
-    // Resolve team
-    const homeTeam = teams.find(t => t.id === currentGame?.homeTeamId);
-    const awayTeam = teams.find(t => t.id === currentGame?.awayTeamId);
-    const homeName = (homeTeam?.nickname || homeTeam?.name || 'home').toLowerCase();
-    const awayName = (awayTeam?.nickname || awayTeam?.name || 'away').toLowerCase();
-
-    if (text.includes("home") || (homeName && text.includes(homeName))) {
-      team = 'home';
-    } else if (text.includes("away") || (awayName && text.includes(awayName))) {
-      team = 'away';
-    }
-
-    // Resolve action
-    if (text.includes("possession") || text.includes("marker") || text.includes("line")) {
-      action = 'possession_marker';
-    } else if (text.includes("goal") || text.includes("scores") || text.includes("score")) {
-      action = 'goal';
-    } else if (text.includes("miss") || text.includes("shot") || text.includes("attempt") || text.includes("save")) {
-      action = 'miss';
-    } else if (text.includes("turnover") || text.includes("turn over") || text.includes("steal") || text.includes("lost")) {
-      action = 'turnover';
-    } else if (text.includes("control") || text.includes("bludger") || text.includes("ctrl")) {
-      action = 'control_change';
-    } else if (text.includes("sub") || text.includes("replace") || text.includes("substitution")) {
-      action = 'sub';
-    }
-
-    // Resolve numbers (jerseys)
-    const numbers = text.match(/\b\d+\b/g);
-    if (numbers && numbers.length > 0) {
-      playerNumber = numbers[0];
-      if (numbers.length > 1 && action === 'sub') {
-        subPlayerNumber = numbers[1];
-      }
-    } else {
-      // Check spoken numbers zero to ninety-nine if possible
-      const numberWordsMap: Record<string, string> = {
-        zero: '0', one: '1', two: '2', three: '3', four: '4', five: '5', six: '6', seven: '7', eight: '8', nine: '9', ten: '10',
-        eleven: '11', twelve: '12', thirteen: '13', fourteen: '14', fifteen: '15', sixteen: '16', seventeen: '17', eighteen: '18', nineteen: '19',
-        twenty: '20', thirty: '30', forty: '40', fifty: '50', sixty: '60', seventy: '70', eighty: '80', ninety: '90'
-      };
-      
-      const words = text.split(/\s+/);
-      const foundNumbers: string[] = [];
-      for (let i = 0; i < words.length; i++) {
-        const word = words[i].replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g,"");
-        if (numberWordsMap[word]) {
-          foundNumbers.push(numberWordsMap[word]);
-        } else if (i < words.length - 1) {
-          const nextWord = words[i+1].replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g,"");
-          if (numberWordsMap[word] && numberWordsMap[nextWord]) {
-            const val = parseInt(numberWordsMap[word]) + parseInt(numberWordsMap[nextWord]);
-            foundNumbers.push(val.toString());
-            i++; // skip next word
-          }
-        }
-      }
-      if (foundNumbers.length > 0) {
-        playerNumber = foundNumbers[0];
-        if (foundNumbers.length > 1 && action === 'sub') {
-          subPlayerNumber = foundNumbers[1];
-        }
-      }
-    }
-
-    return { action, team, playerNumber, playerName, subPlayerNumber };
-  };
-
-  const executeParsedNlpAction = async (parsed: {
-    action: 'goal' | 'miss' | 'turnover' | 'control_change' | 'sub' | 'possession_marker' | 'general';
-    team: 'home' | 'away' | 'unknown';
-    playerNumber?: string | null;
-    playerName?: string | null;
-    subPlayerNumber?: string | null;
-  }, rawText: string) => {
-    if (!currentGame || !currentVideo || !user) return;
-
-    const vTime = player ? player.getCurrentTime() : 0;
-
-    // Handle possession marker directly
-    if (parsed.action === 'possession_marker') {
-      await handleCreatePossessionMarker(vTime);
-      setVoiceStatusMessage(`Heard: "${rawText}". Dropped Possession Marker at ${formatTime(vTime)}`);
-      return;
-    }
-
-    // Resolve team
-    let resolvedTeamId: string | null = null;
-    if (parsed.team === 'home') {
-      resolvedTeamId = currentGame.homeTeamId;
-    } else if (parsed.team === 'away') {
-      resolvedTeamId = currentGame.awayTeamId;
-    }
-
-    // Find player if specified
-    let resolvedPlayerId: string | null = null;
-    let resolvedSubPlayerId: string | null = null;
-
-    if (parsed.playerNumber || parsed.playerName) {
-      const queryStr = parsed.playerNumber || parsed.playerName || '';
-      const match = findRosterPlayer(queryStr, resolvedTeamId);
-      if (match) {
-        resolvedPlayerId = match.player.id;
-        if (!resolvedTeamId) {
-          resolvedTeamId = match.teamId;
-        }
-      }
-    }
-
-    if (parsed.subPlayerNumber) {
-      const match = findRosterPlayer(parsed.subPlayerNumber, resolvedTeamId);
-      if (match) {
-        resolvedSubPlayerId = match.player.id;
-        if (!resolvedTeamId) {
-          resolvedTeamId = match.teamId;
-        }
-      }
-    }
-
-    // Default to Home if still unknown
-    if (!resolvedTeamId) {
-      resolvedTeamId = currentGame.homeTeamId;
-    }
-
-    // Map action to placeholder type
-    let placeholderType: EventType = 'placeholder_general';
-    let label = 'General';
-    let tempType: 'goal' | 'shot' | 'sub_in' | 'control_change' | 'turnover' = 'turnover';
-
-    if (parsed.action === 'goal') {
-      placeholderType = 'placeholder_goal';
-      label = 'Goal';
-      tempType = 'goal';
-    } else if (parsed.action === 'miss') {
-      placeholderType = 'placeholder_shot';
-      label = 'Miss';
-      tempType = 'shot';
-    } else if (parsed.action === 'turnover') {
-      placeholderType = 'placeholder_general';
-      label = 'TO';
-      tempType = 'turnover';
-    } else if (parsed.action === 'control_change') {
-      placeholderType = 'placeholder_control';
-      label = 'Control';
-      tempType = 'control_change';
-    } else if (parsed.action === 'sub') {
-      placeholderType = 'placeholder_sub';
-      label = 'Sub';
-      tempType = 'sub_in';
-    }
-
-    const eventId = crypto.randomUUID();
-    const eventData = {
-      id: eventId,
-      videoId: currentVideo.id,
-      gameId: currentVideo.gameId,
-      userId: user.uid,
-      userName: user.displayName || 'Anonymous',
-      type: placeholderType,
-      videoTime: vTime,
-      createdAt: new Date().toISOString(),
-      votes: 0,
-      upvotes: 0,
-      downvotes: 0,
-      upvoterIds: [],
-      downvoterIds: [],
-      status: 'unverified' as const,
-      playerId: resolvedPlayerId || null,
-      teamId: resolvedTeamId || null,
-      subPlayerId: resolvedSubPlayerId || null,
-      relatedEventId: null,
-      position: null,
-      tempType
-    };
-
-    try {
-      const gameEventsRef = doc(db, 'gameEvents', currentVideo.gameId);
-      await setDoc(gameEventsRef, {
-        events: arrayUnion(eventData)
-      }, { merge: true });
-
-      const teamNickname = resolvedTeamId === currentGame.homeTeamId 
-        ? (teams.find(t => t.id === currentGame.homeTeamId)?.nickname || 'Home')
-        : (teams.find(t => t.id === currentGame.awayTeamId)?.nickname || 'Away');
-
-      let msg = `Queued ${label} (Pending) for ${teamNickname}`;
-      if (resolvedPlayerId) {
-        const roster = resolvedTeamId === currentGame.homeTeamId ? homeRosterPlayers : awayRosterPlayers;
-        const rp = roster.find(r => r.playerId === resolvedPlayerId);
-        if (rp) msg += ` #${rp.number}`;
-      }
-      msg += ` at ${formatTime(vTime)}`;
-
-      setVoiceStatusMessage(`Heard: "${rawText}". ${msg}`);
-      toast.success(msg);
-    } catch (err) {
-      console.error(err);
-      toast.error("Failed to queue voice-dictated event");
-    }
-  };
-
-  const parseNlpCommand = async (commandText: string) => {
+  const parseNlpCommand = (commandText: string) => {
     if (!currentGame) {
       setVoiceStatusMessage("No active game to log events!");
       return;
     }
 
-    const text = commandText.trim();
-    if (!text) return;
+    const text = commandText.toLowerCase().trim();
+    const vTime = player ? (function(){ try { return player.getCurrentTime(); } catch(e){ return 0; }})() : 0;
 
-    setVoiceStatusMessage(`Heard: "${text}". Parsing...`);
+    let detectedType: EventType | null = null;
+    let targetTeamId: string | null = null;
+    let targetPlayerId: string | null = null;
+    let assistedByPlayerId: string | null = null;
+    let subPlayerId: string | null = null;
+    let cardColor: string | null = null;
 
-    const apiKey = (process.env as any).GEMINI_API_KEY;
-    if (apiKey) {
-      try {
-        const homeTeam = teams.find(t => t.id === currentGame.homeTeamId);
-        const awayTeam = teams.find(t => t.id === currentGame.awayTeamId);
-        const homeTeamLabel = homeTeam?.nickname || homeTeam?.name || 'Home';
-        const awayTeamLabel = awayTeam?.nickname || awayTeam?.name || 'Away';
+    if (text.includes("home")) {
+      targetTeamId = currentGame.homeTeamId;
+    } else if (text.includes("away")) {
+      targetTeamId = currentGame.awayTeamId;
+    }
+
+    if (text.startsWith("goal") || text.includes("scored")) {
+      detectedType = 'goal';
+      let scorerQuery = text
+        .replace("goal", "")
+        .replace("scored", "")
+        .replace("home", "")
+        .replace("away", "")
+        .replace("assist", "")
+        .split("for")[0]
+        .trim();
+
+      if (text.includes("assist")) {
+        const parts = text.split("assist");
+        scorerQuery = parts[0]
+          .replace("goal", "")
+          .replace("scored", "")
+          .replace("home", "")
+          .replace("away", "")
+          .trim();
+        const assistQuery = parts[1]
+          .replace("by", "")
+          .replace("home", "")
+          .replace("away", "")
+          .trim();
         
-        const homeRosterList = homeRosterPlayers.map(p => `#${p.number}: ${p.player.firstName} ${p.player.lastName} (${p.player.preferredName || ''})`).join(', ');
-        const awayRosterList = awayRosterPlayers.map(p => `#${p.number}: ${p.player.firstName} ${p.player.lastName} (${p.player.preferredName || ''})`).join(', ');
-
-        const systemInstruction = `You are a sports event transcription parser for a Quadball (Quidditch) match recording.
-Your job is to parse a spoken voice command into a structured JSON action.
-
-Context for the current match:
-- Home Team Name: "${homeTeamLabel}" (represented by "home")
-- Away Team Name: "${awayTeamLabel}" (represented by "away")
-- Home Team Roster: [${homeRosterList}]
-- Away Team Roster: [${awayRosterList}]
-
-Spoken Voice Command: "${text}"
-
-Instructions:
-1. Identify the 'action':
-   - "goal" or "scores" or "score" -> "goal"
-   - "miss" or "shot" or "attempt" or "save" -> "miss"
-   - "turnover" or "steal" or "to" or "lost" -> "turnover"
-   - "control" or "bludger" or "ctrl" -> "control_change"
-   - "sub" or "substitution" or "replace" -> "sub"
-   - "possession" or "possession marker" or "line" -> "possession_marker"
-   - Anything else -> "general"
-2. Identify the 'team': "home", "away", or "unknown". Map color, nicknames or player references to home/away using the rosters.
-3. Identify 'playerNumber': Jersey number of the primary player if mentioned (e.g. "12", "7").
-4. Identify 'playerName': Name of player if mentioned.
-5. Identify 'subPlayerNumber': Jersey number of the sub/incoming player if mentioned (only for substitutions).
-
-Respond strictly in JSON format matching the schema below:
-{
-  "action": "goal" | "miss" | "turnover" | "control_change" | "sub" | "possession_marker" | "general",
-  "team": "home" | "away" | "unknown",
-  "playerNumber": "string" | null,
-  "playerName": "string" | null,
-  "subPlayerNumber": "string" | null
-}`;
-
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            contents: [
-              {
-                parts: [
-                  {
-                    text: `Command: "${text}"`
-                  }
-                ]
-              }
-            ],
-            generationConfig: {
-              responseMimeType: 'application/json',
-              systemInstruction: {
-                parts: [
-                  {
-                    text: systemInstruction
-                  }
-                ]
-              },
-              temperature: 0.1,
-            }
-          })
-        });
-
-        if (!response.ok) {
-          throw new Error(`REST API returned status ${response.status}`);
+        const assistPlayer = findRosterPlayer(assistQuery, targetTeamId);
+        if (assistPlayer) {
+          assistedByPlayerId = assistPlayer.player.id;
+          if (!targetTeamId) targetTeamId = assistPlayer.teamId;
         }
+      }
 
-        const data = await response.json();
-        const responseText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (responseText) {
-          const parsed = JSON.parse(responseText.trim());
-          await executeParsedNlpAction(parsed, text);
-          return;
-        }
-      } catch (err) {
-        console.error("Gemini NLP call failed. Falling back to local parser.", err);
+      const scorerPlayer = findRosterPlayer(scorerQuery, targetTeamId);
+      if (scorerPlayer) {
+        targetPlayerId = scorerPlayer.player.id;
+        if (!targetTeamId) targetTeamId = scorerPlayer.teamId;
+      }
+    }
+    else if (text.startsWith("turnover") || text.includes("turn over")) {
+      detectedType = 'turnover';
+      const playerQuery = text
+        .replace("turnover", "")
+        .replace("turn over", "")
+        .replace("home", "")
+        .replace("away", "")
+        .trim();
+      const p = findRosterPlayer(playerQuery, targetTeamId);
+      if (p) {
+        targetPlayerId = p.player.id;
+        targetTeamId = p.teamId;
+      }
+    }
+    else if (text.includes("card")) {
+      detectedType = 'card';
+      if (text.includes("yellow")) cardColor = 'yellow';
+      else if (text.includes("red")) cardColor = 'red';
+      else if (text.includes("blue")) cardColor = 'blue';
+
+      const playerQuery = text
+        .replace("card", "")
+        .replace("yellow", "")
+        .replace("red", "")
+        .replace("blue", "")
+        .replace("home", "")
+        .replace("away", "")
+        .trim();
+      const p = findRosterPlayer(playerQuery, targetTeamId);
+      if (p) {
+        targetPlayerId = p.player.id;
+        targetTeamId = p.teamId;
+      }
+    }
+    else if (text.startsWith("foul") || text.includes("fouled")) {
+      detectedType = 'foul';
+      const playerQuery = text
+        .replace("foul", "")
+        .replace("fouled", "")
+        .replace("home", "")
+        .replace("away", "")
+        .trim();
+      const p = findRosterPlayer(playerQuery, targetTeamId);
+      if (p) {
+        targetPlayerId = p.player.id;
+        targetTeamId = p.teamId;
+      }
+    }
+    else if (text.startsWith("sub") || text.includes("substitution") || text.includes("replace")) {
+      detectedType = 'sub_out';
+      let inQuery = '';
+      let outQuery = '';
+
+      if (text.includes("in for")) {
+        const parts = text.split("in for");
+        inQuery = parts[0].replace("sub", "").replace("in", "").replace("out", "").trim();
+        outQuery = parts[1].trim();
+      } else if (text.includes("for")) {
+        const parts = text.split("for");
+        inQuery = parts[0].replace("sub", "").replace("in", "").replace("out", "").trim();
+        outQuery = parts[1].trim();
+      } else if (text.includes("replace")) {
+        const parts = text.split("with");
+        outQuery = parts[0].replace("replace", "").trim();
+        inQuery = parts[1].trim();
+      }
+
+      const outPlayer = findRosterPlayer(outQuery, targetTeamId);
+      const inPlayer = findRosterPlayer(inQuery, targetTeamId);
+
+      if (outPlayer) {
+        targetPlayerId = outPlayer.player.id;
+        targetTeamId = outPlayer.teamId;
+      }
+      if (inPlayer) {
+        subPlayerId = inPlayer.player.id;
+        if (!targetTeamId) targetTeamId = inPlayer.teamId;
       }
     }
 
-    // Fallback: Local Regex Parser
-    const parsedLocal = parseNlpCommandLocal(text);
-    await executeParsedNlpAction(parsedLocal, text);
+    if (!detectedType) {
+      setVoiceStatusMessage(`Could not recognize event type from: "${commandText}"`);
+      return;
+    }
+
+    const inferredTeam = targetTeamId || currentGame.homeTeamId;
+
+    const newDraft: DraftEvent = {
+      id: crypto.randomUUID(),
+      type: detectedType,
+      videoTime: vTime,
+      gameTime: gameTime,
+      teamId: inferredTeam,
+      playerId: targetPlayerId || null,
+      relatedEventId: null,
+      assistedByPlayerId: assistedByPlayerId || null,
+      position: null,
+      subPlayerId: subPlayerId || null,
+      color: cardColor || null
+    };
+
+    setDraftEvents(prev => [newDraft, ...prev]);
+    setVoiceStatusMessage(`Staged: ${detectedType.toUpperCase()} at ${formatTime(vTime)}!`);
+    toast.success(`Staged ${detectedType.toUpperCase()} event!`);
   };
 
   const toggleSpeechRecognition = () => {
@@ -7086,222 +6920,6 @@ Respond strictly in JSON format matching the schema below:
     }
   };
 
-  const handleRegeneratePossessionPins = async () => {
-    if (!user || effectiveRole === 'voter' || !currentVideo) return;
-
-    try {
-      const gameEventsRef = doc(db, 'gameEvents', currentVideo.gameId);
-      const docSnap = await getDoc(gameEventsRef);
-      if (!docSnap.exists()) {
-        toast.error("No events found for this game");
-        return;
-      }
-
-      const data = docSnap.data();
-      const currentEvents = (data.events || []) as GameEvent[];
-      const currentMarkers = (data.possessionMarkers || []) as PossessionMarker[];
-
-      // 1. Filter out user's existing placeholders in events (including legacy placeholder_possession)
-      const finalEvents = currentEvents.filter(
-        e => !(e.type.startsWith('placeholder_') && e.userId === user.uid)
-      );
-
-      // 2. Filter out user's existing possession markers
-      const otherMarkers = currentMarkers.filter(m => m.userId !== user.uid);
-
-      // 3. Scan events to detect transitions and explicit possession ends
-      const possTypes = ['goal', 'shot', 'attempt', 'turnover', 'miss_ko'];
-      const videoEvents = finalEvents
-        .filter(e => e.videoId === currentVideo.id && e.type && possTypes.includes(e.type))
-        .sort((a, b) => a.videoTime - b.videoTime);
-
-      const newMarkers: PossessionMarker[] = [];
-      let lastTeamId: string | null = null;
-      let lastType: string | null = null;
-      let lastTime: number = 0;
-
-      for (const e of videoEvents) {
-        if (!e.teamId) continue;
-
-        // If the team changed, a transition occurred.
-        if (lastTeamId && lastTeamId !== e.teamId) {
-          if (lastType === 'shot' || lastType === 'attempt' || lastType === 'miss_ko') {
-            newMarkers.push({
-              id: crypto.randomUUID(),
-              videoId: currentVideo.id,
-              gameId: currentVideo.gameId,
-              userId: user.uid,
-              userName: user.displayName || 'Anonymous',
-              videoTime: lastTime + 1,
-              createdAt: new Date().toISOString()
-            });
-          }
-        }
-
-        // Explicit possession ends
-        if (e.type === 'goal' || e.type === 'turnover') {
-          newMarkers.push({
-            id: crypto.randomUUID(),
-            videoId: currentVideo.id,
-            gameId: currentVideo.gameId,
-            userId: user.uid,
-            userName: user.displayName || 'Anonymous',
-            videoTime: e.videoTime + 1,
-            createdAt: new Date().toISOString()
-          });
-        }
-
-        lastTeamId = e.teamId;
-        lastType = e.type;
-        lastTime = e.videoTime;
-      }
-
-      // 4. Generate missing control placeholders (still placeholder events)
-      const newControlPlaceholders: GameEvent[] = [];
-      const controlTypes = ['control_change', 'control_start'];
-      const controlEvents = finalEvents
-        .filter(e => e.videoId === currentVideo.id && e.type && controlTypes.includes(e.type))
-        .sort((a, b) => a.videoTime - b.videoTime);
-
-      let lastControlTeamId: string | null = null;
-      let lastControlTime: number = 0;
-
-      for (const e of controlEvents) {
-        if (!e.teamId) continue;
-
-        if (lastControlTeamId && lastControlTeamId === e.teamId) {
-          const midTime = (lastControlTime + e.videoTime) / 2;
-          newControlPlaceholders.push({
-            id: crypto.randomUUID(),
-            videoId: currentVideo.id,
-            gameId: currentVideo.gameId,
-            userId: user.uid,
-            userName: user.displayName || 'Anonymous',
-            type: 'placeholder_control',
-            videoTime: midTime,
-            createdAt: new Date().toISOString(),
-            votes: 0,
-            upvotes: 0,
-            downvotes: 0,
-            upvoterIds: [],
-            downvoterIds: [],
-            status: 'unverified',
-            playerId: null,
-            teamId: null,
-            subPlayerId: null,
-            relatedEventId: null,
-            position: null
-          });
-        }
-        lastControlTeamId = e.teamId;
-        lastControlTime = e.videoTime;
-      }
-
-      // 5. Write back to Firestore
-      const updatedEvents = [...finalEvents, ...newControlPlaceholders];
-      const updatedMarkers = [...otherMarkers, ...newMarkers];
-
-      await updateDoc(gameEventsRef, { 
-        events: updatedEvents,
-        possessionMarkers: updatedMarkers
-      });
-
-      toast.success(`Successfully scanned: Generated ${newMarkers.length} Possession Markers and ${newControlPlaceholders.length} Control Placeholders!`);
-
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `gameEvents/${currentVideo.gameId}`);
-    }
-  };
-
-  const handleExpandPlaceholder = (event: GameEvent) => {
-    setExpandedPlaceholderId(event.id);
-    let mappedType: EventType = 'goal';
-    if (event.tempType) mappedType = event.tempType;
-    else if (event.type === 'placeholder_goal') mappedType = 'goal';
-    else if (event.type === 'placeholder_shot') mappedType = 'shot';
-    else if (event.type === 'placeholder_possession') mappedType = 'turnover';
-    else if (event.type === 'placeholder_control') mappedType = 'control_change';
-    else if (event.type === 'placeholder_sub') mappedType = 'sub_in';
-    else if (event.type === 'placeholder_general') mappedType = 'foul';
-
-    setTempType(mappedType);
-    setTempTeamId(event.teamId || null);
-    setTempPlayerId(event.playerId || null);
-    setTempAssistedByPlayerId(event.relatedEventId ? events.find(ev => ev.id === event.relatedEventId)?.playerId || null : null);
-    setTempPosition((event.position as PositionType) || null);
-    setTempSubPlayerId(event.subPlayerId || null);
-    setTempVideoTime(event.videoTime);
-  };
-
-  const handleSavePlaceholderConversion = async (eventId: string) => {
-    if (!currentVideo || !user || !tempType) return;
-
-    try {
-      const gameRef = doc(db, 'gameEvents', currentVideo.gameId);
-      const docSnap = await getDoc(gameRef);
-      if (!docSnap.exists()) return;
-
-      const currentEvents = docSnap.data().events as GameEvent[] || [];
-      const eventIndex = currentEvents.findIndex(e => e.id === eventId);
-      if (eventIndex === -1) return;
-
-      const currentPlaceholder = currentEvents[eventIndex];
-
-      const updatedEvent: GameEvent = {
-        ...currentPlaceholder,
-        type: tempType,
-        teamId: tempTeamId || null,
-        playerId: tempPlayerId || null,
-        subPlayerId: tempSubPlayerId || null,
-        position: tempPosition || null,
-        videoTime: tempVideoTime,
-        status: 'unverified',
-        createdAt: new Date().toISOString()
-      };
-
-      let secondaryEvent: GameEvent | null = null;
-      if (tempType === 'goal' && tempAssistedByPlayerId) {
-        const assistId = crypto.randomUUID();
-        secondaryEvent = {
-          id: assistId,
-          videoId: currentVideo.id,
-          gameId: currentVideo.gameId,
-          userId: user.uid,
-          userName: user.displayName || 'Anonymous',
-          type: 'assist',
-          videoTime: tempVideoTime,
-          createdAt: new Date().toISOString(),
-          votes: 0,
-          upvotes: 0,
-          downvotes: 0,
-          upvoterIds: [],
-          downvoterIds: [],
-          status: 'unverified',
-          playerId: tempAssistedByPlayerId,
-          teamId: tempTeamId || null,
-          subPlayerId: null,
-          relatedEventId: eventId,
-          position: null
-        };
-
-        updatedEvent.relatedEventId = assistId;
-      }
-
-      const newEventsList = currentEvents.map(e => e.id === eventId ? updatedEvent : e);
-      if (secondaryEvent) {
-        newEventsList.push(secondaryEvent);
-      }
-
-      await updateDoc(gameRef, { events: newEventsList });
-      setExpandedPlaceholderId(null);
-      toast.success("Placeholder successfully converted to official event!");
-
-    } catch (err) {
-      console.error(err);
-      toast.error("Failed to convert placeholder event");
-    }
-  };
-
   const handleSaveDraftEvent = (draft: DraftEvent, chainNext: boolean = false) => {
     if (!draft.type) {
       toast.error("Please select an event type");
@@ -7317,13 +6935,23 @@ Respond strictly in JSON format matching the schema below:
       const lastControlEvent = pastControlEvents[0];
       if (lastControlEvent && lastControlEvent.teamId === draft.teamId) {
         const midTime = (lastControlEvent.videoTime + draft.videoTime) / 2;
-        handleAddEvent('placeholder_control', undefined, undefined, undefined, null, null, midTime);
-        toast.info("Dropped a placeholder for missing control transition");
+        setPins(prev => [...prev, {
+          id: crypto.randomUUID(),
+          videoId: currentVideo.id,
+          time: midTime,
+          type: 'control'
+        }]);
+        toast.info("Dropped a pin for missing control transition");
       }
     }
 
     if ((draft.type === 'goal' || draft.type === 'turnover') && currentVideo) {
-      handleCreatePossessionMarker(draft.videoTime + 1);
+      setPins(prev => [...prev, {
+        id: crypto.randomUUID(),
+        videoId: currentVideo.id,
+        time: draft.videoTime + 1,
+        type: 'possession'
+      }]);
     }
 
     const possTypes = ['goal', 'shot', 'attempt', 'turnover', 'miss_ko'];
@@ -7339,8 +6967,13 @@ Respond strictly in JSON format matching the schema below:
       if (lastPossEvent && lastPossEvent.teamId && lastPossEvent.teamId !== draft.teamId) {
         // If the transition wasn't already pinned by a goal or turnover, pin it now.
         if (lastPossEvent.type === 'shot' || lastPossEvent.type === 'attempt' || lastPossEvent.type === 'miss_ko') {
-          handleCreatePossessionMarker(lastPossEvent.videoTime + 1);
-          toast.info("Dropped a possession marker for missing possession transition");
+          setPins(prev => [...prev, {
+            id: crypto.randomUUID(),
+            videoId: currentVideo.id,
+            time: lastPossEvent.videoTime + 1, // +1 second so it doesn't perfectly overlap the shot
+            type: 'possession'
+          }]);
+          toast.info("Dropped a pin for missing possession transition");
         }
       }
     }
@@ -8455,158 +8088,6 @@ Respond strictly in JSON format matching the schema below:
     return active;
   }, [manualActivePlayerIds, activeTrackingEvents, currentTime]);
 
-  const getSortedRosterForQuickRecord = (teamId: string | null) => {
-    if (!currentGame || !teamId) return [];
-    const roster = teamId === currentGame.homeTeamId ? homeRosterPlayers : awayRosterPlayers;
-    const order = { chaser: 1, keeper: 2, beater: 3, seeker: 4 } as Record<string, number>;
-    return [...roster].sort((a, b) => {
-      const posA = activePlayerPositions.get(a.playerId) || 'chaser';
-      const posB = activePlayerPositions.get(b.playerId) || 'chaser';
-      return (order[posA] || 99) - (order[posB] || 99) || (a.player?.lastName || '').localeCompare(b.player?.lastName || '');
-    });
-  };
-
-  // Temps Tab Global Keyboard Event Listener Hook (Hotkeys)
-  useEffect(() => {
-    if (rightPanelTab !== 'temps') return;
-
-    const handleTempsKeyDown = (e: KeyboardEvent) => {
-      // 1. Skip if the user is actively typing in an input/textarea/select field
-      const activeEl = document.activeElement;
-      if (activeEl) {
-        const tagName = activeEl.tagName.toUpperCase();
-        if (tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT' || activeEl.getAttribute('contenteditable') === 'true') {
-          return;
-        }
-      }
-
-      // 2. Handle key presses when Quick Record prompt is NOT open
-      if (!quickRecordState) {
-        const key = e.key.toLowerCase();
-        if (key === 'p') {
-          e.preventDefault();
-          handleCreatePossessionMarker();
-        } else if (['a', 's', 'd', 'c', 'e', 't'].includes(key)) {
-          e.preventDefault();
-          const videoTime = player ? player.getCurrentTime() : 0;
-          let type: 'goal' | 'shot' | 'sub_in' | 'control_change' | 'turnover' = 'goal';
-          if (key === 'a') type = 'goal';
-          else if (key === 's') type = 'shot';
-          else if (key === 'd') type = 'turnover';
-          else if (key === 'c') type = 'control_change';
-          else if (key === 'e') type = 'sub_in';
-          else if (key === 't') type = 'turnover';
-
-          setQuickRecordState({
-            type,
-            videoTime,
-            teamId: null,
-            playerId: null,
-            position: type === 'sub_in' ? 'chaser' : null,
-            subPlayerId: null,
-            assistedByPlayerId: null
-          });
-        }
-        return;
-      }
-
-      // 3. Handle key presses when Quick Record prompt IS open
-      const key = e.key.toLowerCase();
-
-      // Escape -> Cancel
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        setQuickRecordState(null);
-        return;
-      }
-
-      // Enter -> Add temp event to the queue
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        const { type, videoTime, teamId, playerId, position, subPlayerId, assistedByPlayerId } = quickRecordState;
-
-        // Map to corresponding placeholder event type
-        let placeholderType: EventType = 'placeholder_general';
-        if (type === 'goal') placeholderType = 'placeholder_goal';
-        else if (type === 'shot') placeholderType = 'placeholder_shot';
-        else if (type === 'sub_in') placeholderType = 'placeholder_sub';
-        else if (type === 'control_change') placeholderType = 'placeholder_control';
-        else if (type === 'turnover') placeholderType = 'placeholder_general';
-
-        // Add placeholder event to database.
-        // We persist tempType on the event to remember if it was a goal intent
-        const eventId = crypto.randomUUID();
-        if (user && currentVideo) {
-          const eventData = {
-            id: eventId,
-            videoId: currentVideo.id,
-            gameId: currentVideo.gameId,
-            userId: user.uid,
-            userName: user.displayName || 'Anonymous',
-            type: placeholderType,
-            videoTime,
-            createdAt: new Date().toISOString(),
-            votes: 0,
-            upvotes: 0,
-            downvotes: 0,
-            upvoterIds: [],
-            downvoterIds: [],
-            status: 'unverified' as const,
-            playerId: playerId || null,
-            teamId: teamId || null,
-            subPlayerId: subPlayerId || null,
-            relatedEventId: null,
-            position: position || null,
-            tempType: type // Stores 'goal', 'shot', etc.
-          };
-
-          const gameEventsRef = doc(db, 'gameEvents', currentVideo.gameId);
-          setDoc(gameEventsRef, {
-            events: arrayUnion(eventData)
-          }, { merge: true })
-            .then(() => {
-              toast.success(`Temp event queued at ${formatTime(videoTime)}`);
-            })
-            .catch(err => {
-              console.error(err);
-              toast.error("Failed to queue temp event");
-            });
-        }
-
-        setQuickRecordState(null);
-        return;
-      }
-
-      // Select Team: H or 1 for Home, A or 2 for Away
-      if (key === 'h' || key === '1') {
-        e.preventDefault();
-        setQuickRecordState(prev => prev ? { ...prev, teamId: currentGame?.homeTeamId || null, playerId: null } : null);
-        return;
-      }
-      if (key === 'a' || key === '2') {
-        e.preventDefault();
-        setQuickRecordState(prev => prev ? { ...prev, teamId: currentGame?.awayTeamId || null, playerId: null } : null);
-        return;
-      }
-
-      // Select Player via QWERTY keyboard shortcuts: q, w, e, r, t, y, u, i
-      const rosterKeys = ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i'];
-      if (rosterKeys.includes(key) && quickRecordState.teamId) {
-        e.preventDefault();
-        const sortedRoster = getSortedRosterForQuickRecord(quickRecordState.teamId);
-        const idx = rosterKeys.indexOf(key);
-        if (sortedRoster[idx]) {
-          setQuickRecordState(prev => prev ? { ...prev, playerId: sortedRoster[idx].playerId } : null);
-        }
-      }
-    };
-
-    window.addEventListener('keydown', handleTempsKeyDown);
-    return () => {
-      window.removeEventListener('keydown', handleTempsKeyDown);
-    };
-  }, [rightPanelTab, quickRecordState, currentGame, homeRosterPlayers, awayRosterPlayers, activePlayerPositions, player, user, currentVideo]);
-
   if (!isAuthReady) return <div className="min-h-screen bg-white flex items-center justify-center text-gray-900">Loading...</div>;
   if (!user && !hasSeenLanding) return <LandingHero onProceed={() => { handleBypassLanding(); setView('stats'); }} onSignIn={() => handleBypassLanding()} />;
 
@@ -9318,86 +8799,6 @@ Respond strictly in JSON format matching the schema below:
                 })()}
               </div>
 
-              {/* Premium Visual Timeline Scrub Bar with Markers */}
-              {player && videoDuration > 0 && (
-                <div className="w-full bg-slate-900 border border-slate-800 rounded-xl p-2.5 mt-1.5 shadow-lg select-none relative overflow-hidden group">
-                  <div className="flex items-center justify-between mb-1.5">
-                    <span className="text-[8px] font-black uppercase tracking-wider text-purple-400">Interactive Game Timeline</span>
-                    <span className="text-[8px] font-mono text-slate-400">
-                      Markers: {possessionMarkers.length} Possession • {events.length} Events
-                    </span>
-                  </div>
-                  
-                  {/* Timeline Track */}
-                  <div 
-                    onClick={(e) => {
-                      const rect = e.currentTarget.getBoundingClientRect();
-                      const clickX = e.clientX - rect.left;
-                      const percentage = clickX / rect.width;
-                      const targetSeekTime = percentage * videoDuration;
-                      player?.seekTo(targetSeekTime);
-                    }}
-                    className="h-3 bg-slate-850 rounded-full cursor-pointer relative border border-slate-800 shadow-inner hover:bg-slate-800 transition-colors"
-                  >
-                    {/* Active Time Proportional Bar */}
-                    <div 
-                      className="h-full bg-purple-600/30 rounded-full transition-all duration-300 pointer-events-none"
-                      style={{ width: `${(currentTime / videoDuration) * 100}%` }}
-                    />
-                    
-                    {/* Current Scrubber Head */}
-                    <div 
-                      className="absolute top-1/2 -translate-y-1/2 -ml-1 w-2.5 h-2.5 bg-yellow-400 border border-slate-950 rounded-full shadow shadow-yellow-400/50 transition-all pointer-events-none"
-                      style={{ left: `${(currentTime / videoDuration) * 100}%` }}
-                    />
-
-                    {/* Possession Markers ticks */}
-                    {possessionMarkers.map(marker => {
-                      const pct = (marker.videoTime / videoDuration) * 100;
-                      if (pct < 0 || pct > 100) return null;
-                      return (
-                        <div
-                          key={marker.id}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            player?.seekTo(marker.videoTime);
-                            toast.info(`Seeked to Possession Change at ${formatTime(marker.videoTime)}`);
-                          }}
-                          className="absolute top-0 bottom-0 w-0.5 bg-emerald-400 hover:bg-emerald-300 hover:scale-x-150 transition-all cursor-pointer shadow-[0_0_4px_theme(colors.emerald.400)]"
-                          style={{ left: `${pct}%` }}
-                          title={`Possession Change: ${formatTime(marker.videoTime)}`}
-                        />
-                      );
-                    })}
-
-                    {/* Regular Events dots */}
-                    {events.map(ev => {
-                      const pct = (ev.videoTime / videoDuration) * 100;
-                      if (pct < 0 || pct > 100 || ev.type.startsWith('placeholder_')) return null;
-                      
-                      // Highlight goals and cards differently
-                      let color = 'bg-purple-500';
-                      if (ev.type === 'goal') color = 'bg-yellow-400';
-                      else if (ev.type === 'card') color = 'bg-red-500';
-                      else if (ev.type === 'shot') color = 'bg-orange-500';
-
-                      return (
-                        <div
-                          key={ev.id}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            player?.seekTo(ev.videoTime);
-                          }}
-                          className={cn("absolute top-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full cursor-pointer hover:scale-150 transition-all", color)}
-                          style={{ left: `${pct}%` }}
-                          title={`${ev.type.toUpperCase()}: ${formatTime(ev.videoTime)}`}
-                        />
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
               {/* Controls and Scoreboard Row */}
               {(() => {
                 const renderScrubControls = () => (
@@ -9512,29 +8913,15 @@ Respond strictly in JSON format matching the schema below:
                     </button>
                     {user && effectiveRole !== 'voter' && (
                       <button
-                        onClick={() => setRightPanelTab('temps')}
-                        className={cn("flex-1 px-4 py-3 text-sm font-bold flex items-center justify-center gap-2 transition-colors relative border-b-2", rightPanelTab === 'temps' ? "bg-white text-purple-600 border-purple-600" : "text-gray-500 hover:text-gray-700 hover:bg-gray-100 border-transparent")}
-                      >
-                        <MapPin className="w-4 h-4 text-purple-500" /> Temps
-                        {(() => {
-                          const tempCount = events.filter(e => e.type.startsWith('placeholder_') && e.userId === user?.uid).length;
-                          return tempCount > 0 ? (
-                            <span className="absolute top-2 right-2 flex min-w-4 h-4 items-center justify-center bg-purple-50 text-white text-[9px] font-bold rounded-full px-1">
-                              {tempCount}
-                            </span>
-                          ) : null;
-                        })()}
-                      </button>
-                    )}
-                    {user && effectiveRole !== 'voter' && draftEvents.length > 0 && (
-                      <button
                         onClick={() => setRightPanelTab('record')}
-                        className={cn("flex-1 px-4 py-3 text-sm font-bold flex items-center justify-center gap-2 transition-colors relative border-b-2 animate-pulse", (rightPanelTab as string) === 'record' ? "bg-white text-emerald-600 border-emerald-600" : "text-gray-500 hover:text-gray-700 hover:bg-gray-100 border-transparent")}
+                        className={cn("flex-1 px-4 py-3 text-sm font-bold flex items-center justify-center gap-2 transition-colors relative", rightPanelTab === 'record' ? "bg-white text-emerald-600 border-b-2 border-emerald-600" : "text-gray-500 hover:text-gray-700 hover:bg-gray-100")}
                       >
                         <UploadCloud className="w-4 h-4" /> Record
-                        <span className="absolute top-2 right-2 flex min-w-4 h-4 items-center justify-center bg-emerald-500 text-white text-[9px] font-bold rounded-full px-1">
-                          {draftEvents.length}
-                        </span>
+                        {draftEvents.length > 0 && (
+                          <span className="absolute top-2 right-2 flex min-w-4 h-4 items-center justify-center bg-emerald-500 text-white text-[9px] font-bold rounded-full px-1">
+                            {draftEvents.length}
+                          </span>
+                        )}
                       </button>
                     )}
                     <button
@@ -9579,15 +8966,13 @@ Respond strictly in JSON format matching the schema below:
                             <SkipForward className="w-3 h-3" />
                             Now
                           </button>
-                          {user && effectiveRole !== 'voter' && (
-                            <button
-                              onClick={handleRegeneratePossessionPins}
-                              className="flex items-center gap-1 px-2 py-1 rounded transition-all border bg-white text-purple-500 border-purple-200 hover:text-purple-700 hover:border-purple-400 shadow-sm"
-                              title="Regenerate auto-placeholders (possession & control) for the current video"
-                            >
-                              <RefreshCcw className="w-3 h-3" />
-                            </button>
-                          )}
+                          <button
+                            onClick={handleRegeneratePossessionPins}
+                            className="flex items-center gap-1 px-2 py-1 rounded transition-all border bg-white text-purple-500 border-purple-200 hover:text-purple-700 hover:border-purple-400 shadow-sm"
+                            title="Regenerate auto-pins (possession & control) for the current video"
+                          >
+                            <RefreshCcw className="w-3 h-3" />
+                          </button>
                         </div>
                         <div className="flex items-center gap-1.5">
                           <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mr-1">
@@ -9649,46 +9034,42 @@ Respond strictly in JSON format matching the schema below:
                     </div>
                     <div className="space-y-4">
                     {(() => {
-                      const displayEvents = [
-                        ...activeTrackingEvents.map(e => ({ ...e, isPossessionMarker: false as const })),
-                        ...possessionMarkers.map(m => ({ ...m, type: 'possession_marker' as const, isPossessionMarker: true as const }))
-                      ].sort((a,b) => a.videoTime - b.videoTime);
+                      const pinEvents = pins.filter(p => p.videoId === currentVideo?.id).map(p => ({
+                        id: p.id,
+                        type: `pin_${p.type}`,
+                        videoTime: p.time,
+                        gameTime: 0,
+                        teamId: null,
+                        playerId: null,
+                        status: 'recorded'
+                      } as any));
+                      let displayEvents = [...activeTrackingEvents, ...pinEvents].sort((a,b) => a.videoTime - b.videoTime);
                       
-                      // Hide placeholders if they don't belong to the current user
-                      let filteredDisplayEvents = displayEvents.filter((e: any) => {
-                        if (e.isPossessionMarker) return true;
-                        if (e.type.startsWith('placeholder_') && e.userId !== user?.uid) return false;
-                        return true;
-                      });
-
                       if (statsFilter.startsWith('verified')) {
-                        filteredDisplayEvents = filteredDisplayEvents.filter((e: any) => e.isPossessionMarker || e.status === 'verified' || e.type.startsWith('placeholder_'));
+                        displayEvents = displayEvents.filter(e => e.status === 'verified' || e.type.startsWith('pin_'));
                       }
 
                       switch (eventsFilterSet) {
                         case 'all_no_subs':
-                          filteredDisplayEvents = filteredDisplayEvents.filter((e: any) => e.isPossessionMarker || ((e.type !== 'sub_in' && e.type !== 'sub_out') || e.type.startsWith('placeholder_')));
+                          displayEvents = displayEvents.filter(e => (e.type !== 'sub_in' && e.type !== 'sub_out') || e.type.startsWith('pin_'));
                           break;
                         case 'home_focused':
-                          filteredDisplayEvents = filteredDisplayEvents.filter((e: any) => 
-                            e.isPossessionMarker ||
-                            e.type.startsWith('placeholder_') || 
+                          displayEvents = displayEvents.filter(e => 
+                            e.type.startsWith('pin_') || 
                             e.teamId === currentGame?.homeTeamId || 
                             (e.teamId === currentGame?.awayTeamId && e.type === 'goal')
                           );
                           break;
                         case 'away_focused':
-                          filteredDisplayEvents = filteredDisplayEvents.filter((e: any) => 
-                            e.isPossessionMarker ||
-                            e.type.startsWith('placeholder_') || 
+                          displayEvents = displayEvents.filter(e => 
+                            e.type.startsWith('pin_') || 
                             e.teamId === currentGame?.awayTeamId || 
                             (e.teamId === currentGame?.homeTeamId && e.type === 'goal')
                           );
                           break;
                         case 'possession_scoring':
-                          filteredDisplayEvents = filteredDisplayEvents.filter((e: any) => 
-                            e.isPossessionMarker ||
-                            e.type.startsWith('placeholder_') || 
+                          displayEvents = displayEvents.filter(e => 
+                            e.type.startsWith('pin_') || 
                             ['goal', 'assist', 'shot', 'attempt', 'miss_ko', 'turnover', 'control_change', 'control_start'].includes(e.type)
                           );
                           break;
@@ -9698,39 +9079,44 @@ Respond strictly in JSON format matching the schema below:
                           break;
                       }
 
-                      return filteredDisplayEvents.length === 0 ? (
+
+
+                      return displayEvents.length === 0 ? (
                         <div className="h-full flex flex-col items-center justify-center text-gray-400 text-center p-8">
                           <Clock className="w-12 h-12 mb-4 opacity-20" />
                           <p>{statsFilter.startsWith('verified') ? 'No verified events yet.' : 'No events recorded yet.'}</p>
                           <p className="text-sm">{statsFilter.startsWith('verified') ? 'Switch to All to see unverified events.' : 'Be the first to track a goal!'}</p>
                         </div>
                       ) : (
-                        filteredDisplayEvents.slice().reverse().map((evt) => {
-                          const event = evt as any;
-                          if (event.isPossessionMarker) {
+                        displayEvents.slice().reverse().map((event) => {
+                          const isPin = event.type.startsWith('pin_');
+                          if (isPin) {
+                            const pinType = event.type.replace('pin_', '');
+                            let colorClass = "bg-gray-400 text-white";
+                            let lineClass = "bg-gray-400";
+                            if (pinType === 'control') { colorClass = "bg-black text-white"; lineClass = "bg-black"; }
+                            else if (pinType === 'general') { colorClass = "bg-yellow-400 text-yellow-900"; lineClass = "bg-yellow-400"; }
+                            else if (pinType === 'possession') { colorClass = "bg-purple-600 text-white"; lineClass = "bg-purple-600"; }
+                            else if (pinType === 'sub') { colorClass = "bg-cyan-600 text-white"; lineClass = "bg-cyan-600"; }
+
                             return (
-                              <div key={event.id} data-event-time={event.videoTime} className="flex items-center my-2 select-none group animate-in fade-in duration-200">
-                                <div className="flex-1 border-t-2 border-purple-200/60"></div>
-                                <div className="mx-2 flex items-center gap-1.5 px-2.5 py-0.5 bg-purple-50 border border-purple-200 text-purple-700 font-mono text-[9px] font-black rounded-full shadow-sm uppercase tracking-wider relative flex items-center shrink-0">
-                                  <span>POSSESSION CHANGE ({formatTime(event.videoTime)})</span>
-                                  <button
-                                    onClick={() => player?.seekTo(event.videoTime)}
-                                    className="p-0.5 text-purple-500 hover:text-purple-700 rounded transition-colors"
-                                    title="Seek to Marker"
-                                  >
-                                    <SkipForward className="w-3 h-3" />
-                                  </button>
-                                  {(isAdmin || event.userId === user?.uid) && (
-                                    <button
-                                      onClick={() => { if (window.confirm('Delete this Possession Marker permanently?')) handleDeletePossessionMarker(event.id) }}
-                                      className="p-0.5 text-purple-400 hover:text-red-500 rounded transition-colors"
-                                      title="Delete Marker"
-                                    >
-                                      <Trash2 className="w-3 h-3" />
-                                    </button>
-                                  )}
-                                </div>
-                                <div className="flex-1 border-t-2 border-purple-200/60"></div>
+                              <div key={event.id} className="flex items-center gap-1.5 group w-full py-1 relative">
+                                <div className={`flex-1 h-[2px] ${lineClass} opacity-30 group-hover:opacity-100 transition-opacity`}></div>
+                                <button 
+                                  onClick={() => player?.seekTo(event.videoTime)}
+                                  className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider ${colorClass} hover:opacity-80 transition-opacity flex items-center gap-1 shadow-sm shrink-0`}
+                                >
+                                  <MapPin className="w-2.5 h-2.5" />
+                                  {pinType} @ {formatTime(event.videoTime)}
+                                </button>
+                                <button 
+                                  onClick={(e) => { e.stopPropagation(); setPins(prev => prev.filter(pin => pin.id !== event.id)); }} 
+                                  className="text-gray-400 hover:text-red-500 transition-colors p-0.5 opacity-0 group-hover:opacity-100 shrink-0" 
+                                  title="Dismiss Pin"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                                <div className={`flex-1 h-[2px] ${lineClass} opacity-30 group-hover:opacity-100 transition-opacity`}></div>
                               </div>
                             );
                           }
@@ -9743,7 +9129,6 @@ Respond strictly in JSON format matching the schema below:
                               data-event-time={event.videoTime}
                               className={cn(
                                 "group border rounded-xl p-3 transition-all",
-                                event.type.startsWith('placeholder_') ? "bg-slate-50/85 border-dashed border-slate-300 hover:border-slate-400 text-slate-600" :
                                 event.teamId === currentGame?.homeTeamId ? "bg-red-50/50 border-red-100 hover:border-red-200" :
                                   event.teamId === currentGame?.awayTeamId ? "bg-blue-50/50 border-blue-100 hover:border-blue-200" :
                                     "bg-white border-gray-200 hover:border-gray-300",
@@ -9913,7 +9298,7 @@ Respond strictly in JSON format matching the schema below:
                     </div>
                   </div>
 
-                  <div className={cn(isExpandedLayout ? "flex flex-col h-full relative" : "absolute inset-0", (rightPanelTab === 'record' || (isExpandedLayout && (rightPanelTab as string) === 'record')) ? "block" : "hidden", "overflow-y-auto custom-scrollbar p-4 bg-white")}>
+                  <div className={cn(isExpandedLayout ? "flex flex-col h-full relative" : "absolute inset-0", (rightPanelTab === 'record' || isExpandedLayout) ? "block" : "hidden", "overflow-y-auto custom-scrollbar p-4 bg-white")}>
 
                     {/* Voice & NLP Event Logger (Hidden for production deploy) */}
                     {/*
@@ -10043,17 +9428,15 @@ Respond strictly in JSON format matching the schema below:
                         </div>
                       </div>
 
-                      {/* Quick Placeholders UI */}
+                      {/* Drop Pins UI */}
                       {player && currentVideo && (
                         <div className="flex flex-col gap-1.5 mt-1">
-                          <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Quick Placeholders</span>
-                          <div className="grid grid-cols-3 gap-1.5">
-                            <button onClick={() => handleAddEvent('placeholder_goal', undefined, undefined, undefined, null, null, player.getCurrentTime())} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-gray-200 hover:border-gray-500 hover:bg-gray-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[9px] uppercase font-bold tracking-tight text-gray-700">[A] Goal</span></button>
-                            <button onClick={() => handleAddEvent('placeholder_shot', undefined, undefined, undefined, null, null, player.getCurrentTime())} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-gray-200 hover:border-gray-500 hover:bg-gray-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[9px] uppercase font-bold tracking-tight text-gray-700">[S] Miss</span></button>
-                            <button onClick={() => handleAddEvent('placeholder_general', undefined, undefined, undefined, null, null, player.getCurrentTime())} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-gray-200 hover:border-gray-500 hover:bg-gray-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[9px] uppercase font-bold tracking-tight text-gray-700">[D] TO</span></button>
-                            <button onClick={() => handleAddEvent('placeholder_control', undefined, undefined, undefined, null, null, player.getCurrentTime())} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-gray-200 hover:border-gray-500 hover:bg-gray-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[9px] uppercase font-bold tracking-tight text-gray-700">[C] Ctrl</span></button>
-                            <button onClick={() => handleAddEvent('placeholder_sub', undefined, undefined, undefined, null, null, player.getCurrentTime())} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-gray-200 hover:border-gray-500 hover:bg-gray-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[9px] uppercase font-bold tracking-tight text-gray-700">[E] Sub</span></button>
-                            <button onClick={() => handleAddEvent('placeholder_general', undefined, undefined, undefined, null, null, player.getCurrentTime())} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-gray-200 hover:border-gray-500 hover:bg-gray-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[9px] uppercase font-bold tracking-tight text-gray-700">[T] Gen</span></button>
+                          <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Drop Pin</span>
+                          <div className="grid grid-cols-4 gap-1.5">
+                            <button onClick={() => setPins(prev => [...prev, { id: crypto.randomUUID(), videoId: currentVideo.id, time: player.getCurrentTime(), type: 'sub' }])} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-yellow-200 hover:border-yellow-500 hover:bg-yellow-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[9px] uppercase font-bold tracking-tight text-yellow-700">Sub Pin</span></button>
+                            <button onClick={() => setPins(prev => [...prev, { id: crypto.randomUUID(), videoId: currentVideo.id, time: player.getCurrentTime(), type: 'control' }])} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-yellow-200 hover:border-yellow-500 hover:bg-yellow-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[9px] uppercase font-bold tracking-tight text-yellow-700">Ctrl Pin</span></button>
+                            <button onClick={() => setPins(prev => [...prev, { id: crypto.randomUUID(), videoId: currentVideo.id, time: player.getCurrentTime(), type: 'possession' }])} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-yellow-200 hover:border-yellow-500 hover:bg-yellow-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[9px] uppercase font-bold tracking-tight text-yellow-700">Poss Pin</span></button>
+                            <button onClick={() => setPins(prev => [...prev, { id: crypto.randomUUID(), videoId: currentVideo.id, time: player.getCurrentTime(), type: 'general' }])} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-yellow-200 hover:border-yellow-500 hover:bg-yellow-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[9px] uppercase font-bold tracking-tight text-yellow-700">Gen Pin</span></button>
                           </div>
                         </div>
                       )}
@@ -10369,609 +9752,6 @@ Respond strictly in JSON format matching the schema below:
 
                     {/* Vertical Event Thread Remapped to Screen Floor -> Empty placeholder rendering null as component was relocated natively globally component above! */}
 
-                  </div>
-
-                  <div className={cn(isExpandedLayout ? "flex flex-col h-full relative" : "absolute inset-0", (rightPanelTab === 'temps' || (isExpandedLayout && (rightPanelTab as string) !== 'record')) ? "block" : "hidden", "overflow-y-auto custom-scrollbar p-4 bg-white")}>
-                    {user && currentVideo && (
-                      <>
-                        {/* Voice & NLP Assistant */}
-                        <div className="flex flex-col gap-1.5 p-3 bg-purple-50/45 border border-purple-100 rounded-xl mb-3 shadow-sm transition-all select-none">
-                          <div className="flex items-center justify-between">
-                            <span className="text-[10px] uppercase font-bold text-purple-600 tracking-wider pl-0.5">Voice & NLP Assistant</span>
-                            <span className="text-[8px] text-purple-400 bg-purple-100/60 px-1.5 py-0.5 rounded font-mono">Gemini AI</span>
-                          </div>
-                          
-                          <div className="relative flex items-center">
-                            <input
-                              type="text"
-                              value={voiceCommandText}
-                              onChange={(e) => setVoiceCommandText(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                  e.preventDefault();
-                                  if (voiceCommandText.trim()) {
-                                    parseNlpCommand(voiceCommandText);
-                                    setVoiceCommandText('');
-                                  }
-                                }
-                              }}
-                              placeholder='e.g. "goal home 7", "sub away John for Sarah", "possession"'
-                              className="w-full bg-white border border-purple-200 focus:border-purple-500 focus:ring-1 focus:ring-purple-500 rounded-lg pl-3 pr-9 py-1.5 text-xs outline-none transition-all placeholder-purple-300 text-purple-900"
-                            />
-                            <button
-                              onClick={toggleSpeechRecognition}
-                              className={cn(
-                                "absolute right-1 p-1 rounded-md transition-all active:scale-95 outline-none flex items-center justify-center",
-                                isListening
-                                  ? "bg-red-500 text-white animate-pulse"
-                                  : "text-purple-500 hover:bg-purple-100 hover:text-purple-700"
-                              )}
-                              title={isListening ? "Listening... click to stop" : "Use microphone to dictate"}
-                            >
-                              {isListening ? (
-                                <span className="flex h-3.5 w-3.5 items-center justify-center relative">
-                                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-                                  <svg className="w-3.5 h-3.5 relative" fill="currentColor" viewBox="0 0 24 24">
-                                    <path fillRule="evenodd" d="M12 2a3 3 0 00-3 3v7a3 3 0 006 0V5a3 3 0 00-3-3zM5 10a1 1 0 011 1 6 6 0 0012 0 1 1 0 112 0 8 8 0 01-7 7.93V21a1 1 0 11-2 0v-2.07A8 8 0 013 11a1 1 0 011-1z" clipRule="evenodd" />
-                                  </svg>
-                                </span>
-                              ) : (
-                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" />
-                                </svg>
-                              )}
-                            </button>
-                          </div>
-                          
-                          {voiceStatusMessage && (
-                            <div className="text-[9px] font-medium text-purple-700 bg-purple-50/80 rounded-md py-1.5 px-2.5 border border-purple-100 flex items-center justify-between gap-1.5 select-none animate-in fade-in duration-200">
-                              <span className="truncate">{voiceStatusMessage}</span>
-                              <button 
-                                onClick={() => setVoiceStatusMessage('')} 
-                                className="text-purple-400 hover:text-purple-600 font-bold shrink-0 pl-1"
-                              >
-                                Dismiss
-                              </button>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Sleek Quick-Record Keyboard Prompt */}
-                        {quickRecordState && (
-                          <div className="bg-purple-600 text-white border border-purple-500 p-4 rounded-2xl shadow-lg mb-4 animate-in slide-in-from-top-3 duration-200">
-                            <div className="flex items-center justify-between mb-2">
-                              <h4 className="text-xs font-black uppercase tracking-wider flex items-center gap-1.5 text-yellow-300">
-                                <Zap className="w-3.5 h-3.5 text-yellow-300 animate-bounce shrink-0" />
-                                Record: {quickRecordState.type.toUpperCase().replace('_', ' ')}
-                              </h4>
-                              <span className="text-[10px] font-mono bg-purple-700/80 px-2 py-0.5 rounded font-black tracking-widest text-yellow-300 shrink-0 shadow-inner">
-                                {formatTime(quickRecordState.videoTime)}
-                              </span>
-                            </div>
-
-                            {/* Team Selection Instructions */}
-                            <div className="mb-3 space-y-1.5">
-                              <span className="text-[9px] uppercase font-bold text-purple-200 block pl-0.5">1. Assign Team</span>
-                              <div className="flex gap-2">
-                                <button
-                                  onClick={() => setQuickRecordState(prev => prev ? { ...prev, teamId: currentGame?.homeTeamId || null, playerId: null } : null)}
-                                  className={cn(
-                                    "flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all border outline-none",
-                                    quickRecordState.teamId === currentGame?.homeTeamId
-                                      ? "bg-red-500 border-red-400 text-white shadow-md shadow-red-500/20"
-                                      : "bg-purple-700/50 border-purple-500 text-purple-100 hover:bg-purple-700"
-                                  )}
-                                >
-                                  {teams.find(t => t.id === currentGame?.homeTeamId)?.nickname || 'Home'} [H / 1]
-                                </button>
-                                <button
-                                  onClick={() => setQuickRecordState(prev => prev ? { ...prev, teamId: currentGame?.awayTeamId || null, playerId: null } : null)}
-                                  className={cn(
-                                    "flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all border outline-none",
-                                    quickRecordState.teamId === currentGame?.awayTeamId
-                                      ? "bg-blue-500 border-blue-400 text-white shadow-md shadow-blue-500/20"
-                                      : "bg-purple-700/50 border-purple-500 text-purple-100 hover:bg-purple-700"
-                                  )}
-                                >
-                                  {teams.find(t => t.id === currentGame?.awayTeamId)?.nickname || 'Away'} [A / 2]
-                                </button>
-                              </div>
-                            </div>
-
-                            {/* Player Selection instructions */}
-                            {quickRecordState.teamId ? (
-                              <div className="mb-3 space-y-1.5">
-                                <span className="text-[9px] uppercase font-bold text-purple-200 block pl-0.5">2. Select Player</span>
-                                <div className="grid grid-cols-2 gap-1.5 max-h-36 overflow-y-auto custom-scrollbar pr-1">
-                                  {(() => {
-                                    const sortedRoster = getSortedRosterForQuickRecord(quickRecordState.teamId);
-                                    const keys = ['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I'];
-                                    if (sortedRoster.length === 0) {
-                                      return <p className="text-[10px] text-purple-200 italic col-span-2 text-center py-2">Roster is empty.</p>;
-                                    }
-                                    return sortedRoster.map((rp, index) => {
-                                      const keyLabel = keys[index] ? `[${keys[index]}] ` : '';
-                                      const isSelected = quickRecordState.playerId === rp.playerId;
-                                      const pos = activePlayerPositions.get(rp.playerId) || 'bench';
-                                      return (
-                                        <button
-                                          key={rp.playerId}
-                                          onClick={() => setQuickRecordState(prev => prev ? { ...prev, playerId: rp.playerId } : null)}
-                                          className={cn(
-                                            "py-1.5 px-2 rounded-lg text-[10px] font-bold text-left transition-all flex items-center justify-between border outline-none",
-                                            isSelected
-                                              ? "bg-yellow-400 border-yellow-300 text-purple-950 shadow-md shadow-yellow-400/20"
-                                              : "bg-purple-700/40 border-purple-500 text-purple-100 hover:bg-purple-700"
-                                          )}
-                                        >
-                                          <span className="truncate pr-1">
-                                            <span className="font-mono text-yellow-300 font-extrabold mr-1">{keyLabel}</span>
-                                            #{rp.number} {getPlayerShortName(rp.player, quickRecordState.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)}
-                                          </span>
-                                          <span className="text-[8px] uppercase tracking-wider bg-purple-900/40 px-1 rounded border border-purple-500/20 font-light text-purple-300 shrink-0">
-                                            {pos.substring(0, 3)}
-                                          </span>
-                                        </button>
-                                      );
-                                    });
-                                  })()}
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="text-center text-[10px] py-4 bg-purple-700/30 rounded-xl text-purple-200 border border-purple-500/10 italic mb-3">
-                                Select a team above to display position-sorted player hotkeys
-                              </div>
-                            )}
-
-                            {/* Submit / Cancel Actions */}
-                            <div className="flex items-center justify-between pt-2 border-t border-purple-500/40 mt-3 flex-wrap gap-2">
-                              <span className="text-[9px] text-purple-200">
-                                Press <kbd className="bg-purple-800 px-1 py-0.5 rounded font-mono font-bold text-white shadow shadow-inner">Enter</kbd> to Queue temp event
-                              </span>
-                              <div className="flex gap-1.5">
-                                <button
-                                  onClick={() => {
-                                    const event = new KeyboardEvent('keydown', { key: 'Enter' });
-                                    document.dispatchEvent(event);
-                                  }}
-                                  className="px-3 py-1.5 bg-yellow-400 hover:bg-yellow-300 text-purple-950 text-[10px] font-black rounded-lg transition-all active:scale-95 shadow shadow-yellow-500/30 outline-none"
-                                >
-                                  QUEUE [Enter]
-                                </button>
-                                <button
-                                  onClick={() => setQuickRecordState(null)}
-                                  className="px-2.5 py-1.5 bg-purple-800 text-purple-200 hover:bg-purple-700 text-[10px] font-bold rounded-lg transition-all active:scale-95 outline-none"
-                                >
-                                  Cancel [Esc]
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        )}
-
-                        <div className="flex flex-col gap-2 mb-4 bg-purple-50/20 border border-purple-100 p-3.5 rounded-xl shadow-sm animate-in fade-in duration-300">
-                        <span className="text-[10px] uppercase font-bold text-purple-600 tracking-wider pl-1">Drop Temp Placeholder</span>
-                        <div className="grid grid-cols-3 gap-1">
-                          <button
-                            onClick={() => handleAddEvent('placeholder_goal', undefined, undefined, undefined, null, null, player?.getCurrentTime() || 0)}
-                            className="flex items-center justify-center gap-1 py-1 px-1.5 rounded-lg border border-yellow-200 hover:border-yellow-400 hover:bg-yellow-50 transition-all active:scale-95 bg-white"
-                          >
-                            <span className="font-mono text-[10px] font-black text-yellow-600">[A]</span>
-                            <span className="text-[9px] font-bold text-gray-600">Goal</span>
-                          </button>
-                          <button
-                            onClick={() => handleAddEvent('placeholder_shot', undefined, undefined, undefined, null, null, player?.getCurrentTime() || 0)}
-                            className="flex items-center justify-center gap-1 py-1 px-1.5 rounded-lg border border-orange-200 hover:border-orange-400 hover:bg-orange-50 transition-all active:scale-95 bg-white"
-                          >
-                            <span className="font-mono text-[10px] font-black text-orange-500">[S]</span>
-                            <span className="text-[9px] font-bold text-gray-600">Miss</span>
-                          </button>
-                          <button
-                            onClick={() => handleAddEvent('placeholder_general', undefined, undefined, undefined, null, null, player?.getCurrentTime() || 0)}
-                            className="flex items-center justify-center gap-1 py-1 px-1.5 rounded-lg border border-red-200 hover:border-red-400 hover:bg-red-50 transition-all active:scale-95 bg-white"
-                          >
-                            <span className="font-mono text-[10px] font-black text-red-500">[D]</span>
-                            <span className="text-[9px] font-bold text-gray-600">TO</span>
-                          </button>
-                          <button
-                            onClick={() => handleAddEvent('placeholder_control', undefined, undefined, undefined, null, null, player?.getCurrentTime() || 0)}
-                            className="flex items-center justify-center gap-1 py-1 px-1.5 rounded-lg border border-emerald-200 hover:border-emerald-400 hover:bg-emerald-50 transition-all active:scale-95 bg-white"
-                          >
-                            <span className="font-mono text-[10px] font-black text-emerald-600">[C]</span>
-                            <span className="text-[9px] font-bold text-gray-600">Ctrl</span>
-                          </button>
-                          <button
-                            onClick={() => handleAddEvent('placeholder_sub', undefined, undefined, undefined, null, null, player?.getCurrentTime() || 0)}
-                            className="flex items-center justify-center gap-1 py-1 px-1.5 rounded-lg border border-cyan-200 hover:border-cyan-400 hover:bg-cyan-50 transition-all active:scale-95 bg-white"
-                          >
-                            <span className="font-mono text-[10px] font-black text-cyan-500">[E]</span>
-                            <span className="text-[9px] font-bold text-gray-600">Sub</span>
-                          </button>
-                          <button
-                            onClick={() => handleAddEvent('placeholder_general', undefined, undefined, undefined, null, null, player?.getCurrentTime() || 0)}
-                            className="flex items-center justify-center gap-1 py-1 px-1.5 rounded-lg border border-slate-200 hover:border-slate-400 hover:bg-slate-50 transition-all active:scale-95 bg-white"
-                          >
-                            <span className="font-mono text-[10px] font-black text-slate-500">[T]</span>
-                            <span className="text-[9px] font-bold text-gray-600">Gen</span>
-                          </button>
-                        </div>
-                        
-                        {effectiveRole !== 'voter' && (
-                          <button
-                            onClick={handleRegeneratePossessionPins}
-                            className="mt-2 flex items-center justify-center gap-2 py-2 px-3 rounded-lg border border-purple-200 hover:border-purple-300 hover:bg-purple-50/80 text-[10px] font-bold text-purple-700 bg-white transition-all active:scale-[0.98] shadow-sm w-full"
-                            title="Scan for missing transitions and generate placeholders"
-                          >
-                            <RefreshCcw className="w-3 h-3" />
-                            Scan & Auto-Generate Placeholder Transitions
-                          </button>
-                        )}
-                      </div>
-                      </>
-                    )}
-
-                    <div className="flex flex-col gap-1 mt-1">
-                      <div className="flex items-center justify-between border-b border-gray-100 pb-1.5 mb-1">
-                        <h4 className="text-[10px] font-bold uppercase tracking-wider text-purple-700 flex items-center gap-1">
-                          <MapPin className="w-3.5 h-3.5 text-purple-500 animate-pulse" />
-                          Recording Queue
-                        </h4>
-                        <span className="text-[9px] font-mono bg-purple-50 text-purple-700 font-bold px-1.5 py-0.5 rounded-full border border-purple-100">
-                          {(() => {
-                            const list = [
-                              ...activeTrackingEvents.filter(e => e.userId === user?.uid),
-                              ...possessionMarkers.filter(m => m.userId === user?.uid)
-                            ];
-                            return `${list.length} logged`;
-                          })()}
-                        </span>
-                      </div>
-
-                      {(() => {
-                        const tempsList = [
-                          ...activeTrackingEvents.filter(e => e.userId === user?.uid).map(e => ({ ...e, isPossessionMarker: false as const })),
-                          ...possessionMarkers.filter(m => m.userId === user?.uid).map(m => ({ ...m, type: 'possession_marker' as const, isPossessionMarker: true as const }))
-                        ].sort((a, b) => b.videoTime - a.videoTime || (b.createdAt || '').localeCompare(a.createdAt || ''));
-
-                        if (tempsList.length === 0) {
-                          return (
-                            <div className="flex flex-col items-center justify-center text-center py-8 px-4 bg-slate-50/50 rounded-xl border border-dashed border-slate-200 my-1 animate-in fade-in duration-300">
-                              <MapPin className="w-6 h-6 text-purple-300 mb-1.5 animate-pulse" />
-                              <p className="text-[10px] font-bold text-slate-500">Queue is empty.</p>
-                              <p className="text-[9px] text-slate-400 mt-0.5 max-w-[200px]">Click any button above or use hotkeys to log placeholders, markers, or quick events.</p>
-                            </div>
-                          );
-                        }
-
-                        return (
-                          <div className="space-y-1 overflow-y-auto max-h-[50vh] pr-0.5 custom-scrollbar">
-                            {tempsList.map(evt => {
-                              const event = evt as any;
-                              if (event.isPossessionMarker) {
-                                return (
-                                  <div key={event.id} data-event-time={event.videoTime} className="flex items-center my-2 select-none group animate-in fade-in duration-200">
-                                    <div className="flex-1 border-t-2 border-purple-200/60"></div>
-                                    <div className="mx-2 flex items-center gap-1.5 px-2.5 py-0.5 bg-purple-50 border border-purple-200 text-purple-700 font-mono text-[9px] font-black rounded-full shadow-sm uppercase tracking-wider relative flex items-center shrink-0">
-                                      <span>POSSESSION CHANGE ({formatTime(event.videoTime)})</span>
-                                      <button
-                                        onClick={() => player?.seekTo(event.videoTime)}
-                                        className="p-0.5 text-purple-500 hover:text-purple-700 rounded transition-colors"
-                                        title="Seek to Marker"
-                                      >
-                                        <SkipForward className="w-3 h-3" />
-                                      </button>
-                                      <button
-                                        onClick={() => { if (window.confirm('Delete this Possession Marker permanently?')) handleDeletePossessionMarker(event.id) }}
-                                        className="p-0.5 text-purple-400 hover:text-red-500 rounded transition-colors"
-                                        title="Delete Marker"
-                                      >
-                                        <Trash2 className="w-3 h-3" />
-                                      </button>
-                                    </div>
-                                    <div className="flex-1 border-t-2 border-purple-200/60"></div>
-                                  </div>
-                                );
-                              }
-
-                              const isExpanded = expandedPlaceholderId === event.id;
-                              const config = EVENT_CONFIG[event.type as EventType] || { label: event.type, icon: <MapPin />, color: 'bg-slate-500' };
-
-                              return (
-                                <div
-                                  key={event.id}
-                                  className={cn(
-                                    "border rounded-xl transition-all shadow-sm overflow-hidden text-xs my-0.5",
-                                    isExpanded 
-                                      ? "bg-purple-50/10 border-purple-300 ring-2 ring-purple-500/10" 
-                                      : event.type.startsWith('placeholder_')
-                                        ? "bg-slate-50/50 border-dashed border-slate-300 hover:border-purple-200"
-                                        : event.teamId === currentGame?.homeTeamId 
-                                          ? "bg-red-50/30 border-red-100 hover:border-red-200"
-                                          : event.teamId === currentGame?.awayTeamId
-                                            ? "bg-blue-50/30 border-blue-100 hover:border-blue-200"
-                                            : "bg-white border-slate-200 hover:border-slate-300"
-                                  )}
-                                >
-                                  {/* Collapsed Header / Trigger */}
-                                  <div
-                                    onClick={() => {
-                                      if (isExpanded) {
-                                        setExpandedPlaceholderId(null);
-                                      } else {
-                                        handleExpandPlaceholder(event);
-                                      }
-                                    }}
-                                    className="py-1 px-2 flex items-center justify-between cursor-pointer select-none group"
-                                  >
-                                    <div className="flex items-center gap-2 w-0 flex-1 min-w-0">
-                                      <span className="font-mono text-[9px] font-bold text-gray-500 shrink-0 bg-slate-100 px-1 rounded shadow-inner">
-                                        {formatTime(event.videoTime)}
-                                      </span>
-                                      <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                                        <span className="font-bold text-gray-800 text-[10px] truncate shrink-0">
-                                          {event.type.startsWith('placeholder_') 
-                                            ? `${config.label.replace(' (Placeholder)', '')} (Pending)` 
-                                            : config.label
-                                          }
-                                        </span>
-                                        {/* Show Player/Team assigned */}
-                                        {(event.playerId || event.teamId) && (
-                                          <span className={cn(
-                                            "px-1.5 py-0.5 rounded-full text-[8px] font-bold truncate",
-                                            event.teamId === currentGame?.homeTeamId 
-                                              ? "bg-red-100 text-red-700" 
-                                              : event.teamId === currentGame?.awayTeamId 
-                                                ? "bg-blue-100 text-blue-700" 
-                                                : "bg-slate-100 text-slate-700"
-                                          )}>
-                                            {event.playerId ? (() => {
-                                              const p = allPlayers.find(pl => pl.id === event.playerId);
-                                              return p ? `${p.firstName.charAt(0)}. ${p.lastName}` : 'Player';
-                                            })() : (() => {
-                                              const t = teams.find(tm => tm.id === event.teamId);
-                                              return t ? t.nickname || t.name : 'Team';
-                                            })()}
-                                          </span>
-                                        )}
-                                      </div>
-                                    </div>
-
-                                    <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
-                                      <button
-                                        onClick={() => player?.seekTo(event.videoTime)}
-                                        className="p-1 text-gray-400 hover:text-purple-600 hover:bg-purple-50 rounded transition-colors"
-                                        title="Seek to Marker"
-                                      >
-                                        <SkipForward className="w-3.5 h-3.5" />
-                                      </button>
-                                      <button
-                                        onClick={() => { if (window.confirm('Delete this placeholder permanently?')) handleDeleteRecordedEvent(event.id) }}
-                                        className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
-                                        title="Delete Marker"
-                                      >
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                      </button>
-                                      <div className="p-0.5 text-gray-300 group-hover:text-purple-500 transition-colors">
-                                        <ChevronRight className={cn("w-4 h-4 transition-transform duration-200", isExpanded && "rotate-90 text-purple-600")} />
-                                      </div>
-                                    </div>
-                                  </div>
-
-                                  {/* Expanded Conversion Form */}
-                                  {isExpanded && (
-                                    <div className="border-t border-purple-100 bg-purple-50/10 p-3 space-y-3 animate-in fade-in slide-in-from-top-2 duration-200">
-                                      
-                                      {/* Step 1: Time Adjuster */}
-                                      <div className="flex items-center justify-between bg-white rounded-xl p-2 border border-purple-100/60 shadow-inner">
-                                        <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 pl-1">Adjust Time</span>
-                                        <div className="flex items-center gap-1.5">
-                                          <button
-                                            onClick={() => setTempVideoTime(t => Math.max(0, t - 1))}
-                                            className="h-6 w-6 flex items-center justify-center rounded bg-gray-100 hover:bg-gray-200 active:scale-95 text-gray-700 text-xs font-bold transition-all select-none shadow-sm"
-                                          >-</button>
-                                          <span className="px-2 py-0.5 bg-gray-800 text-white rounded font-mono text-xs font-bold tracking-wider shadow-inner">
-                                            {formatTime(tempVideoTime)}
-                                          </span>
-                                          <button
-                                            onClick={() => setTempVideoTime(t => t + 1)}
-                                            className="h-6 w-6 flex items-center justify-center rounded bg-gray-100 hover:bg-gray-200 active:scale-95 text-gray-700 text-xs font-bold transition-all select-none shadow-sm"
-                                          >+</button>
-                                        </div>
-                                      </div>
-
-                                      {/* Step 2: Target Official Event Type Selector */}
-                                      <div className="flex flex-col gap-1.5">
-                                        <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 pl-1">Select Official Event Type</span>
-                                        <div className="grid grid-cols-4 gap-1">
-                                          {[
-                                            { type: 'goal', label: 'Goal', icon: <Trophy className="w-3 h-3" /> },
-                                            { type: 'shot', label: 'Shot', icon: <Target className="w-3 h-3" /> },
-                                            { type: 'turnover', label: 'Turnover', icon: <AlertCircle className="w-3 h-3" /> },
-                                            { type: 'control_change', label: 'Ctrl Chg', icon: <CheckCircle2 className="w-3 h-3" /> },
-                                            { type: 'sub_in', label: 'Sub In', icon: <LogIn className="w-3 h-3" /> },
-                                            { type: 'sub_out', label: 'Sub Out', icon: <LogOut className="w-3 h-3" /> },
-                                            { type: 'foul', label: 'Foul', icon: <AlertCircle className="w-3 h-3" /> },
-                                            { type: 'card', label: 'Card', icon: <AlertCircle className="w-3 h-3" /> }
-                                          ].map(opt => {
-                                            const isActive = tempType === opt.type;
-                                            return (
-                                              <button
-                                                key={opt.type}
-                                                onClick={() => {
-                                                  setTempType(opt.type as EventType);
-                                                  if (opt.type !== 'goal') setTempAssistedByPlayerId(null);
-                                                  if (opt.type !== 'sub_in' && opt.type !== 'sub_out') {
-                                                    setTempPosition(null);
-                                                    setTempSubPlayerId(null);
-                                                  } else if (!tempPosition) {
-                                                    setTempPosition('chaser');
-                                                  }
-                                                }}
-                                                className={cn(
-                                                  "flex flex-col items-center justify-center py-1.5 px-0.5 rounded-lg border text-[9px] font-bold transition-all active:scale-95 text-center h-12 shadow-sm",
-                                                  isActive 
-                                                    ? "bg-purple-600 text-white border-purple-600 shadow-md shadow-purple-600/20" 
-                                                    : "bg-white text-gray-600 border-slate-200 hover:border-purple-300"
-                                                )}
-                                              >
-                                                {opt.icon}
-                                                <span className="mt-0.5 leading-tight">{opt.label}</span>
-                                              </button>
-                                            );
-                                          })}
-                                        </div>
-                                      </div>
-
-                                      {/* Step 3: Team Selector & Player Selectors */}
-                                      {!['gameStart', 'gamePause', 'gameEnd', 'quadball_start', 'control_start', 'flag_released'].includes(tempType || '') && (
-                                        <div className="space-y-3 bg-white p-2.5 rounded-xl border border-purple-100/60 shadow-inner">
-                                          
-                                          {/* Team Selector Toggle */}
-                                          <div className="flex flex-col gap-1">
-                                            <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 pl-0.5">Assign Team</span>
-                                            <div className="flex rounded-lg overflow-hidden border border-slate-200">
-                                              <button
-                                                onClick={() => { setTempTeamId(currentGame?.homeTeamId || null); setTempPlayerId(null); setTempAssistedByPlayerId(null); }}
-                                                className={cn(
-                                                  "flex-1 py-1.5 text-[10px] font-bold transition-all",
-                                                  tempTeamId === currentGame?.homeTeamId 
-                                                    ? "bg-red-50 text-red-700" 
-                                                    : "bg-white text-gray-500 hover:bg-slate-50"
-                                                )}
-                                              >
-                                                {teams.find(t => t.id === currentGame?.homeTeamId)?.nickname || 'Home Team'}
-                                              </button>
-                                              <button
-                                                onClick={() => { setTempTeamId(currentGame?.awayTeamId || null); setTempPlayerId(null); setTempAssistedByPlayerId(null); }}
-                                                className={cn(
-                                                  "flex-1 py-1.5 text-[10px] font-bold transition-all border-l border-slate-200",
-                                                  tempTeamId === currentGame?.awayTeamId 
-                                                    ? "bg-blue-50 text-blue-700" 
-                                                    : "bg-white text-gray-500 hover:bg-slate-50"
-                                                )}
-                                              >
-                                                {teams.find(t => t.id === currentGame?.awayTeamId)?.nickname || 'Away Team'}
-                                              </button>
-                                            </div>
-                                          </div>
-
-                                          {/* Player Select */}
-                                          <div className="flex flex-col gap-1">
-                                            <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 pl-0.5">Primary Player</span>
-                                            <select
-                                              value={tempPlayerId || ''}
-                                              onChange={e => setTempPlayerId(e.target.value || null)}
-                                              className="w-full text-xs border border-slate-200 rounded-lg p-2 bg-slate-50/50 outline-none focus:border-purple-300 focus:ring-1 focus:ring-purple-200"
-                                              disabled={!tempTeamId}
-                                            >
-                                              <option value="">- Select Player -</option>
-                                              {tempTeamId && (tempTeamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)
-                                                .sort((a, b) => (a.player?.lastName || '').localeCompare(b.player?.lastName || ''))
-                                                .map(rp => (
-                                                  <option key={rp.playerId} value={rp.playerId}>
-                                                    #{rp.number} {getPlayerShortName(rp.player, tempTeamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)}
-                                                  </option>
-                                                ))
-                                              }
-                                            </select>
-                                          </div>
-
-                                          {/* Optional Role Specific Helpers */}
-                                          
-                                          {/* Sub In Helper */}
-                                          {tempType === 'sub_in' && (
-                                            <div className="flex flex-col gap-1 pt-1.5 border-t border-slate-100">
-                                              <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 pl-0.5">Position</span>
-                                              <select
-                                                value={tempPosition || 'chaser'}
-                                                onChange={e => setTempPosition(e.target.value as PositionType)}
-                                                className="w-full text-xs border border-slate-200 rounded-lg p-2 bg-slate-50/50 outline-none"
-                                              >
-                                                <option value="chaser">Chaser</option>
-                                                <option value="beater">Beater</option>
-                                                <option value="keeper">Keeper</option>
-                                                <option value="seeker">Seeker</option>
-                                              </select>
-                                            </div>
-                                          )}
-
-                                          {/* Sub Out Helper */}
-                                          {tempType === 'sub_out' && (
-                                            <div className="flex flex-col gap-1 pt-1.5 border-t border-slate-100">
-                                              <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 pl-0.5">Subbed In Player (Optional)</span>
-                                              <select
-                                                value={tempSubPlayerId || ''}
-                                                onChange={e => setTempSubPlayerId(e.target.value || null)}
-                                                className="w-full text-xs border border-slate-200 rounded-lg p-2 bg-slate-50/50 outline-none"
-                                              >
-                                                <option value="">None (Sub Out only)</option>
-                                                {tempTeamId && (tempTeamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)
-                                                  .filter(rp => rp.playerId !== tempPlayerId)
-                                                  .sort((a, b) => (a.player?.lastName || '').localeCompare(b.player?.lastName || ''))
-                                                  .map(rp => (
-                                                    <option key={rp.playerId} value={rp.playerId}>
-                                                      #{rp.number} {getPlayerShortName(rp.player, tempTeamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)}
-                                                    </option>
-                                                  ))
-                                                }
-                                              </select>
-                                            </div>
-                                          )}
-
-                                          {/* Goal Assist Helper */}
-                                          {tempType === 'goal' && (
-                                            <div className="flex flex-col gap-1 pt-1.5 border-t border-slate-100">
-                                              <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 pl-0.5">Assisted By</span>
-                                              <select
-                                                value={tempAssistedByPlayerId || ''}
-                                                onChange={e => setTempAssistedByPlayerId(e.target.value || null)}
-                                                className="w-full text-xs border border-slate-200 rounded-lg p-2 bg-slate-50/50 outline-none"
-                                              >
-                                                <option value="">No Assist</option>
-                                                {tempTeamId && (tempTeamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)
-                                                  .filter(rp => rp.playerId !== tempPlayerId)
-                                                  .sort((a, b) => (a.player?.lastName || '').localeCompare(b.player?.lastName || ''))
-                                                  .map(rp => (
-                                                    <option key={rp.playerId} value={rp.playerId}>
-                                                      #{rp.number} {getPlayerShortName(rp.player, tempTeamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)}
-                                                    </option>
-                                                  ))
-                                                }
-                                              </select>
-                                            </div>
-                                          )}
-
-                                        </div>
-                                      )}
-
-                                      {/* Action Buttons */}
-                                      <div className="flex items-center gap-1.5 pt-2 border-t border-purple-100/60">
-                                        <button
-                                          onClick={() => handleSavePlaceholderConversion(event.id)}
-                                          className="flex-1 bg-purple-600 hover:bg-purple-700 text-white text-[11px] font-bold py-2 rounded-xl shadow-md shadow-purple-600/20 active:scale-95 transition-all flex items-center justify-center gap-1.5"
-                                        >
-                                          <CheckCircle2 className="w-3.5 h-3.5" />
-                                          Convert Event
-                                        </button>
-                                        <button
-                                          onClick={() => setExpandedPlaceholderId(null)}
-                                          className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 text-[11px] font-bold rounded-xl active:scale-95 transition-all border border-slate-200/40"
-                                        >
-                                          Cancel
-                                        </button>
-                                      </div>
-
-                                    </div>
-                                  )}
-
-                                </div>
-                              );
-                            })}
-                          </div>
-                        );
-                      })()}
-
-                    </div>
                   </div>
 
                   <div className={cn(isExpandedLayout ? "flex flex-col h-full relative" : "absolute inset-0", (rightPanelTab === 'rosters' || isExpandedLayout) ? "block" : "hidden", "overflow-y-auto custom-scrollbar p-4 space-y-8 bg-gray-50")}>
