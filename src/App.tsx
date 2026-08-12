@@ -2439,7 +2439,8 @@ function ManagementView({
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [isImporting, setIsImporting] = useState(false);
   const [importProgress, setImportProgress] = useState(0);
-  const [importType, setImportType] = useState<'stats' | 'players' | 'teams' | 'rosters' | 'videos' | 'local_sim' | 'deduplicator' | 'team_roster_builder'>('local_sim');
+  const [importType, setImportType] = useState<'stats' | 'players' | 'teams' | 'rosters' | 'videos' | 'local_sim' | 'deduplicator' | 'team_roster_builder' | 'mlq_2026_roster_upload'>('local_sim');
+  const [mlqUploadLog, setMlqUploadLog] = useState<string[]>([]);
   const [useLocalSimMode, setUseLocalSimMode] = useState<boolean>(true);
   const [uploadSimToLive, setUploadSimToLive] = useState<boolean>(false);
   const [filterTeamId, setFilterTeamId] = useState('');
@@ -2581,6 +2582,7 @@ function ManagementView({
                 >
                   <option value="local_sim">Sandbox Local Simulator</option>
                   <option value="team_roster_builder">Team Roster Builder (CSV)</option>
+                  <option value="mlq_2026_roster_upload">MLQ 2026 Roster Upload (CSV)</option>
                   <option value="deduplicator">Targeted Team Game Extractor</option>
                 </select>
               </div>
@@ -2670,6 +2672,158 @@ function ManagementView({
                       <p className="text-sm text-gray-400">Extracts full games involving this team</p>
                     </label>
                   </div>
+                </div>
+              ) : importType === 'mlq_2026_roster_upload' ? (
+                <div className="border border-gray-200 rounded-2xl p-8 bg-white shadow-sm">
+                  <div className="mb-6">
+                    <h4 className="font-bold text-lg mb-2">MLQ 2026 Roster Upload</h4>
+                    <p className="text-sm text-gray-500 mb-2">
+                      Upload one combined CSV with columns <code className="bg-gray-100 px-1 rounded">team</code>, <code className="bg-gray-100 px-1 rounded">first_name</code>, <code className="bg-gray-100 px-1 rounded">last_name</code> — one row per player, any number of teams.
+                    </p>
+                    <p className="text-sm text-gray-500 mb-4">
+                      Every row is written to the fixed 2026 MLQ season (<code className="bg-gray-100 px-1 rounded">riTQGxjqboDiVlI6OkPN</code>), league <strong>MLQ</strong>. Missing teams are created automatically. Players are matched to existing records by first + last name (case-insensitive) before creating a new one, and roster entries are keyed by player id so re-uploading the same CSV is safe.
+                    </p>
+                  </div>
+                  <div className={`border-2 border-dashed border-gray-200 rounded-2xl p-12 text-center transition-all group ${isImporting ? 'opacity-50 cursor-not-allowed' : 'hover:border-emerald-500/50'}`}>
+                    <input
+                      type="file"
+                      accept=".csv"
+                      className="hidden"
+                      id="csv-mlq-roster-upload"
+                      disabled={isImporting}
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+
+                        const MLQ_SEASON_ID = 'riTQGxjqboDiVlI6OkPN';
+                        const MLQ_SEASON_NAME = 'Major League Quadball 2026';
+
+                        setIsImporting(true);
+                        setMlqUploadLog([]);
+                        toast.loading("Parsing roster CSV...", { id: 'mlq-roster-upload' });
+
+                        Papa.parse(file, {
+                          header: true,
+                          skipEmptyLines: true,
+                          complete: async (results) => {
+                            const log: string[] = [];
+                            try {
+                              const rawRows = results.data as Record<string, string>[];
+
+                              // Normalize headers case/whitespace-insensitively.
+                              const normRows = rawRows.map(row => {
+                                const norm: Record<string, string> = {};
+                                Object.entries(row).forEach(([k, v]) => {
+                                  norm[String(k).trim().toLowerCase().replace(/\s+/g, '_')] = String(v ?? '').trim();
+                                });
+                                return {
+                                  team: norm['team'] || norm['team_name'] || '',
+                                  firstName: norm['first_name'] || norm['firstname'] || '',
+                                  lastName: norm['last_name'] || norm['lastname'] || '',
+                                };
+                              }).filter(r => r.team && r.firstName && r.lastName);
+
+                              if (normRows.length === 0) {
+                                throw new Error("No valid rows found. Expected columns: team, first_name, last_name.");
+                              }
+
+                              // 1. Ensure the target season exists with league = MLQ.
+                              toast.loading("Checking season...", { id: 'mlq-roster-upload' });
+                              const seasonRef = doc(db, 'seasons', MLQ_SEASON_ID);
+                              const seasonSnap = await getDoc(seasonRef);
+                              const mlqLeague = leagues.find(l => l.name.toLowerCase() === 'major league quadball' || l.name.toLowerCase() === 'mlq');
+                              if (!seasonSnap.exists()) {
+                                const seasonData: Record<string, any> = {
+                                  name: MLQ_SEASON_NAME,
+                                  league: 'MLQ',
+                                  year: '2026',
+                                  ...(mlqLeague && { leagueId: mlqLeague.id }),
+                                };
+                                await setDoc(seasonRef, { ...seasonData, createdAt: serverTimestamp() });
+                                await updateDoc(doc(db, 'aggregated', 'seasons'), { data: arrayUnion({ id: MLQ_SEASON_ID, ...seasonData }) }).catch(() => {});
+                                log.push(`Created season ${MLQ_SEASON_ID} (${MLQ_SEASON_NAME}).`);
+                              } else {
+                                log.push(`Season ${MLQ_SEASON_ID} already exists — reusing.`);
+                              }
+
+                              // 2. Local dedup maps, seeded from what's already loaded.
+                              const teamByName = new Map<string, string>();
+                              teams.forEach(t => teamByName.set(String(t.name).trim().toLowerCase(), t.id));
+                              const playerByName = new Map<string, string>();
+                              players.forEach(p => playerByName.set(`${String(p.firstName).trim().toLowerCase()}|${String(p.lastName).trim().toLowerCase()}`, p.id));
+
+                              // 3. Group rows by team.
+                              const rowsByTeam = new Map<string, typeof normRows>();
+                              normRows.forEach(r => {
+                                const key = r.team;
+                                if (!rowsByTeam.has(key)) rowsByTeam.set(key, []);
+                                rowsByTeam.get(key)!.push(r);
+                              });
+
+                              let teamsCreated = 0, teamsMatched = 0, playersCreated = 0, playersMatched = 0, rosterEntriesWritten = 0;
+
+                              for (const [teamName, rows] of rowsByTeam.entries()) {
+                                toast.loading(`Processing ${teamName}...`, { id: 'mlq-roster-upload' });
+
+                                const teamKey = teamName.toLowerCase();
+                                let teamId = teamByName.get(teamKey);
+                                if (!teamId) {
+                                  const newId = await onAddTeam(teamName);
+                                  if (!newId) { log.push(`FAILED to create team "${teamName}" — skipping ${rows.length} players.`); continue; }
+                                  teamId = newId;
+                                  teamByName.set(teamKey, teamId);
+                                  teamsCreated++;
+                                  log.push(`Created team "${teamName}" (${teamId}).`);
+                                } else {
+                                  teamsMatched++;
+                                }
+
+                                const rosterId = await onCreateRoster(teamId, MLQ_SEASON_ID);
+                                if (!rosterId) { log.push(`FAILED to create/find roster for "${teamName}" — skipping ${rows.length} players.`); continue; }
+
+                                for (const row of rows) {
+                                  const pKey = `${row.firstName.toLowerCase()}|${row.lastName.toLowerCase()}`;
+                                  let playerId = playerByName.get(pKey);
+                                  if (!playerId) {
+                                    const newId = await onAddPlayer(row.firstName, row.lastName);
+                                    if (!newId) { log.push(`FAILED to create player "${row.firstName} ${row.lastName}".`); continue; }
+                                    playerId = newId;
+                                    playerByName.set(pKey, playerId);
+                                    playersCreated++;
+                                  } else {
+                                    playersMatched++;
+                                  }
+                                  await onAddPlayerToRoster(rosterId, playerId, '');
+                                  rosterEntriesWritten++;
+                                }
+                              }
+
+                              log.push(`Teams: ${teamsCreated} created, ${teamsMatched} matched. Players: ${playersCreated} created, ${playersMatched} matched existing. Roster entries written: ${rosterEntriesWritten}.`);
+                              setMlqUploadLog(log);
+                              toast.success(`Roster upload complete: ${teamsCreated + teamsMatched} teams, ${rosterEntriesWritten} roster entries.`, { id: 'mlq-roster-upload' });
+                            } catch (err: any) {
+                              log.push(`ERROR: ${err.message}`);
+                              setMlqUploadLog(log);
+                              toast.error(`Roster upload failed: ${err.message}`, { id: 'mlq-roster-upload' });
+                            } finally {
+                              setIsImporting(false);
+                              e.target.value = '';
+                            }
+                          }
+                        });
+                      }}
+                    />
+                    <label htmlFor="csv-mlq-roster-upload" className={isImporting ? "" : "cursor-pointer"}>
+                      <Database className="w-12 h-12 mx-auto mb-4 text-emerald-500 group-hover:text-emerald-400 transition-colors" />
+                      <p className="text-lg font-bold mb-1">Select Combined Roster CSV</p>
+                      <p className="text-sm text-gray-400">team, first_name, last_name — all franchises in one file</p>
+                    </label>
+                  </div>
+                  {mlqUploadLog.length > 0 && (
+                    <div className="mt-6 bg-gray-900 text-gray-100 rounded-xl p-4 text-xs font-mono max-h-64 overflow-y-auto">
+                      {mlqUploadLog.map((line, i) => <div key={i} className="mb-1">{line}</div>)}
+                    </div>
+                  )}
                 </div>
               ) : importType === 'team_roster_builder' ? (
                 <div className="border border-gray-200 rounded-2xl p-8 bg-white shadow-sm">
