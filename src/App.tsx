@@ -41,7 +41,8 @@ import {
   MapPin,
   RefreshCcw,
   X,
-  Maximize2
+  Maximize2,
+  CornerDownRight
 } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
 import {
@@ -9088,211 +9089,244 @@ export default function App() {
                           <p className="text-sm">{statsFilter.startsWith('verified') ? 'Switch to All to see unverified events.' : 'Be the first to track a goal!'}</p>
                         </div>
                       ) : (
-                        displayEvents.slice().reverse().map((event) => {
-                          const isPin = event.type.startsWith('pin_');
-                          if (isPin) {
-                            const pinType = event.type.replace('pin_', '');
-                            let colorClass = "bg-gray-400 text-white";
-                            let lineClass = "bg-gray-400";
-                            if (pinType === 'control') { colorClass = "bg-black text-white"; lineClass = "bg-black"; }
-                            else if (pinType === 'general') { colorClass = "bg-yellow-400 text-yellow-900"; lineClass = "bg-yellow-400"; }
-                            else if (pinType === 'possession') { colorClass = "bg-purple-600 text-white"; lineClass = "bg-purple-600"; }
-                            else if (pinType === 'sub') { colorClass = "bg-cyan-600 text-white"; lineClass = "bg-cyan-600"; }
+                        (() => {
+                          // Assist events carry a relatedEventId pointing at the goal they fed. Pull
+                          // those out of the top-level list and nest them under their goal so the two
+                          // render as one card with a shared background instead of two separate ones.
+                          const assistByGoalId = new Map<string, any>();
+                          displayEvents.forEach(e => {
+                            if (e.type === 'assist' && e.relatedEventId) {
+                              assistByGoalId.set(e.relatedEventId, e);
+                            }
+                          });
+                          const nestedAssistIds = new Set(Array.from(assistByGoalId.values()).map(e => e.id));
+                          const topLevelEvents = displayEvents.filter(e => !nestedAssistIds.has(e.id));
 
+                          const renderEventRow = (ev: any, opts?: { skipRelatedNote?: boolean }) => {
+                            const evConfig = EVENT_CONFIG[ev.type as EventType] || { label: ev.type, icon: <AlertCircle className="w-4 h-4" />, color: 'bg-neutral-500' };
+                            const evLabel = (ev.type === 'sub_in' && ev.position) ? `${ev.position} In` : (ev.type === 'sub_out' && ev.position) ? `${ev.position} Out` : evConfig.label;
                             return (
-                              <div key={event.id} className="flex items-center gap-1.5 group w-full py-1 relative">
-                                <div className={`flex-1 h-[2px] ${lineClass} opacity-30 group-hover:opacity-100 transition-opacity`}></div>
-                                <button 
-                                  onClick={() => player?.seekTo(event.videoTime)}
-                                  className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider ${colorClass} hover:opacity-80 transition-opacity flex items-center gap-1 shadow-sm shrink-0`}
-                                >
-                                  <MapPin className="w-2.5 h-2.5" />
-                                  {pinType} @ {formatTime(event.videoTime)}
-                                </button>
-                                <button 
-                                  onClick={(e) => { e.stopPropagation(); setPins(prev => prev.filter(pin => pin.id !== event.id)); }} 
-                                  className="text-gray-400 hover:text-red-500 transition-colors p-0.5 opacity-0 group-hover:opacity-100 shrink-0" 
-                                  title="Dismiss Pin"
-                                >
-                                  <X className="w-3 h-3" />
-                                </button>
-                                <div className={`flex-1 h-[2px] ${lineClass} opacity-30 group-hover:opacity-100 transition-opacity`}></div>
-                              </div>
-                            );
-                          }
-
-                          const eventConfig = EVENT_CONFIG[event.type as EventType] || { label: event.type, icon: <AlertCircle className="w-4 h-4" />, color: 'bg-neutral-500' };
-                          const dynamicLabel = (event.type === 'sub_in' && event.position) ? `${event.position} In` : (event.type === 'sub_out' && event.position) ? `${event.position} Out` : eventConfig.label;
-                          return (
-                            <div
-                              key={event.id}
-                              data-event-time={event.videoTime}
-                              className={cn(
-                                "group border rounded-xl p-3 transition-all",
-                                event.teamId === currentGame?.homeTeamId ? "bg-red-50/50 border-red-100 hover:border-red-200" :
-                                  event.teamId === currentGame?.awayTeamId ? "bg-blue-50/50 border-blue-100 hover:border-blue-200" :
-                                    "bg-white border-gray-200 hover:border-gray-300",
-                                event.status === 'rejected' && "opacity-50 grayscale"
-                              )}
-                            >
-                              <div className="flex items-start justify-between mb-2">
-                                <div className="flex items-center gap-2">
-                                  <div className={cn("p-1.5 rounded-md", eventConfig.color)}>
-                                    {React.cloneElement(eventConfig.icon as React.ReactElement<any>, { className: 'w-3 h-3' })}
-                                  </div>
-                                  <div className="flex flex-col items-center">
-                                    <p className="font-mono text-xs font-bold text-gray-800 w-12 text-center">{formatTime(event.gameTime || 0)}</p>
-                                    <p className="font-mono text-[9px] text-gray-400 w-12 text-center">({formatTime(event.videoTime)})</p>
-                                  </div>
-                                  <div className="flex flex-col justify-center gap-0.5 ml-1">
-                                    <div className="flex items-center gap-1.5">
-                                      <p className="text-sm font-bold capitalize">
-                                        {dynamicLabel}
-                                      </p>
-                                      {event.status === 'verified' && (
-                                        <ShieldCheck className="w-3.5 h-3.5 text-amber-500" />
+                              <>
+                                <div className="flex items-start justify-between mb-2">
+                                  <div className="flex items-center gap-2">
+                                    <div className={cn("p-1.5 rounded-md", evConfig.color)}>
+                                      {React.cloneElement(evConfig.icon as React.ReactElement<any>, { className: 'w-3 h-3' })}
+                                    </div>
+                                    <div className="flex flex-col items-center">
+                                      <p className="font-mono text-xs font-bold text-gray-800 w-12 text-center">{formatTime(ev.gameTime || 0)}</p>
+                                      <p className="font-mono text-[9px] text-gray-400 w-12 text-center">({formatTime(ev.videoTime)})</p>
+                                    </div>
+                                    <div className="flex flex-col justify-center gap-0.5 ml-1">
+                                      <div className="flex items-center gap-1.5">
+                                        <p className="text-sm font-bold capitalize">
+                                          {evLabel}
+                                        </p>
+                                        {ev.status === 'verified' && (
+                                          <ShieldCheck className="w-3.5 h-3.5 text-amber-500" />
+                                        )}
+                                      </div>
+                                      {(ev.playerId || ev.teamId) && (
+                                        <div className="text-xs">
+                                          {ev.playerId ? (() => {
+                                            const p = allPlayers.find(pl => pl.id === ev.playerId);
+                                            return p ? (
+                                              <span className={cn("font-bold tracking-tight", ev.teamId === currentGame?.homeTeamId ? "text-red-700" : ev.teamId === currentGame?.awayTeamId ? "text-blue-700" : "text-gray-700")}>
+                                                {p.firstName.charAt(0)}. {p.lastName}
+                                              </span>
+                                            ) : 'Player';
+                                          })() : (() => {
+                                            const t = teams.find(tm => tm.id === ev.teamId);
+                                            return t ? (
+                                              <span className={cn("font-bold text-[9px] uppercase tracking-wider", ev.teamId === currentGame?.homeTeamId ? "text-red-700" : ev.teamId === currentGame?.awayTeamId ? "text-blue-700" : "text-gray-500")}>
+                                                {t.name}
+                                              </span>
+                                            ) : 'Team';
+                                          })()}
+                                        </div>
                                       )}
                                     </div>
-                                    {(event.playerId || event.teamId) && (
-                                      <div className="text-xs">
-                                        {event.playerId ? (() => {
-                                          const p = allPlayers.find(pl => pl.id === event.playerId);
-                                          return p ? (
-                                            <span className={cn("font-bold tracking-tight", event.teamId === currentGame?.homeTeamId ? "text-red-700" : event.teamId === currentGame?.awayTeamId ? "text-blue-700" : "text-gray-700")}>
-                                              {p.firstName.charAt(0)}. {p.lastName}
-                                            </span>
-                                          ) : 'Player';
-                                        })() : (() => {
-                                          const t = teams.find(tm => tm.id === event.teamId);
-                                          return t ? (
-                                            <span className={cn("font-bold text-[9px] uppercase tracking-wider", event.teamId === currentGame?.homeTeamId ? "text-red-700" : event.teamId === currentGame?.awayTeamId ? "text-blue-700" : "text-gray-500")}>
-                                              {t.name}
-                                            </span>
-                                          ) : 'Team';
-                                        })()}
-                                      </div>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    {(isAdmin || (ev.userId === user?.uid && ev.status !== 'verified')) && (
+                                      <>
+                                        <button
+                                          onClick={() => handleEditRecordedEvent(ev.id)}
+                                          className="p-1 text-gray-400 hover:text-blue-500 hover:bg-blue-50 transition-colors rounded flex items-center justify-center border border-transparent hover:border-blue-100"
+                                          title="Edit Event"
+                                        >
+                                          <Edit2 className="w-3.5 h-3.5" />
+                                        </button>
+                                        <button
+                                          onClick={() => { if (window.confirm('Delete this event permanently?')) handleDeleteRecordedEvent(ev.id) }}
+                                          className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors rounded flex items-center justify-center border border-transparent hover:border-red-100"
+                                          title="Delete Event"
+                                        >
+                                          <Trash2 className="w-3.5 h-3.5" />
+                                        </button>
+                                      </>
                                     )}
+
+                                    <button
+                                      onClick={() => player?.seekTo(ev.videoTime)}
+                                      className="text-[10px] font-mono bg-gray-100 hover:bg-red-600 px-2 py-1 rounded transition-colors"
+                                    >
+                                      Seek {formatTime(ev.videoTime)}
+                                    </button>
                                   </div>
                                 </div>
-                                <div className="flex items-center gap-2">
-                                  {(isAdmin || (event.userId === user?.uid && event.status !== 'verified')) && (
-                                    <>
-                                      <button
-                                        onClick={() => handleEditRecordedEvent(event.id)}
-                                        className="p-1 text-gray-400 hover:text-blue-500 hover:bg-blue-50 transition-colors rounded flex items-center justify-center border border-transparent hover:border-blue-100"
-                                        title="Edit Event"
-                                      >
-                                        <Edit2 className="w-3.5 h-3.5" />
-                                      </button>
-                                      <button
-                                        onClick={() => { if (window.confirm('Delete this event permanently?')) handleDeleteRecordedEvent(event.id) }}
-                                        className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors rounded flex items-center justify-center border border-transparent hover:border-red-100"
-                                        title="Delete Event"
-                                      >
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                      </button>
-                                    </>
-                                  )}
 
+                                {ev.relatedEventId && !opts?.skipRelatedNote && (
+                                  <div className="mb-2 pl-8 border-l-2 border-gray-200 text-[10px] text-gray-400 italic">
+                                    Assisting: {enrichedEvents.find(e => e.id === ev.relatedEventId)?.type || 'Event'}
+                                    ({formatTime(enrichedEvents.find(e => e.id === ev.relatedEventId)?.gameTime || 0)})
+                                  </div>
+                                )}
+
+                                <div className="flex items-center justify-between pt-2 border-t border-gray-200/50">
+                                  <div className="flex items-center gap-3">
+                                    {(isAdmin || effectiveRole === 'moderator') && (
+                                      <button
+                                        onClick={async () => {
+                                          if (!user || !currentVideo) return;
+                                          const newStatus = ev.status === 'verified' ? 'unverified' : 'verified';
+                                          // Optimistic local update
+                                          setEvents(prev => prev.map(e => e.id === ev.id ? { ...e, status: newStatus } : e));
+                                          try {
+                                            const gameRef = doc(db, 'gameEvents', currentVideo.gameId);
+                                            const gameSnap = await getDoc(gameRef);
+                                            if (!gameSnap.exists()) { toast.error('Game doc not found'); return; }
+                                            const gameData = gameSnap.data();
+                                            const currentEvents = gameData.events as GameEvent[] || [];
+                                            const eventIndex = currentEvents.findIndex(e => e.id === ev.id);
+                                            if (eventIndex !== -1) {
+                                              currentEvents[eventIndex] = { ...currentEvents[eventIndex], status: newStatus };
+                                              await updateDoc(gameRef, { events: currentEvents });
+                                              toast.success(newStatus === 'verified' ? '✓ Event verified' : 'Verification removed');
+                                            }
+                                          } catch (e) {
+                                            console.error(e);
+                                            toast.error('Failed to update verification');
+                                            // Revert optimistic update
+                                            setEvents(prev => prev.map(o => o.id === ev.id ? { ...o, status: ev.status } : o));
+                                          }
+                                        }}
+                                        className={cn("p-1.5 rounded-lg transition-all border", ev.status === 'verified' ? 'bg-amber-500/15 text-amber-500 border-amber-500/30 shadow-sm' : 'bg-gray-50 text-gray-300 border-gray-200 hover:text-amber-500 hover:border-amber-500 hover:bg-amber-50')}
+                                        title={ev.status === 'verified' ? "Remove Verification" : "Verify Event (Trusted Only)"}
+                                      >
+                                        <ShieldCheck className="w-4 h-4" />
+                                      </button>
+                                    )}
+                                    <div className="flex items-center gap-1">
+                                      <span className="text-xs font-bold text-green-500">{ev.upvotes || 0}</span>
+                                      <CheckCircle2 className="w-3 h-3 text-green-500 opacity-50" />
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                      <span className="text-xs font-bold text-red-500">{ev.downvotes || 0}</span>
+                                      <XCircle className="w-3 h-3 text-red-500 opacity-50" />
+                                    </div>
+                                    <div className="h-3 w-px bg-gray-100 mx-1" />
+                                    <span className={cn(
+                                      "text-xs font-bold",
+                                      ev.votes > 0 ? "text-green-500" : ev.votes < 0 ? "text-red-500" : "text-gray-400"
+                                    )}>
+                                      {ev.votes > 0 ? `+${ev.votes}` : ev.votes}
+                                    </span>
+                                    <span className="text-[10px] text-gray-300 uppercase font-bold tracking-tighter">Net</span>
+                                  </div>
+                                  {(
+                                    <div className="flex items-center gap-1">
+                                      <button
+                                        onClick={() => handleVote(ev.id, true)}
+                                        className={cn(
+                                          'p-1.5 rounded transition-all',
+                                          ev.upvoterIds?.includes(voterId)
+                                            ? 'bg-green-500/20 text-green-600 ring-1 ring-green-500/30'
+                                            : 'hover:bg-green-500/20 text-gray-400 hover:text-green-500'
+                                        )}
+                                        title="Accurate"
+                                      >
+                                        <CheckCircle2 className="w-4 h-4" />
+                                      </button>
+                                      <button
+                                        onClick={() => handleVote(ev.id, false)}
+                                        className={cn(
+                                          'p-1.5 rounded transition-all',
+                                          ev.downvoterIds?.includes(voterId)
+                                            ? 'bg-red-500/20 text-red-600 ring-1 ring-red-500/30'
+                                            : 'hover:bg-red-500/20 text-gray-400 hover:text-red-500'
+                                        )}
+                                        title="Inaccurate"
+                                      >
+                                        <XCircle className="w-4 h-4" />
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                              </>
+                            );
+                          };
+
+                          return topLevelEvents.slice().reverse().map((event) => {
+                            const isPin = event.type.startsWith('pin_');
+                            if (isPin) {
+                              const pinType = event.type.replace('pin_', '');
+                              let colorClass = "bg-gray-400 text-white";
+                              let lineClass = "bg-gray-400";
+                              if (pinType === 'control') { colorClass = "bg-black text-white"; lineClass = "bg-black"; }
+                              else if (pinType === 'general') { colorClass = "bg-yellow-400 text-yellow-900"; lineClass = "bg-yellow-400"; }
+                              else if (pinType === 'possession') { colorClass = "bg-purple-600 text-white"; lineClass = "bg-purple-600"; }
+                              else if (pinType === 'sub') { colorClass = "bg-cyan-600 text-white"; lineClass = "bg-cyan-600"; }
+
+                              return (
+                                <div key={event.id} className="flex items-center gap-1.5 group w-full py-1 relative">
+                                  <div className={`flex-1 h-[2px] ${lineClass} opacity-30 group-hover:opacity-100 transition-opacity`}></div>
                                   <button
                                     onClick={() => player?.seekTo(event.videoTime)}
-                                    className="text-[10px] font-mono bg-gray-100 hover:bg-red-600 px-2 py-1 rounded transition-colors"
+                                    className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider ${colorClass} hover:opacity-80 transition-opacity flex items-center gap-1 shadow-sm shrink-0`}
                                   >
-                                    Seek {formatTime(event.videoTime)}
+                                    <MapPin className="w-2.5 h-2.5" />
+                                    {pinType} @ {formatTime(event.videoTime)}
                                   </button>
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); setPins(prev => prev.filter(pin => pin.id !== event.id)); }}
+                                    className="text-gray-400 hover:text-red-500 transition-colors p-0.5 opacity-0 group-hover:opacity-100 shrink-0"
+                                    title="Dismiss Pin"
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </button>
+                                  <div className={`flex-1 h-[2px] ${lineClass} opacity-30 group-hover:opacity-100 transition-opacity`}></div>
                                 </div>
-                              </div>
+                              );
+                            }
 
-                              {event.relatedEventId && (
-                                <div className="mb-2 pl-8 border-l-2 border-gray-200 text-[10px] text-gray-400 italic">
-                                  Assisting: {enrichedEvents.find(e => e.id === event.relatedEventId)?.type || 'Event'}
-                                  ({formatTime(enrichedEvents.find(e => e.id === event.relatedEventId)?.gameTime || 0)})
-                                </div>
-                              )}
+                            const nestedAssist = event.type === 'goal' ? assistByGoalId.get(event.id) : undefined;
 
-                              <div className="flex items-center justify-between pt-2 border-t border-gray-200/50">
-                                <div className="flex items-center gap-3">
-                                  {(isAdmin || effectiveRole === 'moderator') && (
-                                    <button
-                                      onClick={async () => {
-                                        if (!user || !currentVideo) return;
-                                        const newStatus = event.status === 'verified' ? 'unverified' : 'verified';
-                                        // Optimistic local update
-                                        setEvents(prev => prev.map(e => e.id === event.id ? { ...e, status: newStatus } : e));
-                                        try {
-                                          const gameRef = doc(db, 'gameEvents', currentVideo.gameId);
-                                          const gameSnap = await getDoc(gameRef);
-                                          if (!gameSnap.exists()) { toast.error('Game doc not found'); return; }
-                                          const gameData = gameSnap.data();
-                                          const currentEvents = gameData.events as GameEvent[] || [];
-                                          const eventIndex = currentEvents.findIndex(e => e.id === event.id);
-                                          if (eventIndex !== -1) {
-                                            currentEvents[eventIndex] = { ...currentEvents[eventIndex], status: newStatus };
-                                            await updateDoc(gameRef, { events: currentEvents });
-                                            toast.success(newStatus === 'verified' ? '✓ Event verified' : 'Verification removed');
-                                          }
-                                        } catch (e) {
-                                          console.error(e);
-                                          toast.error('Failed to update verification');
-                                          // Revert optimistic update
-                                          setEvents(prev => prev.map(ev => ev.id === event.id ? { ...ev, status: event.status } : ev));
-                                        }
-                                      }}
-                                      className={cn("p-1.5 rounded-lg transition-all border", event.status === 'verified' ? 'bg-amber-500/15 text-amber-500 border-amber-500/30 shadow-sm' : 'bg-gray-50 text-gray-300 border-gray-200 hover:text-amber-500 hover:border-amber-500 hover:bg-amber-50')}
-                                      title={event.status === 'verified' ? "Remove Verification" : "Verify Event (Trusted Only)"}
-                                    >
-                                      <ShieldCheck className="w-4 h-4" />
-                                    </button>
-                                  )}
-                                  <div className="flex items-center gap-1">
-                                    <span className="text-xs font-bold text-green-500">{event.upvotes || 0}</span>
-                                    <CheckCircle2 className="w-3 h-3 text-green-500 opacity-50" />
-                                  </div>
-                                  <div className="flex items-center gap-1">
-                                    <span className="text-xs font-bold text-red-500">{event.downvotes || 0}</span>
-                                    <XCircle className="w-3 h-3 text-red-500 opacity-50" />
-                                  </div>
-                                  <div className="h-3 w-px bg-gray-100 mx-1" />
-                                  <span className={cn(
-                                    "text-xs font-bold",
-                                    event.votes > 0 ? "text-green-500" : event.votes < 0 ? "text-red-500" : "text-gray-400"
-                                  )}>
-                                    {event.votes > 0 ? `+${event.votes}` : event.votes}
-                                  </span>
-                                  <span className="text-[10px] text-gray-300 uppercase font-bold tracking-tighter">Net</span>
+                            return (
+                              <div
+                                key={event.id}
+                                data-event-time={event.videoTime}
+                                className={cn(
+                                  "group border rounded-xl overflow-hidden transition-all",
+                                  event.teamId === currentGame?.homeTeamId ? "bg-red-50/50 border-red-100 hover:border-red-200" :
+                                    event.teamId === currentGame?.awayTeamId ? "bg-blue-50/50 border-blue-100 hover:border-blue-200" :
+                                      "bg-white border-gray-200 hover:border-gray-300"
+                                )}
+                              >
+                                <div className={cn("p-3", event.status === 'rejected' && "opacity-50 grayscale")}>
+                                  {renderEventRow(event)}
                                 </div>
-                                {(
-                                  <div className="flex items-center gap-1">
-                                    <button
-                                      onClick={() => handleVote(event.id, true)}
-                                      className={cn(
-                                        'p-1.5 rounded transition-all',
-                                        event.upvoterIds?.includes(voterId)
-                                          ? 'bg-green-500/20 text-green-600 ring-1 ring-green-500/30'
-                                          : 'hover:bg-green-500/20 text-gray-400 hover:text-green-500'
-                                      )}
-                                      title="Accurate"
-                                    >
-                                      <CheckCircle2 className="w-4 h-4" />
-                                    </button>
-                                    <button
-                                      onClick={() => handleVote(event.id, false)}
-                                      className={cn(
-                                        'p-1.5 rounded transition-all',
-                                        event.downvoterIds?.includes(voterId)
-                                          ? 'bg-red-500/20 text-red-600 ring-1 ring-red-500/30'
-                                          : 'hover:bg-red-500/20 text-gray-400 hover:text-red-500'
-                                      )}
-                                      title="Inaccurate"
-                                    >
-                                      <XCircle className="w-4 h-4" />
-                                    </button>
+                                {nestedAssist && (
+                                  <div className={cn("p-3 pt-2.5 flex items-start gap-1.5 border-t border-dashed border-gray-300/70 bg-black/[0.025]", nestedAssist.status === 'rejected' && "opacity-50 grayscale")}>
+                                    <CornerDownRight className="w-3.5 h-3.5 text-gray-300 shrink-0 mt-1" />
+                                    <div className="flex-1 min-w-0">
+                                      {renderEventRow(nestedAssist, { skipRelatedNote: true })}
+                                    </div>
                                   </div>
                                 )}
                               </div>
-                            </div>
-                          );
-                        })
+                            );
+                          });
+                        })()
                       );
                     })()}
                     </div>
