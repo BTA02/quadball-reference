@@ -42,7 +42,8 @@ import {
   RefreshCcw,
   X,
   Maximize2,
-  CornerDownRight
+  CornerDownRight,
+  Menu
 } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
 import {
@@ -5592,6 +5593,8 @@ export default function App() {
 
   // Management State
   const [view, setView] = useState<'tracker' | 'video' | 'manage' | 'create' | 'stats' | 'review' | 'help' | 'playerProfile' | 'teamProfile' | 'gameProfile' | 'lists'>('stats');
+  const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
+  const mobileMenuRef = useRef<HTMLDivElement>(null);
   const [managementActiveTab, setManagementActiveTab] = useState<'leagues' | 'tournaments' | 'search' | 'teams' | 'seasons' | 'players' | 'rosters' | 'games' | 'videos' | 'roles' | 'events' | 'import' | 'merge'>('teams');
   const [createActiveTab, setCreateActiveTab] = useState<'rosters' | 'teams' | 'players' | 'games' | 'leaderboard'>('rosters');
   const [beaterStatsTab, setBeaterStatsTab] = useState<'pairs' | 'solo' | 'team'>('pairs');
@@ -5613,6 +5616,23 @@ export default function App() {
       setPlayerJerseyNumbers(Array.from(numbers).sort((a, b) => Number(a) - Number(b)));
     }).catch(() => setPlayerJerseyNumbers([]));
   }, [activePlayerId]);
+
+  // Close mobile header menu on outside click
+  useEffect(() => {
+    if (!mobileMenuOpen) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      if (mobileMenuRef.current && !mobileMenuRef.current.contains(event.target as Node)) {
+        setMobileMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [mobileMenuOpen]);
+
+  // Close mobile header menu whenever the view changes
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [view]);
 
   type ViewState = typeof view;
   const [navHistory, setNavHistory] = useState<{ view: ViewState, states: { p: string | null, t: string | null, g: string | null } }[]>([]);
@@ -8100,10 +8120,11 @@ export default function App() {
         <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <img src="/quadball-logo.svg" alt="Quadball Reference Logo" className="w-10 h-10 object-contain drop-shadow-sm" />
-            <h1 className="text-xl font-bold tracking-tight text-red-900">Quadball Reference</h1>
+            <h1 className="hidden sm:block text-xl font-bold tracking-tight text-red-900">Quadball Reference</h1>
           </div>
 
-          <div className="flex items-center gap-4">
+          {/* Desktop nav */}
+          <div className="hidden md:flex items-center gap-4">
             <button
               onClick={() => setView(view === 'stats' ? 'tracker' : 'stats')}
               className={cn(
@@ -8117,7 +8138,7 @@ export default function App() {
             <button
               onClick={() => setView('tracker')}
               className={cn(
-                "px-4 py-2 rounded-lg font-medium transition-all hidden md:flex items-center gap-2",
+                "px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-2",
                 view === 'tracker' ? "bg-red-600 text-white" : "bg-gray-50 text-gray-500 hover:text-gray-900 border border-gray-200"
               )}
             >
@@ -8152,7 +8173,7 @@ export default function App() {
               <button
                 onClick={() => setView(view === 'create' ? 'stats' : 'create')}
                 className={cn(
-                  "px-4 py-2 rounded-lg font-medium transition-all hidden md:flex items-center gap-2",
+                  "px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-2",
                   view === 'create' ? "bg-red-600 text-white" : "bg-gray-50 text-gray-500 hover:text-gray-900 border border-gray-200"
                 )}
               >
@@ -8165,7 +8186,7 @@ export default function App() {
               <button
                 onClick={() => setView(view === 'manage' ? 'stats' : 'manage')}
                 className={cn(
-                  "px-4 py-2 rounded-lg font-medium transition-all hidden md:flex items-center gap-2",
+                  "px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-2",
                   view === 'manage' ? "bg-red-600 text-white" : "bg-gray-50 text-gray-500 hover:text-gray-900 border border-gray-200"
                 )}
               >
@@ -8188,6 +8209,113 @@ export default function App() {
                 <LogIn className="w-4 h-4" />
                 Sign In
               </button>
+            )}
+          </div>
+
+          {/* Mobile nav: hamburger dropdown */}
+          <div className="md:hidden relative" ref={mobileMenuRef}>
+            <button
+              onClick={() => setMobileMenuOpen(o => !o)}
+              className="p-2 hover:bg-gray-100 rounded-full transition-colors"
+              aria-label="Open menu"
+              aria-expanded={mobileMenuOpen}
+            >
+              <Menu className="w-6 h-6 text-gray-700" />
+            </button>
+
+            {mobileMenuOpen && (
+              <div className="absolute right-0 top-full mt-2 w-60 bg-white rounded-lg shadow-lg border border-gray-200 py-2 z-50">
+                <button
+                  onClick={() => setView(view === 'stats' ? 'tracker' : 'stats')}
+                  className={cn(
+                    "w-full px-4 py-2.5 flex items-center gap-2 text-left font-medium transition-colors",
+                    view === 'stats' ? "text-red-600 bg-red-50" : "text-gray-600 hover:bg-gray-50"
+                  )}
+                >
+                  <Database className="w-4 h-4" />
+                  Stats
+                </button>
+                <button
+                  onClick={() => setView('tracker')}
+                  className={cn(
+                    "w-full px-4 py-2.5 flex items-center gap-2 text-left font-medium transition-colors",
+                    view === 'tracker' ? "text-red-600 bg-red-50" : "text-gray-600 hover:bg-gray-50"
+                  )}
+                >
+                  <Play className="w-4 h-4" />
+                  Watch
+                </button>
+                <button
+                  onClick={() => setView('help')}
+                  className={cn(
+                    "w-full px-4 py-2.5 flex items-center gap-2 text-left font-medium transition-colors",
+                    view === 'help' ? "text-red-600 bg-red-50" : "text-gray-600 hover:bg-gray-50"
+                  )}
+                >
+                  <HelpCircle className="w-4 h-4" />
+                  Help
+                </button>
+
+                {(effectiveRole === 'moderator' || effectiveRole === 'trusted') && (
+                  <button
+                    onClick={() => setView(view === 'create' ? 'stats' : 'create')}
+                    className={cn(
+                      "w-full px-4 py-2.5 flex items-center gap-2 text-left font-medium transition-colors",
+                      view === 'create' ? "text-red-600 bg-red-50" : "text-gray-600 hover:bg-gray-50"
+                    )}
+                  >
+                    <Plus className="w-4 h-4" />
+                    Create
+                  </button>
+                )}
+
+                {isAdmin && (
+                  <button
+                    onClick={() => setView(view === 'manage' ? 'stats' : 'manage')}
+                    className={cn(
+                      "w-full px-4 py-2.5 flex items-center gap-2 text-left font-medium transition-colors",
+                      view === 'manage' ? "text-red-600 bg-red-50" : "text-gray-600 hover:bg-gray-50"
+                    )}
+                  >
+                    <User className="w-4 h-4" />
+                    Manage
+                  </button>
+                )}
+
+                {view === 'tracker' && isAdmin && (
+                  <div className="px-4 py-2">
+                    <select
+                      value={simulateRole}
+                      onChange={e => setSimulateRole(e.target.value as any)}
+                      className="w-full bg-gray-50 border border-gray-200 text-gray-600 text-xs rounded-lg px-3 py-2 outline-none focus:border-red-500 font-bold"
+                    >
+                      <option value="voter">View As: Voter</option>
+                      <option value="author">View As: Author</option>
+                      <option value="moderator">View As: Moderator</option>
+                      <option value="trusted">View As: Trusted (Admin)</option>
+                    </select>
+                  </div>
+                )}
+
+                <div className="border-t border-gray-100 mt-2 pt-2 px-4">
+                  {user ? (
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-full border border-gray-200 min-w-0">
+                        <img src={user.photoURL || ''} alt="" className="w-6 h-6 rounded-full bg-gray-100 shrink-0" referrerPolicy="no-referrer" />
+                        <span className="text-sm font-medium truncate">{user.displayName}</span>
+                      </div>
+                      <button onClick={logOut} className="p-2 hover:bg-gray-100 rounded-full transition-colors shrink-0">
+                        <LogOut className="w-5 h-5 text-gray-500" />
+                      </button>
+                    </div>
+                  ) : (
+                    <button onClick={signIn} className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition-all active:scale-95">
+                      <LogIn className="w-4 h-4" />
+                      Sign In
+                    </button>
+                  )}
+                </div>
+              </div>
             )}
           </div>
         </div>
