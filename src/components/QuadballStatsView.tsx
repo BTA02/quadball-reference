@@ -326,6 +326,7 @@ export default function QuadballStatsView({
                   <HeaderCell label="DRTG" sortKey="dRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Defensive Rating (Points conceded per 25 defensive possessions while on field)" />
                   <HeaderCell label="NET" sortKey="netRtg" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Net Rating (ORTG - DRTG)" />
                   <HeaderCell label="RAPM" sortKey="rapm" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Regularized Adjusted Plus-Minus" />
+                  <HeaderCell label="CVA" sortKey="cva" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Chaser Value Added (Overall estimated goals added/saved per 20 minutes vs league average chaser)" />
                   <HeaderCell label="EPR" sortKey="epr" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Empty Possession Rate (Empty Turnovers / Offensive Possessions)" />
                   <HeaderCell label="fEPR" sortKey="fEpr" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Forced Empty Possession Rate (Opponent Empty Turnovers / Defensive Possessions)" />
                   <HeaderCell label="USG%" sortKey="usgPct" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Usage Rate (Estimates % of team possessions player is involved in while on field)" />
@@ -419,6 +420,7 @@ export default function QuadballStatsView({
                       <DataCell prop="dRtg" />
                       <DataCell prop="netRtg" bold fmt={v => v > 0 ? `+${v}` : v || 'E'} />
                       <DataCell prop="rapm" bold fmt={v => v > 0 ? `+${v}` : v || 'E'} />
+                      <DataCell prop="cva" bold fmt={v => v > 0 ? `+${v}` : v || '0'} />
                       <DataCell prop="epr" fmt={v => `${v}%`} />
                       <DataCell prop="fEpr" fmt={v => `${v}%`} />
                       <DataCell prop="usgPct" fmt={v => `${v}%`} />

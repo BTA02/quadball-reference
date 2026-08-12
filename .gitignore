@@ -6,3 +6,8 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Scratch/temp outputs from extraction scripts - not meant to be tracked
+downloaded_game_video.mp4
+ai_extracted_events*.json
+_fetch_players_tmp.mjs

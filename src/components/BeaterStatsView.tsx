@@ -40,15 +40,23 @@ interface BeaterStatsViewProps {
   flagFilter?: 'all' | 'on' | 'off';
   onPlayerSelect?: (playerId: string) => void;
   onTeamSelect?: (teamId: string) => void;
+  tab?: 'pairs' | 'solo' | 'team';
+  onTabChange?: (tab: 'pairs' | 'solo' | 'team') => void;
 }
 
 export default function BeaterStatsView({ 
   players, events, teams, games, seasons, statsFilter = 'all',
   teamIds: teamFilterIds = [], search = '',
   minGames = 1, bludgerControlMode = 'all', flagFilter = 'all',
-  onPlayerSelect, onTeamSelect
+  onPlayerSelect, onTeamSelect,
+  tab: tabProp, onTabChange: onTabChangeProp
 }: BeaterStatsViewProps) {
-  const [tab, setTab] = useState<'pairs' | 'solo' | 'team'>('pairs');
+  const [localTab, setLocalTab] = useState<'pairs' | 'solo' | 'team'>('pairs');
+  const tab = tabProp || localTab;
+  const setTab = (newTab: 'pairs' | 'solo' | 'team') => {
+    if (onTabChangeProp) onTabChangeProp(newTab);
+    else setLocalTab(newTab);
+  };
   const [page, setPage] = useState(1);
   const [sortKey, setSortKey] = useState('plusMinus');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
@@ -182,7 +190,7 @@ export default function BeaterStatsView({
                   <SortHeader label="RAPM" sortKey="rapm" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Regularized Adjusted Plus-Minus" />
                   <SortHeader label="EPR" sortKey="epr" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Empty Possession Rate (while on field)" />
                   <SortHeader label="fEPR" sortKey="fEpr" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Forced Empty Possession Rate (while on field)" />
-                  <SortHeader label="BCL" sortKey="bcl" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Bludger Control Leverage (Net Rating with Control minus League Average Net Rating with Control)" />
+                  <SortHeader label="BVA" sortKey="bva" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Beater Value Added (Overall estimated goals added/saved per 20 minutes of possession vs league average beater)" />
                 </>)}
               </tr>
             </thead>
@@ -228,7 +236,7 @@ export default function BeaterStatsView({
                       <Cell value={row.rapm} bold highlight={row.rapm > 0 ? 'pos' : row.rapm < 0 ? 'neg' : undefined} />
                       <Cell value={`${row.epr}%`} highlight={row.epr < 40 ? 'pos' : row.epr > 55 ? 'neg' : undefined} />
                       <Cell value={`${row.fEpr}%`} highlight={row.fEpr > 55 ? 'pos' : undefined} />
-                      <Cell value={row.bcl > 0 ? `+${row.bcl}` : row.bcl || '0'} bold highlight={row.bcl > 0 ? 'pos' : row.bcl < 0 ? 'neg' : undefined} />
+                      <Cell value={row.bva > 0 ? `+${row.bva}` : row.bva || '0'} bold highlight={row.bva > 0 ? 'pos' : row.bva < 0 ? 'neg' : undefined} />
                     </>)}
                   </tr>
                 );

@@ -8,9 +8,12 @@
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "extract-stats": "tsx scripts/extract_stats_gemini.ts",
+    "extract-stats-claude": "node scripts/agent-extractor/extract_stats_claude.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
     "@distube/ytdl-core": "^4.16.12",
     "@google/genai": "^1.29.0",
     "@tailwindcss/vite": "^4.1.14",
@@ -38,7 +41,7 @@
     "@types/react-dom": "^19.2.3",
     "autoprefixer": "^10.4.21",
     "csv-stringify": "^6.7.0",
-    "firebase-tools": "^15.12.0",
+    "firebase-tools": "^15.19.1",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",

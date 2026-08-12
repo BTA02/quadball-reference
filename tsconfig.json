@@ -24,6 +24,7 @@
     "noEmit": true
   },
   "exclude": [
-    "src/scratch"
+    "src/scratch",
+    "scripts"
   ]
 }

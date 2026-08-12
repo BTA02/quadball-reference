@@ -1182,6 +1182,7 @@ export interface ExtendedPlayerStats {
   epr: number;           // Empty Possession Rate (Turnovers with no shot/attempt/KO in the possession / Possessions)
   fEpr: number;          // Forced Empty Possession Rate (Opponent turnovers with no shot/attempt/KO / Opp Possessions)
   rapm: number;          // Regularized Adjusted Plus Minus
+  cva: number;           // Chaser Value Added
   // Per-20 rates
   turnoversPer20: number;
   shotsPer20: number;
@@ -1501,6 +1502,7 @@ export function computeExtendedStats(
       epr,
       fEpr,
       rapm: rapmScores.get(a.playerId) || 0,
+      cva: a.cva,
       turnoversPer20: Math.round(a.turnovers * per20 * 100) / 100,
       shotsPer20: Math.round(a.shots * per20 * 100) / 100,
       attemptsPer20: Math.round(a.attempts * per20 * 100) / 100,
@@ -2944,6 +2946,426 @@ function groupEventsByGame(
   }
 
   return { eventsByGame, relevantGames };
+}
+
+// ─── Statistical Helpers (shared by archetype scoring below) ──────────
+
+function statMean(arr: number[]): number {
+  return arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+}
+
+function statStd(arr: number[], m: number): number {
+  if (arr.length < 2) return 0;
+  const variance = arr.reduce((a, b) => a + (b - m) * (b - m), 0) / arr.length;
+  return Math.sqrt(variance);
+}
+
+/** Returns a function mapping raw value -> z-score, fit to the given sample. */
+function makeZScorer(values: number[]): (v: number) => number {
+  const m = statMean(values);
+  const sd = statStd(values, m) || 1;
+  return (v: number) => (v - m) / sd;
+}
+
+// ─── Beater Archetype Analysis (Control vs. Aggressive) ───────────────
+//
+// Hypothesis: "Aggressive" beaters actively contest bludger possession —
+// the ball changes hands more often while they're on the field, and the
+// game is more volatile (more +/- events) while they play. "Control"
+// beaters win possession and sit on it — fewer control changes, steadier
+// game state, sustained high control%. A control beater's on-field impact
+// should also swing more between having control and not having it (they
+// thrive when they have it, and are worth less when they don't); an
+// aggressive beater's impact should be more consistent either way, since
+// they're generating their value by actively contesting rather than by
+// sitting on possession.
+//
+// We measure this with three rate stats:
+//   - controlChangesPerMin: how often bludger control flips while this
+//     player is on the pitch (their team gaining OR losing it)
+//   - eventsPerMin: (plus + minus) per minute on field — how much scoring
+//     volatility happens while they play
+//   - controlDependencyDelta: |plusMinus-per-minute WITH control minus
+//     plusMinus-per-minute WITHOUT control| — how much their effectiveness
+//     depends on having possession
+// The first two are z-scored and averaged in as positive ("more = more
+// aggressive"); the delta is z-scored and averaged in as negative ("more
+// = more control-oriented"). Players are then bucketed into tertiles of
+// the resulting composite: bottom third = Control, top third = Aggressive,
+// middle = Balanced.
+
+const MIN_SPLIT_MINUTES = 2; // minimum minutes required in EACH of with/without control before trusting that rate
+
+export interface BeaterActivityStats {
+  playerId: string;
+  playerName: string;
+  firstName: string;
+  lastName: string;
+  preferredName?: string;
+  nickname?: string;
+  gamesPlayed: number;
+  totalMinutes: number;
+  controlMinutes: number;
+  controlPct: number;
+  plus: number;
+  minus: number;
+  plusMinus: number;
+  eventsPerMin: number;              // (plus + minus) / totalMinutes
+  controlChanges: number;            // count of control_change/control_start events overlapping this player's stints
+  controlChangesPerMin: number;      // controlChanges / totalMinutes
+  plusMinusPerMinWith: number | null;    // plus-minus rate while team had bludger control (null if too little sample)
+  plusMinusPerMinWithout: number | null; // plus-minus rate while team did NOT have bludger control
+  controlDependencyDelta: number;    // |with - without| rate delta; 0 if either sample is too small
+  rapm: number;
+  bva: number;
+  epr: number;
+  fEpr: number;
+}
+
+/**
+ * Computes per-beater activity/volatility metrics (control-change churn,
+ * event pace, and with/without-control effectiveness delta) on top of the
+ * standard solo beater stats. Does NOT apply a minimum-minutes cutoff or
+ * produce an archetype label — call classifyBeaterArchetypes() on a
+ * pre-filtered subset of the result for that (small samples produce noisy
+ * per-minute rates).
+ */
+export function computeBeaterActivityStats(
+  events: GameEvent[],
+  players: Player[],
+  games: Game[],
+  filters: { seasonId?: string; teamId?: string; teamIds?: string[]; controlFilter?: 'all' | 'with' | 'without'; flagFilter?: 'all' | 'on' | 'off'; outlierFilter?: 'include' | 'exclude'; skipRapm?: boolean }
+): BeaterActivityStats[] {
+  const solo = computeBeaterSoloStats(events, players, games, filters);
+  const soloWith = computeBeaterSoloStats(events, players, games, { ...filters, controlFilter: 'with' });
+  const soloWithout = computeBeaterSoloStats(events, players, games, { ...filters, controlFilter: 'without' });
+  const withMap = new Map(soloWith.map(s => [s.playerId, s]));
+  const withoutMap = new Map(soloWithout.map(s => [s.playerId, s]));
+
+  const teamIdSet = buildTeamIdSet(filters);
+  const { eventsByGame, relevantGames } = groupEventsByGame(events, games, filters);
+  const churnByPlayer = new Map<string, number>();
+
+  for (const [gameId, gameEvents] of eventsByGame) {
+    const game = relevantGames.find(g => g.id === gameId);
+    if (!game) continue;
+    const sorted = [...gameEvents].sort((a, b) => a.videoTime - b.videoTime);
+    const gameEndEvent = sorted.find(e => (e.type || '').toLowerCase() === 'gameend');
+    const gameEndTime = gameEndEvent?.videoTime ?? sorted[sorted.length - 1]?.videoTime ?? 0;
+
+    const { homeTeamId: discHome, awayTeamId: discAway } = discoverGameTeams(sorted, game.homeTeamId, game.awayTeamId);
+    const resolvedHomeId = (discHome === null && discAway) ? 'home_inferred' : (discHome || game.homeTeamId);
+    const resolvedAwayId = discAway || game.awayTeamId;
+
+    if (teamIdSet && !teamIdSet.has(resolvedHomeId) && !teamIdSet.has(resolvedAwayId) && !teamIdSet.has(game.homeTeamId) && !teamIdSet.has(game.awayTeamId)) continue;
+
+    const playerTeamMap = buildPlayerTeamMap(sorted);
+    const homeStints = computeBeaterStints(sorted, resolvedHomeId, gameId, gameEndTime, playerTeamMap);
+    const awayStints = computeBeaterStints(sorted, resolvedAwayId, gameId, gameEndTime, playerTeamMap);
+    const stints = [...homeStints, ...awayStints];
+
+    const controlChangeEvents = sorted.filter(e => e.type === 'control_change' || e.type === 'control_start');
+    if (controlChangeEvents.length === 0 || stints.length === 0) continue;
+
+    for (const stint of stints) {
+      if (teamIdSet && !teamIdSet.has(stint.teamId)) continue;
+      let count = 0;
+      for (const ce of controlChangeEvents) {
+        if (ce.videoTime >= stint.startTime && ce.videoTime <= stint.endTime) count++;
+      }
+      if (count > 0) churnByPlayer.set(stint.playerId, (churnByPlayer.get(stint.playerId) || 0) + count);
+    }
+  }
+
+  return solo.map(s => {
+    const controlChanges = churnByPlayer.get(s.playerId) || 0;
+    const eventsPerMin = s.totalMinutes > 0 ? Math.round(((s.plus + s.minus) / s.totalMinutes) * 100) / 100 : 0;
+    const controlChangesPerMin = s.totalMinutes > 0 ? Math.round((controlChanges / s.totalMinutes) * 100) / 100 : 0;
+
+    const wStat = withMap.get(s.playerId);
+    const woStat = withoutMap.get(s.playerId);
+    let plusMinusPerMinWith: number | null = null;
+    let plusMinusPerMinWithout: number | null = null;
+    let controlDependencyDelta = 0;
+    if (wStat && wStat.totalMinutes >= MIN_SPLIT_MINUTES) {
+      plusMinusPerMinWith = Math.round((wStat.plusMinus / wStat.totalMinutes) * 100) / 100;
+    }
+    if (woStat && woStat.totalMinutes >= MIN_SPLIT_MINUTES) {
+      plusMinusPerMinWithout = Math.round((woStat.plusMinus / woStat.totalMinutes) * 100) / 100;
+    }
+    if (plusMinusPerMinWith !== null && plusMinusPerMinWithout !== null) {
+      controlDependencyDelta = Math.round(Math.abs(plusMinusPerMinWith - plusMinusPerMinWithout) * 100) / 100;
+    }
+
+    return {
+      playerId: s.playerId,
+      playerName: s.playerName,
+      firstName: s.firstName,
+      lastName: s.lastName,
+      preferredName: s.preferredName,
+      nickname: s.nickname,
+      gamesPlayed: s.gamesPlayed,
+      totalMinutes: s.totalMinutes,
+      controlMinutes: s.controlMinutes,
+      controlPct: s.controlPct,
+      plus: s.plus,
+      minus: s.minus,
+      plusMinus: s.plusMinus,
+      eventsPerMin,
+      controlChanges,
+      controlChangesPerMin,
+      plusMinusPerMinWith,
+      plusMinusPerMinWithout,
+      controlDependencyDelta,
+      rapm: s.rapm,
+      bva: s.bva,
+      epr: s.epr,
+      fEpr: s.fEpr,
+    };
+  });
+}
+
+export interface BeaterArchetypeStats extends BeaterActivityStats {
+  aggressionScore: number;   // z-scored composite: +eventsPerMin, +controlChangesPerMin, -controlDependencyDelta
+  archetype: 'aggressive' | 'control' | 'balanced';
+}
+
+/**
+ * Buckets a (caller-filtered, e.g. min-minutes-qualified) set of beater
+ * activity stats into Control / Balanced / Aggressive archetypes using
+ * z-scored tertiles of the aggression composite.
+ */
+export function classifyBeaterArchetypes(stats: BeaterActivityStats[]): BeaterArchetypeStats[] {
+  const evZ = makeZScorer(stats.map(s => s.eventsPerMin));
+  const chZ = makeZScorer(stats.map(s => s.controlChangesPerMin));
+  const dZ = makeZScorer(stats.map(s => s.controlDependencyDelta));
+
+  const scored = stats.map(s => {
+    const aggressionScore = Math.round(((evZ(s.eventsPerMin) + chZ(s.controlChangesPerMin) - dZ(s.controlDependencyDelta)) / 3) * 100) / 100;
+    return { ...s, aggressionScore };
+  });
+
+  const sortedScores = [...scored].map(s => s.aggressionScore).sort((a, b) => a - b);
+  const n = sortedScores.length;
+  const lowCut = sortedScores[Math.floor(n / 3)] ?? 0;
+  const highCut = sortedScores[Math.floor((2 * n) / 3)] ?? 0;
+
+  return scored.map(s => ({
+    ...s,
+    archetype: n < 6
+      ? 'balanced'
+      : s.aggressionScore <= lowCut ? 'control' : s.aggressionScore >= highCut ? 'aggressive' : 'balanced'
+  }));
+}
+
+// ─── Quadball Archetype Analysis (Scorer / Defender / Creator / ...) ──
+//
+// Four archetypes for chasers & keepers, each defined as a weighted sum of
+// z-scored rate stats over the qualifying player pool. Some archetypes
+// also apply a hard qualifying filter (e.g. Pure Scorer requires more
+// goals than assists) before ranking. Every list is ranked independently,
+// so a versatile player can reasonably appear near the top of more than
+// one list.
+//
+// A couple of archetypes need stats that aren't on ExtendedPlayerStats
+// directly, so we derive them once per player before scoring:
+//   - missesPerTwenty: (shots + attempts + missKo) per 20 minutes — raw
+//     miss VOLUME, distinct from shotPct (which is an efficiency %, not
+//     a volume stat — a player can shoot a fine percentage while still
+//     missing a lot in absolute terms).
+//   - minutesShareOfTeam: this player's minutesPlayed as a share of the
+//     total minutes played by all their (primary) team's qualifying
+//     chasers/keepers. Low share = clear bench/depth player relative to
+//     their OWN team, not just relative to the league average.
+
+export type QuadballArchetype = 'scorer' | 'defender' | 'creator' | 'efficient';
+
+export interface QuadballArchetypeStats {
+  playerId: string;
+  playerName: string;
+  firstName: string;
+  lastName: string;
+  preferredName?: string;
+  nickname?: string;
+  gamesPlayed: number;
+  minutesPlayed: number;
+  goals: number;
+  assists: number;
+  goalsPerTwenty: number;
+  assistsPerTwenty: number;
+  pointsPerTwenty: number;
+  oRtg: number;
+  dRtg: number;
+  netRtg: number;
+  usgPct: number;
+  shotPct: number;
+  assistToTurnover: number;
+  gameScore: number;
+  rapm: number;
+  missesPerTwenty: number;
+  minutesShareOfTeam: number; // percentage, 0-100
+  fitScore: number;
+}
+
+// Derived, per-player scoring inputs — merges ExtendedPlayerStats fields
+// with the two computed-above-and-beyond fields so the generic weight
+// system below can treat them uniformly.
+type ArchetypeInput = ExtendedPlayerStats & { missesPerTwenty: number; minutesShareOfTeam: number };
+
+interface QuadballArchetypeDef {
+  label: string;
+  description: string;
+  filter?: (p: ExtendedPlayerStats) => boolean;
+  weights: { field: keyof ArchetypeInput; weight: number }[];
+}
+
+export const QUADBALL_ARCHETYPE_DEFS: Record<QuadballArchetype, QuadballArchetypeDef> = {
+  scorer: {
+    label: 'Pure Scorer',
+    description: 'More goals than assists, a high goal rate, and defense that lags behind the offense — the classic ball-in-the-hoop specialist.',
+    filter: p => p.goals > p.assists,
+    weights: [
+      { field: 'goalsPerTwenty', weight: 1 },
+      { field: 'dRtg', weight: 0.5 }, // higher dRtg = worse defense, reinforces the "pure" archetype
+    ],
+  },
+  defender: {
+    label: 'Defensive Specialist',
+    description: 'Low personal scoring output, a stingy defensive rating, and low usage — wins games without needing the ball.',
+    weights: [
+      { field: 'pointsPerTwenty', weight: -1 },
+      { field: 'dRtg', weight: -1 },
+      { field: 'usgPct', weight: -1 },
+    ],
+  },
+  creator: {
+    label: 'Creator',
+    description: 'More assists than goals, with the team scoring at a high rate whenever they\'re on the field — a playmaker, not a finisher.',
+    filter: p => p.assists > p.goals,
+    weights: [
+      { field: 'assistsPerTwenty', weight: 1 },
+      { field: 'oRtg', weight: 1 },
+    ],
+  },
+  efficient: {
+    label: 'Efficient Role Player',
+    description: 'Low usage and low minutes relative to their own team, but very clean with the touches they do get — high shooting efficiency, low miss volume, and a strong assist-to-turnover ratio.',
+    weights: [
+      { field: 'usgPct', weight: -1 },
+      { field: 'minutesShareOfTeam', weight: -1 },
+      { field: 'missesPerTwenty', weight: -1 },
+      { field: 'shotPct', weight: 1 },
+      { field: 'assistToTurnover', weight: 1 },
+    ],
+  },
+};
+
+/**
+ * Ranks a (caller-filtered, e.g. min-minutes-qualified) pool of quadball
+ * players against each of the four archetype definitions above. Z-scores
+ * are computed once across the FULL pool passed in, so scores stay
+ * comparable across lists; each list is then the (optionally hard-filtered)
+ * pool sorted by that archetype's fit score, descending.
+ *
+ * `events` is used only to attribute each player to a primary team (the
+ * team they're tagged with most often), so minutesShareOfTeam can be
+ * computed relative to that team's OTHER qualifying chasers/keepers.
+ */
+export function computeQuadballArchetypeRankings(
+  stats: ExtendedPlayerStats[],
+  events: GameEvent[]
+): Record<QuadballArchetype, QuadballArchetypeStats[]> {
+  // Attribute each player to whichever team they're tagged with most often.
+  const teamTagCounts = new Map<string, Map<string, number>>();
+  for (const e of events) {
+    if (!e.playerId || !e.teamId || e.teamId === 'null' || e.teamId === 'unknown') continue;
+    if (!teamTagCounts.has(e.playerId)) teamTagCounts.set(e.playerId, new Map());
+    const m = teamTagCounts.get(e.playerId)!;
+    m.set(e.teamId, (m.get(e.teamId) || 0) + 1);
+  }
+  const primaryTeam = new Map<string, string>();
+  for (const [pid, counts] of teamTagCounts) {
+    let bestTeam: string | null = null;
+    let bestCount = 0;
+    for (const [tid, c] of counts) {
+      if (c > bestCount) { bestTeam = tid; bestCount = c; }
+    }
+    if (bestTeam) primaryTeam.set(pid, bestTeam);
+  }
+
+  // Total minutes played by all qualifying players attributed to each team.
+  const teamTotalMinutes = new Map<string, number>();
+  stats.forEach(s => {
+    const t = primaryTeam.get(s.playerId);
+    if (!t) return;
+    teamTotalMinutes.set(t, (teamTotalMinutes.get(t) || 0) + s.minutesPlayed);
+  });
+
+  const inputs: ArchetypeInput[] = stats.map(s => {
+    const missVolume = (s.shots || 0) + (s.attempts || 0) + (s.missKo || 0);
+    const missesPerTwenty = s.minutesPlayed > 0 ? Math.round((missVolume / s.minutesPlayed) * 20 * 100) / 100 : 0;
+    const t = primaryTeam.get(s.playerId);
+    const teamTotal = t ? (teamTotalMinutes.get(t) || 0) : 0;
+    const minutesShareOfTeam = teamTotal > 0 ? Math.round((s.minutesPlayed / teamTotal) * 1000) / 10 : 0;
+    return { ...s, missesPerTwenty, minutesShareOfTeam };
+  });
+
+  const fieldSet = new Set<keyof ArchetypeInput>();
+  (Object.keys(QUADBALL_ARCHETYPE_DEFS) as QuadballArchetype[]).forEach(key => {
+    QUADBALL_ARCHETYPE_DEFS[key].weights.forEach(w => fieldSet.add(w.field));
+  });
+
+  const zScorers = new Map<keyof ArchetypeInput, (v: number) => number>();
+  fieldSet.forEach(field => {
+    const vals = inputs.map(s => Number((s as any)[field]) || 0);
+    zScorers.set(field, makeZScorer(vals));
+  });
+
+  const result = {} as Record<QuadballArchetype, QuadballArchetypeStats[]>;
+
+  (Object.keys(QUADBALL_ARCHETYPE_DEFS) as QuadballArchetype[]).forEach(key => {
+    const def = QUADBALL_ARCHETYPE_DEFS[key];
+    const pool = def.filter ? inputs.filter(def.filter) : inputs;
+
+    const scored: QuadballArchetypeStats[] = pool.map(p => {
+      let fitScore = 0;
+      def.weights.forEach(w => {
+        const z = zScorers.get(w.field)!(Number((p as any)[w.field]) || 0);
+        fitScore += z * w.weight;
+      });
+      fitScore = Math.round(fitScore * 100) / 100;
+      return {
+        playerId: p.playerId,
+        playerName: p.playerName,
+        firstName: p.firstName,
+        lastName: p.lastName,
+        preferredName: p.preferredName,
+        nickname: p.nickname,
+        gamesPlayed: p.gamesPlayed,
+        minutesPlayed: p.minutesPlayed,
+        goals: p.goals,
+        assists: p.assists,
+        goalsPerTwenty: p.goalsPerTwenty,
+        assistsPerTwenty: p.assistsPerTwenty,
+        pointsPerTwenty: p.pointsPerTwenty,
+        oRtg: p.oRtg,
+        dRtg: p.dRtg,
+        netRtg: p.netRtg,
+        usgPct: p.usgPct,
+        shotPct: p.shotPct,
+        assistToTurnover: p.assistToTurnover,
+        gameScore: p.gameScore,
+        rapm: p.rapm,
+        missesPerTwenty: p.missesPerTwenty,
+        minutesShareOfTeam: p.minutesShareOfTeam,
+        fitScore,
+      };
+    }).sort((a, b) => b.fitScore - a.fitScore);
+
+    result[key] = scored;
+  });
+
+  return result;
 }
 
 // ─── Seeker Stats ────────────────────────────────────────────────────

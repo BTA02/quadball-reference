@@ -16,7 +16,8 @@ service cloud.firestore {
     // teamId: required for team-attributable events; null on control_change means no team has possession
     //
     // Collection: players
-    // Fields: firstName, lastName, createdAt
+    // Fields: firstName, lastName, preferredName, nickname, createdAt
+    // gender: internal roster-eligibility field ('M' | 'W' | 'NB'), not surfaced in any UI
     //
     // Collection: teams
     // Fields: name, createdAt
@@ -85,6 +86,9 @@ service cloud.firestore {
     function isValidPlayer(data) {
       return (data.firstName == null || data.firstName is string) &&
              (data.lastName == null || data.lastName is string) &&
+             (data.preferredName == null || data.preferredName is string) &&
+             (data.nickname == null || data.nickname is string) &&
+             (data.gender == null || data.gender in ['M', 'W', 'NB']) &&
              (data.createdAt == null || data.createdAt is timestamp);
     }
 
