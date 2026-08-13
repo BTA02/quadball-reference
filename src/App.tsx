@@ -8113,10 +8113,10 @@ export default function App() {
   if (!user && !hasSeenLanding) return <LandingHero onProceed={() => { handleBypassLanding(); setView('stats'); }} onSignIn={() => handleBypassLanding()} />;
 
   return (
-    <div className={cn("bg-white text-gray-900 font-sans selection:bg-red-200/50", view === 'tracker' ? "h-screen overflow-hidden flex flex-col" : "min-h-screen")}>
+    <div className={cn("bg-white text-gray-900 font-sans selection:bg-red-200/50", (view === 'tracker' && currentVideo) ? "h-screen overflow-hidden flex flex-col" : "min-h-screen")}>
       <Toaster position="top-right" richColors />
       {/* Header */}
-      <header className={cn("border-b border-gray-200 bg-white/80 backdrop-blur-md z-50", view === 'tracker' ? "shrink-0" : "sticky top-0")}>
+      <header className={cn("border-b border-gray-200 bg-white/80 backdrop-blur-md z-50", (view === 'tracker' && currentVideo) ? "shrink-0" : "sticky top-0")}>
         <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <img src="/quadball-logo.svg" alt="Quadball Reference Logo" className="w-10 h-10 object-contain drop-shadow-sm" />
