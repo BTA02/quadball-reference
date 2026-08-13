@@ -48,14 +48,14 @@ export function sortBy<T>(arr: T[], key: any, dir: SortDir): T[] {
   });
 }
 
-export function SortHeader({ label, sortKey, currentSort, currentDir, onSort, tooltip, colorClass = 'text-red-600' }: {
+export function SortHeader({ label, sortKey, currentSort, currentDir, onSort, tooltip, colorClass = 'text-red-600', className }: {
   label: string; sortKey: string; currentSort: string; currentDir: SortDir;
-  onSort: (k: string) => void; tooltip?: string; colorClass?: string;
+  onSort: (k: string) => void; tooltip?: string; colorClass?: string; className?: string;
 }) {
   const active = currentSort === sortKey;
   return (
     <th className={cn('px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider cursor-pointer select-none whitespace-nowrap text-center',
-        active ? colorClass : 'text-slate-600 hover:text-slate-900')}
+        active ? colorClass : 'text-slate-600 hover:text-slate-900', className)}
       onClick={() => onSort(sortKey)} title={tooltip}>
       <span className="inline-flex items-center justify-center gap-0.5 w-full">
         {label}
@@ -67,7 +67,7 @@ export function SortHeader({ label, sortKey, currentSort, currentDir, onSort, to
   );
 }
 
-export function Cell({ value, highlight, bold, align = 'center' }: { value: string | number; highlight?: 'pos' | 'neg' | 'gold'; bold?: boolean, align?: 'left'|'center'|'right' }) {
+export function Cell({ value, highlight, bold, align = 'center', className }: { value: string | number; highlight?: 'pos' | 'neg' | 'gold'; bold?: boolean, align?: 'left'|'center'|'right', className?: string }) {
   let colorClass = 'text-slate-800';
   if (highlight === 'pos') colorClass = 'text-green-700';
   else if (highlight === 'neg') colorClass = 'text-red-700';
@@ -76,23 +76,23 @@ export function Cell({ value, highlight, bold, align = 'center' }: { value: stri
   return (
       <td className={cn('px-2 py-1.5 text-xs tabular-nums font-mono', colorClass,
         align === 'center' ? 'text-center' : align === 'left' ? 'text-left' : 'text-right',
-        bold && 'font-bold'
+        bold && 'font-bold', className
     )}>
       {typeof value === 'number' && value === Infinity ? '∞' : value}
     </td>
   );
 }
 
-export function SplitHeader({ label, sortKey, currentSort, currentDir, onSort, tooltip, colorClass = 'text-red-600', bgActiveMain = 'bg-red-50/20', bgActiveSub = 'bg-red-50/40', textActiveSub = 'text-red-700' }: {
+export function SplitHeader({ label, sortKey, currentSort, currentDir, onSort, tooltip, colorClass = 'text-red-600', bgActiveMain = 'bg-red-50/20', bgActiveSub = 'bg-red-50/40', textActiveSub = 'text-red-700', className }: {
   label: string; sortKey: string; currentSort: string; currentDir: SortDir;
-  onSort: (k: string) => void; tooltip?: string; colorClass?: string; bgActiveMain?: string; bgActiveSub?: string; textActiveSub?: string;
+  onSort: (k: string) => void; tooltip?: string; colorClass?: string; bgActiveMain?: string; bgActiveSub?: string; textActiveSub?: string; className?: string;
 }) {
   const activeMain = currentSort === sortKey;
   const activeWith = currentSort === `${sortKey}:with`;
   const activeWithout = currentSort === `${sortKey}:without`;
 
   return (
-    <th className="p-0 border-r border-gray-100 align-bottom min-w-[90px]">
+    <th className={cn('p-0 border-r border-gray-100 align-bottom min-w-[90px]', className)}>
       <div className={cn('px-2 py-1 text-[10px] font-semibold uppercase tracking-wider cursor-pointer select-none text-center border-b border-gray-100 transition-colors', activeMain ? `${colorClass} ${bgActiveMain}` : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50')} onClick={() => onSort(sortKey)} title={tooltip}>
         <span className="inline-flex flex-col items-center justify-center w-full">
           <span className="inline-flex items-center gap-0.5">
@@ -113,9 +113,9 @@ export function SplitHeader({ label, sortKey, currentSort, currentDir, onSort, t
   );
 }
 
-export function SplitCell({ valWith, valWithout, bold }: { valWith: string | number, valWithout: string | number, bold?: boolean }) {
+export function SplitCell({ valWith, valWithout, bold, className }: { valWith: string | number, valWithout: string | number, bold?: boolean, className?: string }) {
   return (
-    <td className="p-0 border-r border-gray-100">
+    <td className={cn('p-0 border-r border-gray-100', className)}>
       <div className="flex h-full min-h-[30px]">
         <div className="w-1/2 px-1 py-1.5 flex items-center justify-center text-xs tabular-nums font-mono text-slate-800 bg-white border-r border-gray-100/50">
           <span className={bold ? 'font-bold' : ''}>{typeof valWith === 'number' && valWith === Infinity ? '∞' : valWith}</span>

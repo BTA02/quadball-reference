@@ -45,6 +45,11 @@ import {
   StatsTabSelector, StatsTabButton
 } from './ui/StatsTable';
 
+// Tighter, grouped spacing for the mS / mAtt / mKO trio so they read as one wide "miss" column
+const MISS_GROUP_START = 'pl-2 pr-1 border-l border-gray-200';
+const MISS_GROUP_MID = 'px-1';
+const MISS_GROUP_END = 'pr-2 pl-1 border-r border-gray-200';
+
 export default function PlayerProfileView({
   players, events, games, seasons, teams, activePlayerId, initialSeasonId, leagues,
   onBack, onTeamSelect, onGameSelect, jerseyNumbers, statsFilter, onSeekToGameVideo
@@ -793,13 +798,14 @@ export default function PlayerProfileView({
                     {quadTab === 'boxscore' ? (<>
                       <QuadHeaderCell label="GP" sortKey="gamesPlayed" tooltip="Games Played" />
                       <QuadHeaderCell label="MIN" sortKey="minutesPlayed" tooltip="Minutes Played" />
-                      <QuadHeaderCell label="S" sortKey="shots" tooltip="Missed Shot (throws)" />
-                      <QuadHeaderCell label="ATT" sortKey="attempts" tooltip="Missed Attempt (drives/physical attacks)" />
-                      <QuadHeaderCell label="KO" sortKey="missKo" tooltip="Missed by Knockout" />
                       <QuadHeaderCell label="G" sortKey="goals" tooltip="Goals" />
                       <QuadHeaderCell label="A" sortKey="assists" tooltip="Assists" />
-                      <QuadHeaderCell label="TO" sortKey="turnovers" tooltip="Turnovers" />
+                      <QuadHeaderCell label="mTOT" sortKey="missTotal" tooltip="Miss Total (mS + mAtt + mKO)" />
                       <QuadHeaderCell label="S%" sortKey="shotPct" tooltip="Scoring % (Goals / (Goals + Shots + Attempts + KOs))" />
+                      <QuadHeaderCell label="mS" sortKey="shots" tooltip="Missed Shot (throws)" className={MISS_GROUP_START} />
+                      <QuadHeaderCell label="mAtt" sortKey="attempts" tooltip="Missed Attempt (drives/physical attacks)" className={MISS_GROUP_MID} />
+                      <QuadHeaderCell label="mKO" sortKey="missKo" tooltip="Missed by Knockout" className={MISS_GROUP_END} />
+                      <QuadHeaderCell label="TO" sortKey="turnovers" tooltip="Turnovers" />
                       <QuadHeaderCell label="CTRL%" sortKey="controlPctOnField" tooltip="Team Bludger Control % While On Field" />
                     </>) : quadTab === 'rates' ? (<>
                       <QuadHeaderCell label="GP" sortKey="gamesPlayed" tooltip="Games Played" />
@@ -844,13 +850,14 @@ export default function PlayerProfileView({
                     {quadTab === 'boxscore' ? (<>
                       <Cell value={quadStats.gamesPlayed} />
                       <Cell value={quadStats.minutesPlayed} />
-                      <Cell value={quadStats.shots} />
-                      <Cell value={quadStats.attempts} />
-                      <Cell value={quadStats.missKo} />
                       <Cell value={quadStats.goals} bold />
                       <Cell value={quadStats.assists} bold />
-                      <Cell value={quadStats.turnovers} />
+                      <Cell value={quadStats.missTotal} />
                       <Cell value={`${quadStats.shotPct}%`} />
+                      <Cell value={quadStats.shots} className={MISS_GROUP_START} />
+                      <Cell value={quadStats.attempts} className={MISS_GROUP_MID} />
+                      <Cell value={quadStats.missKo} className={MISS_GROUP_END} />
+                      <Cell value={quadStats.turnovers} />
                       <Cell value={`${quadStats.controlPctOnField}%`} />
                     </>) : quadTab === 'rates' ? (<>
                       <Cell value={quadStats.gamesPlayed} />
