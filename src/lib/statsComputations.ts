@@ -335,6 +335,7 @@ export interface AdvancedPlayerStats {
   shots: number;
   attempts: number;
   missKo: number;
+  missTotal: number;
   turnovers: number;
   fouls: number;
   points: number;
@@ -1131,6 +1132,7 @@ export function computeAdvancedStats(
       shots: accum.shots, // Explicit thrown shots
       attempts: accum.attempts, // Physical drives
       missKo: accum.missKo,     // Miss by KO
+      missTotal: accum.shots + accum.attempts + accum.missKo,
       turnovers: accum.turnovers,
       fouls: accum.fouls,
       teamTurnoversOn: accum.teamTurnoversOn,
@@ -1192,6 +1194,7 @@ export interface ExtendedPlayerStats {
   shots: number;
   attempts: number;
   missKo: number;
+  missTotal: number;
   turnovers: number;
   fouls: number;
   points: number;
@@ -1512,12 +1515,13 @@ export function computeExtendedStats(
       shots: a.shots,
       attempts: a.attempts,
       missKo: a.missKo,
+      missTotal: a.shots + a.attempts + a.missKo,
       turnovers: a.turnovers,
       fouls: a.fouls,
       points,
       // Merged basic metrics
       controlPctOnField: a.controlPctOnField,
-      shotPct: (a.goals + a.shots + a.attempts + a.missKo) > 0 
+      shotPct: (a.goals + a.shots + a.attempts + a.missKo) > 0
         ? Math.round((a.goals / (a.goals + a.shots + a.attempts + a.missKo)) * 1000) / 10 
         : 0,
       assistToTurnover: a.turnovers > 0
@@ -1547,6 +1551,7 @@ export interface TeamQuadballStats {
   shots: number;
   attempts: number;
   missKo: number;
+  missTotal: number;
   turnovers: number;
   goalsAgainst: number;
   plusMinus: number;
@@ -1734,6 +1739,7 @@ export function computeTeamQuadballStats(
       shots: acc.shots,
       attempts: acc.attempts,
       missKo: acc.missKo,
+      missTotal: acc.shots + acc.attempts + acc.missKo,
       turnovers: acc.turnovers,
       shotPct: (acc.goals + acc.shots + acc.attempts + acc.missKo) > 0 ? Math.round((acc.goals / (acc.goals + acc.shots + acc.attempts + acc.missKo)) * 1000) / 10 : 0,
       goalsPerGame: gp > 0 ? Math.round((acc.goals / gp) * 100) / 100 : 0,

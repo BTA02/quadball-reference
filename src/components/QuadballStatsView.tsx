@@ -24,6 +24,11 @@ import {
   StatsTabSelector, StatsTabButton, StatsPaginationFooter 
 } from './ui/StatsTable';
 
+// Tighter, grouped spacing for the mS / mAtt / mKO trio so they read as one wide "miss" column
+const MISS_GROUP_START = 'pl-2 pr-1 border-l border-gray-200';
+const MISS_GROUP_MID = 'px-1';
+const MISS_GROUP_END = 'pr-2 pl-1 border-r border-gray-200';
+
 interface QuadballStatsViewProps {
   players: Player[];
   events: GameEvent[];
@@ -216,13 +221,14 @@ export default function QuadballStatsView({
             <ul className="list-disc pl-4 space-y-1 opacity-90">
               <li><strong>GP</strong> — Games Played. Number of games with recorded minutes.</li>
               <li><strong>MIN</strong> — Minutes Played. Total on-field time across all games.</li>
-              <li><strong>S</strong> — Missed Shots. Thrown shots that did not result in a goal.</li>
-              <li><strong>ATT</strong> — Missed Attempts. Drives or physical attacks on the hoops that did not result in a goal.</li>
-              <li><strong>KO</strong> — Missed by Knockout. Possessions ending because the player was knocked out before releasing a shot.</li>
               <li><strong>G</strong> — Goals. Total goals scored (10 points each).</li>
               <li><strong>A</strong> — Assists. Passes leading directly to a scored goal.</li>
-              <li><strong>TO</strong> — Turnovers. Loss of offensive possession without a shot attempt.</li>
+              <li><strong>mTOT</strong> — Miss Total. mS + mAtt + mKO combined.</li>
               <li><strong>S%</strong> — Scoring Percentage. Goals ÷ (Goals + Shots + Attempts + KOs).</li>
+              <li><strong>mS</strong> — Missed Shots. Thrown shots that did not result in a goal.</li>
+              <li><strong>mAtt</strong> — Missed Attempts. Drives or physical attacks on the hoops that did not result in a goal.</li>
+              <li><strong>mKO</strong> — Missed by Knockout. Scoring attempt ending because the player was knocked out before releasing the quadball on a shot or drive.</li>
+              <li><strong>TO</strong> — Turnovers. Loss of offensive possession without a shot attempt.</li>
               <li><strong>CTRL%</strong> — Bludger Control %. Percentage of game time the player's team held dodgeball control while the player was on the field.</li>
             </ul>
           </>) : tab === 'rates' ? (<>
@@ -272,9 +278,10 @@ export default function QuadballStatsView({
               <li><strong>GP</strong> — Games Played.</li>
               <li><strong>G</strong> — Total Goals scored by the team.</li>
               <li><strong>A</strong> — Total Assists recorded by the team.</li>
-              <li><strong>S</strong> — Missed Shots.</li>
-              <li><strong>ATT</strong> — Missed Attempts.</li>
-              <li><strong>KO</strong> — Missed by Knockout.</li>
+              <li><strong>mS</strong> — Missed Shots.</li>
+              <li><strong>mAtt</strong> — Missed Attempts.</li>
+              <li><strong>mKO</strong> — Missed by Knockout. Scoring attempt ending because the player was knocked out before releasing the quadball on a shot or drive.</li>
+              <li><strong>mTOT</strong> — Miss Total. mS + mAtt + mKO combined.</li>
               <li><strong>TO</strong> — Turnovers.</li>
               <li><strong>G/G</strong> — Goals per Game.</li>
               <li><strong>A/G</strong> — Assists per Game.</li>
@@ -299,13 +306,14 @@ export default function QuadballStatsView({
                 {tab === 'boxscore' ? (<>
                   <HeaderCell label="GP" sortKey="gamesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Games Played" />
                   <HeaderCell label="MIN" sortKey="minutesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Minutes Played" />
-                  <HeaderCell label="S" sortKey="shots" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Missed Shot (throws)" />
-                  <HeaderCell label="ATT" sortKey="attempts" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Missed Attempt (drives/physical attacks)" />
-                  <HeaderCell label="KO" sortKey="missKo" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Missed by Knockout" />
                   <HeaderCell label="G" sortKey="goals" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals" />
                   <HeaderCell label="A" sortKey="assists" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Assists" />
-                  <HeaderCell label="TO" sortKey="turnovers" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Turnovers" />
+                  <HeaderCell label="mTOT" sortKey="missTotal" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Miss Total (mS + mAtt + mKO)" />
                   <HeaderCell label="S%" sortKey="shotPct" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Scoring % (Goals / (Goals + Shots + Attempts + KOs))" />
+                  <HeaderCell label="mS" sortKey="shots" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Missed Shot (throws)" className={MISS_GROUP_START} />
+                  <HeaderCell label="mAtt" sortKey="attempts" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Missed Attempt (drives/physical attacks)" className={MISS_GROUP_MID} />
+                  <HeaderCell label="mKO" sortKey="missKo" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Missed by Knockout" className={MISS_GROUP_END} />
+                  <HeaderCell label="TO" sortKey="turnovers" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Turnovers" />
                   <HeaderCell label="CTRL%" sortKey="controlPctOnField" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Team Bludger Control % While On Field" />
                 </>) : tab === 'rates' ? (<>
                   <HeaderCell label="GP" sortKey="gamesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Games Played" />
@@ -343,9 +351,10 @@ export default function QuadballStatsView({
                   <HeaderCell label="GP" sortKey="gamesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Games Played" />
                   <HeaderCell label="G" sortKey="goals" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals" />
                   <HeaderCell label="A" sortKey="assists" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Assists" />
-                  <HeaderCell label="S" sortKey="shots" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Missed Shot" />
-                  <HeaderCell label="ATT" sortKey="attempts" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Missed Attempt" />
-                  <HeaderCell label="KO" sortKey="missKo" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Missed by Knockout" />
+                  <HeaderCell label="mS" sortKey="shots" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Missed Shot" className={MISS_GROUP_START} />
+                  <HeaderCell label="mAtt" sortKey="attempts" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Missed Attempt" className={MISS_GROUP_MID} />
+                  <HeaderCell label="mKO" sortKey="missKo" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Missed by Knockout" className={MISS_GROUP_END} />
+                  <HeaderCell label="mTOT" sortKey="missTotal" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Miss Total (mS + mAtt + mKO)" />
                   <HeaderCell label="TO" sortKey="turnovers" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Turnovers" />
                   <HeaderCell label="G/G" sortKey="goalsPerGame" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals per Game" />
                   <HeaderCell label="A/G" sortKey="assistsPerGame" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Assists per Game" />
@@ -361,17 +370,18 @@ export default function QuadballStatsView({
                 <tr><td colSpan={12} className="py-8 text-center text-slate-500 text-xs">No stats found</td></tr>
               ) : paged.map((row: any, idx) => {
                 const rank = (page - 1) * perPage + idx + 1;
-                const DataCell = ({ prop, fmt, bold }: { prop?: string, fmt?: (v: any, rowObj?: any) => string|number, bold?: boolean }) => {
+                const DataCell = ({ prop, fmt, bold, group }: { prop?: string, fmt?: (v: any, rowObj?: any) => string|number, bold?: boolean, group?: 'start' | 'mid' | 'end' }) => {
+                  const groupClass = group === 'start' ? MISS_GROUP_START : group === 'mid' ? MISS_GROUP_MID : group === 'end' ? MISS_GROUP_END : undefined;
                   if (useSplit && tab !== 'team') {
                     let wVal = prop ? (row._with?.[prop] ?? '—') : '—';
                     let woVal = prop ? (row._without?.[prop] ?? '—') : '—';
                     if (fmt && row._with && wVal !== '—') wVal = fmt(wVal, row._with);
                     if (fmt && row._without && woVal !== '—') woVal = fmt(woVal, row._without);
-                    return <SplitCell valWith={wVal} valWithout={woVal} bold={bold} />;
+                    return <SplitCell valWith={wVal} valWithout={woVal} bold={bold} className={groupClass} />;
                   } else {
                     let aVal = prop ? (row[prop] ?? '—') : '—';
                     if (fmt && aVal !== '—') aVal = fmt(aVal, row);
-                    return <Cell value={aVal} bold={bold} />;
+                    return <Cell value={aVal} bold={bold} className={groupClass} />;
                   }
                 };
                 return (
@@ -393,13 +403,14 @@ export default function QuadballStatsView({
                     {tab === 'boxscore' ? (<>
                       <DataCell prop="gamesPlayed" />
                       <DataCell prop="minutesPlayed" />
-                      <DataCell prop="shots" />
-                      <DataCell prop="attempts" />
-                      <DataCell prop="missKo" />
                       <DataCell prop="goals" bold />
                       <DataCell prop="assists" bold />
-                      <DataCell prop="turnovers" />
+                      <DataCell prop="missTotal" />
                       <DataCell prop="shotPct" fmt={v => `${v}%`} />
+                      <DataCell prop="shots" group="start" />
+                      <DataCell prop="attempts" group="mid" />
+                      <DataCell prop="missKo" group="end" />
+                      <DataCell prop="turnovers" />
                       <DataCell prop="controlPctOnField" fmt={v => `${v}%`} />
                     </>) : tab === 'rates' ? (<>
                       <DataCell prop="gamesPlayed" />
@@ -437,9 +448,10 @@ export default function QuadballStatsView({
                       <DataCell prop="gamesPlayed" />
                       <DataCell prop="goals" bold />
                       <DataCell prop="assists" bold />
-                      <DataCell prop="shots" />
-                      <DataCell prop="attempts" />
-                      <DataCell prop="missKo" />
+                      <DataCell prop="shots" group="start" />
+                      <DataCell prop="attempts" group="mid" />
+                      <DataCell prop="missKo" group="end" />
+                      <DataCell prop="missTotal" />
                       <DataCell prop="turnovers" />
                       <DataCell prop="goalsPerGame" />
                       <DataCell prop="assistsPerGame" />
@@ -460,7 +472,7 @@ export default function QuadballStatsView({
       <StatsPaginationFooter
         itemCount={data.length}
         itemName={tab === 'team' ? 'teams' : 'players'}
-        legend="S = shots • ATT = attempts (drives) • G = goals • A = assists • TO = turnovers • S% = shooting %"
+        legend="mS = missed shots • mAtt = missed attempts (drives) • mKO = missed by knockout • mTOT = mS + mAtt + mKO • G = goals • A = assists • TO = turnovers • S% = scoring %"
         page={page}
         totalPages={totalPages}
         setPage={setPage}

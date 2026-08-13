@@ -8377,50 +8377,74 @@ export default function App() {
 
               <div className="space-y-6">
                 <div>
-                  <h4 className="font-bold text-gray-900 uppercase tracking-widest text-sm mb-2 opacity-70 border-b pb-1">Basic Stats</h4>
+                  <h4 className="font-bold text-gray-900 uppercase tracking-widest text-sm mb-2 opacity-70 border-b pb-1">Box Score — Counting Stats</h4>
                   <ul className="space-y-3 text-sm text-gray-700">
-                    <li><strong className="text-gray-900 w-16 inline-block">GP</strong> Games Played.</li>
-                    <li><strong className="text-gray-900 w-16 inline-block">MIN</strong> Total Minutes Played.</li>
-                    <li><strong className="text-gray-900 w-16 inline-block">S</strong> Missed Shot (throws).</li>
-                    <li><strong className="text-gray-900 w-16 inline-block">ATT</strong> Missed Attempt (drives/physical attacks).</li>
-                    <li><strong className="text-gray-900 w-16 inline-block">KO</strong> Missed by Knockout (Time expiring or physical blockade prior to shot release).</li>
-                    <li><strong className="text-gray-900 w-16 inline-block">G</strong> Total Goals scored (10 points each).</li>
-                    <li><strong className="text-gray-900 w-16 inline-block">A</strong> Assists (Passes leading directly to a goal).</li>
-                    <li><strong className="text-gray-900 w-16 inline-block">TO</strong> Turnovers (Loss of offensive possession without a shot).</li>
-                    <li><strong className="text-gray-900 w-16 inline-block">A:TO</strong> Ratio of Assists to Turnovers.</li>
-                    <li><strong className="text-gray-900 w-16 inline-block">S%</strong> Shooting Percentage (Goals divided by Total Shots).</li>
-                    <li><strong className="text-gray-900 w-16 inline-block">CTRL%</strong> Team Bludger Control Percentage while this player is on the field.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">GP</strong> Games Played. Number of games with recorded minutes.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">MIN</strong> Minutes Played. Total on-field time across all games.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">G</strong> Goals. Total goals scored (10 points each).</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">A</strong> Assists. Passes leading directly to a scored goal.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">mTOT</strong> Miss Total. mS + mAtt + mKO combined.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">S%</strong> Scoring Percentage. Goals ÷ (Goals + mS + mAtt + mKO).</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">mS</strong> Missed Shots. Thrown shots that did not result in a goal.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">mAtt</strong> Missed Attempts. Drives or physical attacks on the hoops that did not result in a goal.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">mKO</strong> Missed by Knockout. Scoring attempt ending because the player was knocked out before releasing the quadball on a shot or drive.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">TO</strong> Turnovers. Loss of offensive possession without a shot attempt.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">CTRL%</strong> Bludger Control %. Percentage of game time the player's team held dodgeball control while the player was on the field.</li>
                   </ul>
                 </div>
 
                 <div>
-                  <h4 className="font-bold text-gray-900 uppercase tracking-widest text-sm mb-2 opacity-70 border-b pb-1">Advanced Stats</h4>
+                  <h4 className="font-bold text-gray-900 uppercase tracking-widest text-sm mb-2 opacity-70 border-b pb-1">Rate Score — Per-Game &amp; Pace-Adjusted Rates</h4>
                   <ul className="space-y-3 text-sm text-gray-700">
-                    <li><strong className="text-gray-900 w-16 inline-block">+</strong> Plus (Total goals scored by the team while the player is on).</li>
-                    <li><strong className="text-gray-900 w-16 inline-block">−</strong> Minus (Total goals conceded by the team while the player is on).</li>
-                    <li><strong className="text-gray-900 w-16 inline-block">+/−</strong> Plus/Minus (Net differential: Plus minus Minus).</li>
-                    <li><strong className="text-gray-900 w-16 inline-block">+:−</strong> Plus:Minus Ratio (Team goals scored divided by Team goals conceded while on field).</li>
-                    <li><strong className="text-gray-900 w-16 inline-block">Off +:−</strong> Plus:Minus Ratio for the team when this player is NOT on the field.</li>
-                    <li><strong className="text-gray-900 w-16 inline-block">REL +:−</strong> Relative Value (The player's +:− divided by the Off +:−). Measures individual impact relative to the rest of the team.</li>
-                    <li><strong className="text-gray-900 w-16 inline-block">G/20</strong> Goals scored per 20 minutes played.</li>
-                    <li><strong className="text-gray-900 w-16 inline-block">A/20</strong> Assists recorded per 20 minutes played.</li>
-                    <li><strong className="text-gray-900 w-16 inline-block">PTS/20</strong> Points (Goals + Assists) per 20 minutes played.</li>
-                    <li><strong className="text-gray-900 w-16 inline-block">G/G</strong> Average Goals per Game played.</li>
-                    <li><strong className="text-gray-900 w-16 inline-block">A/G</strong> Average Assists per Game played.</li>
-                    <li><strong className="text-gray-900 w-16 inline-block">PTS/G</strong> Average Points per Game played.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">G/G</strong> Goals per Game.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">A/G</strong> Assists per Game.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">PTS/G</strong> Points (Goals + Assists) per Game.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">G/20</strong> Goals per 20 minutes played. Normalizes for different playing times.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">A/20</strong> Assists per 20 minutes played.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">PTS/20</strong> Points per 20 minutes played.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">G/25</strong> Goals per 25 possessions. Adjusts for pace differences between games.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">A/25</strong> Assists per 25 possessions.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">PTS/25</strong> Points per 25 possessions.</li>
                   </ul>
                 </div>
 
                 <div>
-                  <h4 className="font-bold text-gray-900 uppercase tracking-widest text-sm mb-2 opacity-70 border-b pb-1">Team Impact</h4>
+                  <h4 className="font-bold text-gray-900 uppercase tracking-widest text-sm mb-2 opacity-70 border-b pb-1">Plus/Minus — On-Field Impact</h4>
                   <ul className="space-y-3 text-sm text-gray-700">
-                    <li><strong className="text-gray-900 w-16 inline-block">ORTG</strong> Offensive Rating (Team points scored per 100 offensive possessions while on field).</li>
-                    <li><strong className="text-gray-900 w-16 inline-block">DRTG</strong> Defensive Rating (Team points conceded per 100 defensive possessions while on field).</li>
-                    <li><strong className="text-gray-900 w-16 inline-block">NET</strong> Net Rating (ORTG - DRTG).</li>
-                    <li><strong className="text-gray-900 w-16 inline-block">TOV%</strong> Team Turnover Rate (Team Turnovers per possession while on field).</li>
-                    <li><strong className="text-gray-900 w-16 inline-block">FTOV%</strong> Forced Turnover Rate (Opponent Turnovers per possession while on field).</li>
-                    <li><strong className="text-gray-900 w-16 inline-block">USG%</strong> Usage Rate (Estimates percentage of team possessions a player is involved in while playing).</li>
-                    <li><strong className="text-gray-900 w-16 inline-block">GmSc</strong> Game Score (Composite single-number rating of productivity based on basic counting stats).</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">+</strong> Plus. Total goals scored by the player's team while they are on the field.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">−</strong> Minus. Total goals conceded by the player's team while they are on the field.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">+:−</strong> Plus-to-Minus Ratio. Team goals scored ÷ Team goals conceded while on the field.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">Off+:−</strong> Off-Field Ratio. The team's plus-to-minus ratio when this player is NOT on the field.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">REL +:−</strong> Relative Value. The player's on-field ratio divided by the off-field ratio. Values above 1.0 indicate the team performs better with the player on the field.</li>
+                  </ul>
+                </div>
+
+                <div>
+                  <h4 className="font-bold text-gray-900 uppercase tracking-widest text-sm mb-2 opacity-70 border-b pb-1">Advanced — Efficiency &amp; Impact Metrics</h4>
+                  <p className="text-xs text-gray-500 mb-1">Possessions are inferred dynamically — a team possession ends when a Goal, Shot, or Turnover occurs while a player is on the field.</p>
+                  <ul className="space-y-3 text-sm text-gray-700">
+                    <li><strong className="text-gray-900 w-16 inline-block">ORTG</strong> Offensive Rating. Points scored per 25 offensive possessions while on the field.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">DRTG</strong> Defensive Rating. Points conceded per 25 defensive possessions while on the field.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">NET</strong> Net Rating. ORTG minus DRTG. Positive values indicate outscoring opponents.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">RAPM</strong> Regularized Adjusted Plus-Minus. A ridge-regression model that isolates individual impact by controlling for teammates and opponents on the field simultaneously.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">CVA</strong> Chaser Value Added. Overall estimated goals added/saved per 20 minutes vs. league average chaser.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">EPR</strong> Empty Possession Rate. Percentage of offensive possessions that are "empty" — ending in a turnover with no shot, attempt, or KO taken during that possession.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">fEPR</strong> Forced Empty Possession Rate. Percentage of defensive possessions where the opponent's possession was "empty" — they turned the ball over without getting off a shot, attempt, or KO.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">USG%</strong> Usage Rate. Estimates the percentage of team possessions a player is directly involved in (Goals + Assists + Shots + Turnovers ÷ Team Possessions while on field).</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">GmSc</strong> Game Score. A composite single-number rating of overall productivity based on counting stats.</li>
+                  </ul>
+                </div>
+
+                <div>
+                  <h4 className="font-bold text-gray-900 uppercase tracking-widest text-sm mb-2 opacity-70 border-b pb-1">Team Aggregates</h4>
+                  <ul className="space-y-3 text-sm text-gray-700">
+                    <li><strong className="text-gray-900 w-16 inline-block">G</strong> Total Goals scored by the team.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">A</strong> Total Assists recorded by the team.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">mS</strong> Missed Shots.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">mAtt</strong> Missed Attempts.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">mKO</strong> Missed by Knockout. Scoring attempt ending because the player was knocked out before releasing the quadball on a shot or drive.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">mTOT</strong> Miss Total. mS + mAtt + mKO combined.</li>
+                    <li><strong className="text-gray-900 w-16 inline-block">TO</strong> Turnovers.</li>
                   </ul>
                 </div>
               </div>
@@ -8428,19 +8452,38 @@ export default function App() {
 
             <section>
               <h3 className="text-2xl font-bold mb-4 text-purple-800 flex items-center gap-2"><Target className="w-6 h-6" /> Beaters (Pairs & Solo)</h3>
-              <div className="space-y-3 text-sm text-gray-700">
-                <ul className="space-y-3 text-sm text-gray-700 relative pl-1">
-                  <li><strong className="text-gray-900 w-20 inline-block">GP</strong> Games Played.</li>
-                  <li><strong className="text-gray-900 w-20 inline-block">+</strong> Goals scored by the team while this beater/pair was active.</li>
-                  <li><strong className="text-gray-900 w-20 inline-block">−</strong> Goals conceded by the team while this beater/pair was active.</li>
-                  <li><strong className="text-gray-900 w-20 inline-block">+/−</strong> Point differential while this beater/pair was active.</li>
-                  <li><strong className="text-gray-900 w-20 inline-block">CTRL</strong> Control Minutes. Minutes the team held dodgeball control while on field.</li>
-                  <li><strong className="text-gray-900 w-20 inline-block">TOT</strong> Total game-clock minutes played for this pair or individual.</li>
-                  <li><strong className="text-gray-900 w-20 inline-block">CTRL%</strong> Percentage of possession time the team maintained dodgeball control.</li>
-                  <li><strong className="text-gray-900 w-20 inline-block">+:−</strong> Ratio of Plus to Minus.</li>
-                  <li><strong className="text-gray-900 w-20 inline-block">Off+:−</strong> Ratio of Plus to Minus while this beater/pair is off the field.</li>
-                  <li><strong className="text-gray-900 w-20 inline-block">REL +:−</strong> Relative Value (The plus-minus ratio compared to the off-field ratio).</li>
-                </ul>
+              <div className="space-y-6">
+                <div>
+                  <h4 className="font-bold text-gray-900 uppercase tracking-widest text-sm mb-2 opacity-70 border-b pb-1">Team Aggregates</h4>
+                  <ul className="space-y-3 text-sm text-gray-700">
+                    <li><strong className="text-gray-900 w-20 inline-block">GP</strong> Games Played.</li>
+                    <li><strong className="text-gray-900 w-20 inline-block">CTRL</strong> Control Minutes. Minutes the team held dodgeball control while on field.</li>
+                    <li><strong className="text-gray-900 w-20 inline-block">TOT</strong> Total Minutes. Total game-clock minutes played for this pair or individual.</li>
+                    <li><strong className="text-gray-900 w-20 inline-block">CTRL%</strong> Control %. Percentage of possession time the team has active dodgeball control.</li>
+                    <li><strong className="text-gray-900 w-20 inline-block">CTRL/G</strong> Control Minutes per Game.</li>
+                    <li><strong className="text-gray-900 w-20 inline-block">Opp CTRL%</strong> Opponent Control %. Percentage of possession time the opponent has active dodgeball control.</li>
+                  </ul>
+                </div>
+
+                <div>
+                  <h4 className="font-bold text-gray-900 uppercase tracking-widest text-sm mb-2 opacity-70 border-b pb-1">Pairs &amp; Solo</h4>
+                  <ul className="space-y-3 text-sm text-gray-700">
+                    <li><strong className="text-gray-900 w-20 inline-block">GP</strong> Games Played.</li>
+                    <li><strong className="text-gray-900 w-20 inline-block">+</strong> Plus. Goals scored by the team while this beater/pair was active.</li>
+                    <li><strong className="text-gray-900 w-20 inline-block">−</strong> Minus. Goals conceded by the team while this beater/pair was active.</li>
+                    <li><strong className="text-gray-900 w-20 inline-block">+/−</strong> Plus/Minus. Point differential while this beater/pair was active.</li>
+                    <li><strong className="text-gray-900 w-20 inline-block">CTRL</strong> Control Minutes. Minutes the team held dodgeball control while on field.</li>
+                    <li><strong className="text-gray-900 w-20 inline-block">TOT</strong> Total game-clock minutes played for this pair or individual.</li>
+                    <li><strong className="text-gray-900 w-20 inline-block">CTRL%</strong> Percentage of possession time the team maintained dodgeball control.</li>
+                    <li><strong className="text-gray-900 w-20 inline-block">+:−</strong> Ratio of Plus to Minus.</li>
+                    <li><strong className="text-gray-900 w-20 inline-block">Off+:−</strong> Ratio of Plus to Minus while this beater/pair is off the field.</li>
+                    <li><strong className="text-gray-900 w-20 inline-block">REL +:−</strong> Relative Value (The plus-minus ratio compared to the off-field ratio).</li>
+                    <li><strong className="text-gray-900 w-20 inline-block">RAPM</strong> Regularized Adjusted Plus-Minus. A ridge-regression model that isolates individual impact controlling for teammates and opponents on field.</li>
+                    <li><strong className="text-gray-900 w-20 inline-block">EPR</strong> Empty Possession Rate while on field.</li>
+                    <li><strong className="text-gray-900 w-20 inline-block">fEPR</strong> Forced Empty Possession Rate while on field.</li>
+                    <li><strong className="text-gray-900 w-20 inline-block">BVA</strong> Beater Value Added. Overall estimated goals added/saved per 20 minutes of possession vs. league average beater.</li>
+                  </ul>
+                </div>
               </div>
             </section>
           </div>
