@@ -9765,7 +9765,7 @@ export default function App() {
                                         })
                                         .map(rp => (
                                           <option key={rp.playerId} value={rp.playerId}>
-                                            {draft.type !== 'sub_in' ? `[${(activePlayerPositions.get(rp.playerId) || 'bench').substring(0, 1).toUpperCase()}] ` : ''}
+                                            {draft.type !== 'sub_in' ? `[${(activePlayerPositions.get(rp.playerId) || 'off').substring(0, 1).toUpperCase()}] ` : ''}
                                             {getPlayerShortName(rp.player, homeRosterPlayers)}
                                           </option>
                                         ))}
@@ -9834,7 +9834,7 @@ export default function App() {
                                         })
                                         .map(rp => (
                                           <option key={rp.playerId} value={rp.playerId}>
-                                            {draft.type !== 'sub_in' ? `[${(activePlayerPositions.get(rp.playerId) || 'bench').substring(0, 1).toUpperCase()}] ` : ''}
+                                            {draft.type !== 'sub_in' ? `[${(activePlayerPositions.get(rp.playerId) || 'off').substring(0, 1).toUpperCase()}] ` : ''}
                                             {getPlayerShortName(rp.player, awayRosterPlayers)}
                                           </option>
                                         ))}
@@ -9903,7 +9903,7 @@ export default function App() {
                                           })
                                           .map(rp => (
                                             <option key={rp.playerId} value={rp.playerId}>
-                                              Assist - [{(activePlayerPositions.get(rp.playerId) || 'bench').substring(0, 1).toUpperCase()}] {getPlayerShortName(rp.player, draft.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)}
+                                              Assist - [{(activePlayerPositions.get(rp.playerId) || 'off').substring(0, 1).toUpperCase()}] {getPlayerShortName(rp.player, draft.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)}
                                             </option>
                                           ))}
                                       </select>
