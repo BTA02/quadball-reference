@@ -9746,9 +9746,7 @@ export default function App() {
                                         .filter(rp => {
                                           if (draft.type === 'sub_in') return !activePlayerPositions.has(rp.playerId);
                                           if (draft.type === 'sub_out') return activePlayerPositions.has(rp.playerId);
-                                          const teamAnyActive = homeRosterPlayers.some(r => activePlayerPositions.has(r.playerId));
-                                          if (!teamAnyActive) return true;
-                                          return activePlayerPositions.has(rp.playerId);
+                                          return true;
                                         })
                                         .sort((a, b) => {
                                           if (draft.type === 'sub_in') {
@@ -9817,9 +9815,7 @@ export default function App() {
                                         .filter(rp => {
                                           if (draft.type === 'sub_in') return !activePlayerPositions.has(rp.playerId);
                                           if (draft.type === 'sub_out') return activePlayerPositions.has(rp.playerId);
-                                          const teamAnyActive = awayRosterPlayers.some(r => activePlayerPositions.has(r.playerId));
-                                          if (!teamAnyActive) return true;
-                                          return activePlayerPositions.has(rp.playerId);
+                                          return true;
                                         })
                                         .sort((a, b) => {
                                           if (draft.type === 'sub_in') {
