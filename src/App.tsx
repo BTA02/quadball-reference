@@ -9746,9 +9746,7 @@ export default function App() {
                                         .filter(rp => {
                                           if (draft.type === 'sub_in') return !activePlayerPositions.has(rp.playerId);
                                           if (draft.type === 'sub_out') return activePlayerPositions.has(rp.playerId);
-                                          const teamAnyActive = homeRosterPlayers.some(r => activePlayerPositions.has(r.playerId));
-                                          if (!teamAnyActive) return true;
-                                          return activePlayerPositions.has(rp.playerId);
+                                          return true;
                                         })
                                         .sort((a, b) => {
                                           if (draft.type === 'sub_in') {
@@ -9767,7 +9765,7 @@ export default function App() {
                                         })
                                         .map(rp => (
                                           <option key={rp.playerId} value={rp.playerId}>
-                                            {draft.type !== 'sub_in' ? `[${(activePlayerPositions.get(rp.playerId) || 'bench').substring(0, 1).toUpperCase()}] ` : ''}
+                                            {draft.type !== 'sub_in' ? `[${(activePlayerPositions.get(rp.playerId) || 'off').substring(0, 1).toUpperCase()}] ` : ''}
                                             {getPlayerShortName(rp.player, homeRosterPlayers)}
                                           </option>
                                         ))}
@@ -9817,9 +9815,7 @@ export default function App() {
                                         .filter(rp => {
                                           if (draft.type === 'sub_in') return !activePlayerPositions.has(rp.playerId);
                                           if (draft.type === 'sub_out') return activePlayerPositions.has(rp.playerId);
-                                          const teamAnyActive = awayRosterPlayers.some(r => activePlayerPositions.has(r.playerId));
-                                          if (!teamAnyActive) return true;
-                                          return activePlayerPositions.has(rp.playerId);
+                                          return true;
                                         })
                                         .sort((a, b) => {
                                           if (draft.type === 'sub_in') {
@@ -9838,7 +9834,7 @@ export default function App() {
                                         })
                                         .map(rp => (
                                           <option key={rp.playerId} value={rp.playerId}>
-                                            {draft.type !== 'sub_in' ? `[${(activePlayerPositions.get(rp.playerId) || 'bench').substring(0, 1).toUpperCase()}] ` : ''}
+                                            {draft.type !== 'sub_in' ? `[${(activePlayerPositions.get(rp.playerId) || 'off').substring(0, 1).toUpperCase()}] ` : ''}
                                             {getPlayerShortName(rp.player, awayRosterPlayers)}
                                           </option>
                                         ))}
@@ -9892,22 +9888,22 @@ export default function App() {
                                       >
                                         <option value="">No Assist Data</option>
                                         {draft.teamId && (draft.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)
-                                          .filter(rp => {
-                                            if (activePlayerPositions.has(rp.playerId)) return rp.playerId !== draft.playerId;
-                                            const teamRoster = draft.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers;
-                                            const teamAnyActive = teamRoster.some(r => activePlayerPositions.has(r.playerId));
-                                            return !teamAnyActive && rp.playerId !== draft.playerId;
-                                          })
+                                          .filter(rp => rp.playerId !== draft.playerId)
                                           .sort((a, b) => {
-                                            const posA = activePlayerPositions.get(a.playerId);
-                                            const posB = activePlayerPositions.get(b.playerId);
-                                            if (!posA || !posB) return (a.player?.lastName || '').localeCompare(b.player?.lastName || '');
-                                            const order = { chaser: 1, keeper: 2, beater: 3, seeker: 4 } as Record<string, number>;
-                                            return order[posA] - order[posB];
+                                            const aActive = activePlayerPositions.has(a.playerId);
+                                            const bActive = activePlayerPositions.has(b.playerId);
+                                            if (aActive !== bActive) return aActive ? -1 : 1;
+                                            if (aActive) {
+                                              const posA = activePlayerPositions.get(a.playerId) || 'chaser';
+                                              const posB = activePlayerPositions.get(b.playerId) || 'chaser';
+                                              const order = { chaser: 1, keeper: 2, beater: 3, seeker: 4 } as Record<string, number>;
+                                              return order[posA] - order[posB];
+                                            }
+                                            return (a.player?.lastName || '').localeCompare(b.player?.lastName || '');
                                           })
                                           .map(rp => (
                                             <option key={rp.playerId} value={rp.playerId}>
-                                              Assist - [{activePlayerPositions.get(rp.playerId)?.substring(0, 1).toUpperCase() || 'C'}] {getPlayerShortName(rp.player, draft.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)}
+                                              Assist - [{(activePlayerPositions.get(rp.playerId) || 'off').substring(0, 1).toUpperCase()}] {getPlayerShortName(rp.player, draft.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)}
                                             </option>
                                           ))}
                                       </select>
