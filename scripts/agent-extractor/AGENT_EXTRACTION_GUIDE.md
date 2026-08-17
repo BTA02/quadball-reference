@@ -1,13 +1,11 @@
 # Claude Video → Quadball Stats Extractor
 
-An agent pipeline that watches a YouTube quadball game with **Claude** (instead of Gemini),
+An agent pipeline that watches a YouTube quadball game with **Claude**,
 records the statistical events, maps jersey numbers to your roster's player IDs, and pushes
 them straight into Firestore (`gameEvents/{gameId}`).
 
-> This is the "different model" version of `scripts/extract_stats_gemini.ts`. Gemini ingests
-> the raw video natively; Claude's API takes **images**, so this pipeline samples frames with
-> `ffmpeg` and sends time-windowed batches of frames to Claude. Everything downstream
-> (roster mapping, schema, Firestore push) is shared and reusable.
+> Claude's API takes **images**, so this pipeline samples frames with `ffmpeg` and sends
+> time-windowed batches of frames to Claude.
 
 ---
 
