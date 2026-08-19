@@ -159,19 +159,35 @@ export default function QuadballStatsView({
     return validIds;
   }, [events, players]);
 
-  const filteredPlayers = useMemo(() => {
-    let d = mergedPlayers.filter(s => s.gamesPlayed >= minGames && validQuadballPlayerIds.has(s.playerId));
-    if (search) { const q = search.toLowerCase(); d = d.filter(s => s.playerName.toLowerCase().includes(q)); }
+  // Sorted (but not search-filtered) lists establish each row's ORIGINAL rank,
+  // so a search doesn't renumber players/teams relative to their un-searched standing.
+  const sortedPlayers = useMemo(() => {
+    const d = mergedPlayers.filter(s => s.gamesPlayed >= minGames && validQuadballPlayerIds.has(s.playerId));
     return sortBy(d, sortKey as keyof ExtendedPlayerStats, sortDir);
-  }, [mergedPlayers, search, minGames, sortKey, sortDir, validQuadballPlayerIds]);
+  }, [mergedPlayers, minGames, sortKey, sortDir, validQuadballPlayerIds]);
+
+  const sortedTeam = useMemo(() => {
+    const d = mergedTeams.filter(s => s.gamesPlayed >= minGames);
+    return sortBy(d, sortKey as keyof TeamQuadballStats, sortDir);
+  }, [mergedTeams, minGames, sortKey, sortDir]);
+
+  const playerRankMap = useMemo(() => new Map(sortedPlayers.map((s, i) => [s.playerId, i + 1])), [sortedPlayers]);
+  const teamRankMap = useMemo(() => new Map(sortedTeam.map((s, i) => [s.teamId, i + 1])), [sortedTeam]);
+
+  const filteredPlayers = useMemo(() => {
+    if (!search) return sortedPlayers;
+    const q = search.toLowerCase();
+    return sortedPlayers.filter(s => s.playerName.toLowerCase().includes(q));
+  }, [sortedPlayers, search]);
 
   const filteredTeam = useMemo(() => {
-    let d = mergedTeams.filter(s => s.gamesPlayed >= minGames);
-    if (search) { const q = search.toLowerCase(); d = d.filter(s => s.teamName.toLowerCase().includes(q)); }
-    return sortBy(d, sortKey as keyof TeamQuadballStats, sortDir);
-  }, [mergedTeams, search, minGames, sortKey, sortDir]);
+    if (!search) return sortedTeam;
+    const q = search.toLowerCase();
+    return sortedTeam.filter(s => s.teamName.toLowerCase().includes(q));
+  }, [sortedTeam, search]);
 
   const data = tab === 'team' ? filteredTeam : filteredPlayers;
+  const rankMap = tab === 'team' ? teamRankMap : playerRankMap;
   const totalPages = Math.ceil(data.length / perPage) || 1;
   const paged = data.slice((page - 1) * perPage, page * perPage);
 
@@ -368,8 +384,8 @@ export default function QuadballStatsView({
             <tbody>
               {paged.length === 0 ? (
                 <tr><td colSpan={12} className="py-8 text-center text-slate-500 text-xs">No stats found</td></tr>
-              ) : paged.map((row: any, idx) => {
-                const rank = (page - 1) * perPage + idx + 1;
+              ) : paged.map((row: any) => {
+                const rank = rankMap.get(tab === 'team' ? row.teamId : row.playerId) ?? '-';
                 const DataCell = ({ prop, fmt, bold, group }: { prop?: string, fmt?: (v: any, rowObj?: any) => string|number, bold?: boolean, group?: 'start' | 'mid' | 'end' }) => {
                   const groupClass = group === 'start' ? MISS_GROUP_START : group === 'mid' ? MISS_GROUP_MID : group === 'end' ? MISS_GROUP_END : undefined;
                   if (useSplit && tab !== 'team') {
