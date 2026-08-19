@@ -50,6 +50,51 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
+    // Mirrors the app's "trusted"/"moderator" role tiers (appConfig/roles), which get
+    // elevated permissions over other users' events, distinct from plain "author" (any
+    // signed-in user).
+    function isTrustedOrModerator() {
+      return isAuthenticated() && exists(/databases/$(database)/documents/appConfig/roles) &&
+        (
+          get(/databases/$(database)/documents/appConfig/roles).data.trusted.hasAny([request.auth.token.email]) ||
+          get(/databases/$(database)/documents/appConfig/roles).data.moderators.hasAny([request.auth.token.email])
+        );
+    }
+
+    // Helpers for validating per-event ownership on the array-based gameEvents.events field.
+    // Firestore rules can't loop over a dynamic-length list, so these only validate the
+    // common single-event mutation shapes (delete one event / edit-or-vote on one event);
+    // pure additions (e.g. bulk-saving newly recorded events) are left unrestricted since
+    // ownership of newly-created data isn't the concern this guards against.
+    function gameEventsAdded() {
+      return request.resource.data.events.removeAll(resource.data.events);
+    }
+
+    function gameEventsRemoved() {
+      return resource.data.events.removeAll(request.resource.data.events);
+    }
+
+    // Removing exactly one event you authored, with nothing else added.
+    function isOwnEventDelete() {
+      let removed = gameEventsRemoved();
+      return gameEventsAdded().size() == 0 && removed.size() == 1 &&
+             removed[0].userId == request.auth.uid;
+    }
+
+    // Changing exactly one existing event in place: the owner may change anything about
+    // their own event; anyone else may only touch vote-related fields (so voting on other
+    // users' events keeps working), and may never reassign an event's id or authorship.
+    function isOwnEventEditOrVote() {
+      let added = gameEventsAdded();
+      let removed = gameEventsRemoved();
+      return added.size() == 1 && removed.size() == 1 &&
+             added[0].id == removed[0].id && added[0].userId == removed[0].userId &&
+             (
+               removed[0].userId == request.auth.uid ||
+               added[0].diff(removed[0]).affectedKeys().hasOnly(['votes', 'upvotes', 'downvotes', 'upvoterIds', 'downvoterIds'])
+             );
+    }
+
     function hasOnlyAllowedFields(fields) {
       return request.resource.data.keys().hasOnly(fields);
     }
@@ -216,10 +261,20 @@ service cloud.firestore {
 
     // GameEvents (Modern Array-Based Schema)
     // Read is public — current-season privacy is enforced in the app layer via dashboardGames/dashboardEvents.
+    // Deleting/editing an individual event (a rewrite of the events array) is restricted to
+    // the event's own author or an admin/trusted/moderator — see issue #16.
     match /gameEvents/{gameId} {
       allow read: if true;
       allow create: if isAuthenticated() || isAdmin();
-      allow update: if isAuthenticated() || isAdmin();
+      allow update: if isAdmin() || isTrustedOrModerator() ||
+        (
+          isAuthenticated() &&
+          (
+            gameEventsRemoved().size() == 0 ||
+            isOwnEventDelete() ||
+            isOwnEventEditOrVote()
+          )
+        );
       allow delete: if isAdmin();
     }
 
