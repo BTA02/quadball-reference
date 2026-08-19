@@ -107,25 +107,47 @@ export default function BeaterStatsView({
   const pairStats = useMemo(() => computeBeaterPairStats(events, players, games, filters), [events, players, games, filters]);
   const teamStats = useMemo(() => computeTeamBeaterStats(events, players, teams, games, filters), [events, players, teams, games, filters]);
 
-  const filteredSolo = useMemo(() => {
-    let d = soloStats.filter(s => s.gamesPlayed >= minGames);
-    if (search) { const q = search.toLowerCase(); d = d.filter(s => s.playerName.toLowerCase().includes(q)); }
+  // Sorted (but not search-filtered) lists establish each row's ORIGINAL rank,
+  // so a search doesn't renumber players relative to their un-searched standing.
+  const sortedSolo = useMemo(() => {
+    const d = soloStats.filter(s => s.gamesPlayed >= minGames);
     return sortBy(d, sortKey as keyof BeaterSoloStats, sortDir);
-  }, [soloStats, search, minGames, sortKey, sortDir]);
+  }, [soloStats, minGames, sortKey, sortDir]);
+
+  const sortedPairs = useMemo(() => {
+    const d = pairStats.filter(s => s.gamesPlayed >= minGames);
+    return sortBy(d, sortKey as keyof BeaterPairStats, sortDir);
+  }, [pairStats, minGames, sortKey, sortDir]);
+
+  const sortedTeam = useMemo(() => {
+    const d = teamStats.filter(s => s.gamesPlayed >= minGames);
+    return sortBy(d, sortKey as keyof TeamBeaterStats, sortDir);
+  }, [teamStats, minGames, sortKey, sortDir]);
+
+  const soloRankMap = useMemo(() => new Map(sortedSolo.map((s, i) => [s.playerId, i + 1])), [sortedSolo]);
+  const pairRankMap = useMemo(() => new Map(sortedPairs.map((s, i) => [s.pairKey, i + 1])), [sortedPairs]);
+  const teamRankMap = useMemo(() => new Map(sortedTeam.map((s, i) => [s.teamId, i + 1])), [sortedTeam]);
+
+  const filteredSolo = useMemo(() => {
+    if (!search) return sortedSolo;
+    const q = search.toLowerCase();
+    return sortedSolo.filter(s => s.playerName.toLowerCase().includes(q));
+  }, [sortedSolo, search]);
 
   const filteredPairs = useMemo(() => {
-    let d = pairStats.filter(s => s.gamesPlayed >= minGames);
-    if (search) { const q = search.toLowerCase(); d = d.filter(s => s.player1Name.toLowerCase().includes(q) || s.player2Name.toLowerCase().includes(q)); }
-    return sortBy(d, sortKey as keyof BeaterPairStats, sortDir);
-  }, [pairStats, search, minGames, sortKey, sortDir]);
+    if (!search) return sortedPairs;
+    const q = search.toLowerCase();
+    return sortedPairs.filter(s => s.player1Name.toLowerCase().includes(q) || s.player2Name.toLowerCase().includes(q));
+  }, [sortedPairs, search]);
 
   const filteredTeam = useMemo(() => {
-    let d = teamStats.filter(s => s.gamesPlayed >= minGames);
-    if (search) { const q = search.toLowerCase(); d = d.filter(s => s.teamName.toLowerCase().includes(q)); }
-    return sortBy(d, sortKey as keyof TeamBeaterStats, sortDir);
-  }, [teamStats, search, minGames, sortKey, sortDir]);
+    if (!search) return sortedTeam;
+    const q = search.toLowerCase();
+    return sortedTeam.filter(s => s.teamName.toLowerCase().includes(q));
+  }, [sortedTeam, search]);
 
   const data: any[] = tab === 'team' ? filteredTeam : tab === 'solo' ? filteredSolo : filteredPairs;
+  const rankMap = tab === 'team' ? teamRankMap : tab === 'solo' ? soloRankMap : pairRankMap;
   const totalPages = Math.ceil(data.length / perPage) || 1;
   const paged = data.slice((page - 1) * perPage, page * perPage);
 
@@ -181,6 +203,7 @@ export default function BeaterStatsView({
                   <SortHeader label="+" sortKey="plus" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Plus" />
                   <SortHeader label="−" sortKey="minus" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Minus" />
                   <SortHeader label="+/−" sortKey="plusMinus" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Plus / Minus" />
+                  <SortHeader label="TKO" sortKey="tko" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Team Knockouts (opponent KO'd while on field)" />
                   <SortHeader label="CTRL" sortKey="controlMinutes" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Control Minutes" />
                   <SortHeader label="TOT" sortKey="totalMinutes" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Total Minutes" />
                   <SortHeader label="CTRL%" sortKey="controlPct" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Control % (Percentage of possession time team has active Dodgeball Control)" />
@@ -197,8 +220,8 @@ export default function BeaterStatsView({
             <tbody>
               {paged.length === 0 ? (
                 <tr><td colSpan={10} className="py-8 text-center text-gray-400 text-xs">No beater stats found</td></tr>
-              ) : paged.map((row: any, idx: number) => {
-                const rank = (page - 1) * perPage + idx + 1;
+              ) : paged.map((row: any) => {
+                const rank = rankMap.get(tab === 'team' ? row.teamId : tab === 'pairs' ? row.pairKey : row.playerId) ?? '-';
                 return (
                   <tr key={tab === 'team' ? row.teamId : tab === 'pairs' ? row.pairKey : row.playerId} className="border-b border-gray-50 hover:bg-purple-50/30 transition-colors">
                     <td className="px-2 py-1.5 sticky left-0 bg-white z-10">
@@ -227,6 +250,7 @@ export default function BeaterStatsView({
                       <Cell value={row.plus} highlight={row.plus > 0 ? 'pos' : undefined} />
                       <Cell value={row.minus} highlight={row.minus > 0 ? 'neg' : undefined} />
                       <Cell value={row.plusMinus > 0 ? `+${row.plusMinus}` : row.plusMinus || 'E'} highlight={row.plusMinus > 0 ? 'pos' : row.plusMinus < 0 ? 'neg' : undefined} bold />
+                      <Cell value={row.tko} highlight={row.tko > 0 ? 'pos' : undefined} />
                       <Cell value={row.controlMinutes} />
                       <Cell value={row.totalMinutes} />
                       <Cell value={`${row.controlPct}%`} highlight={row.controlPct >= 55 ? 'pos' : row.controlPct <= 45 ? 'neg' : undefined} bold />

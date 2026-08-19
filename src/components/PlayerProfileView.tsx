@@ -908,6 +908,7 @@ export default function PlayerProfileView({
                     <QuadHeaderCell label="+" sortKey="plus" tooltip="Plus" />
                     <QuadHeaderCell label="−" sortKey="minus" tooltip="Minus" />
                     <QuadHeaderCell label="+/−" sortKey="plusMinus" tooltip="Plus / Minus" />
+                    <QuadHeaderCell label="TKO" sortKey="tko" tooltip="Team Knockouts (opponent KO'd while on field)" />
                     <QuadHeaderCell label="CTRL" sortKey="controlMinutes" tooltip="Control Minutes" />
                     <QuadHeaderCell label="TOT" sortKey="totalMinutes" tooltip="Total Minutes" />
                     <QuadHeaderCell label="CTRL%" sortKey="controlPct" tooltip="Control % (Percentage of possession time team has active Dodgeball Control)" />
@@ -929,6 +930,7 @@ export default function PlayerProfileView({
                     <Cell value={dodgeSoloStats.plus} highlight={dodgeSoloStats.plus > 0 ? 'pos' : undefined} />
                     <Cell value={dodgeSoloStats.minus} highlight={dodgeSoloStats.minus > 0 ? 'neg' : undefined} />
                     <Cell value={dodgeSoloStats.plusMinus > 0 ? `+${dodgeSoloStats.plusMinus}` : dodgeSoloStats.plusMinus || 'E'} bold highlight={dodgeSoloStats.plusMinus > 0 ? 'pos' : dodgeSoloStats.plusMinus < 0 ? 'neg' : undefined} />
+                    <Cell value={dodgeSoloStats.tko} highlight={dodgeSoloStats.tko > 0 ? 'pos' : undefined} />
                     <Cell value={dodgeSoloStats.controlMinutes} />
                     <Cell value={dodgeSoloStats.totalMinutes} />
                     <Cell value={`${dodgeSoloStats.controlPct}%`} bold highlight={dodgeSoloStats.controlPct >= 55 ? 'pos' : dodgeSoloStats.controlPct <= 45 ? 'neg' : undefined} />
@@ -955,6 +957,7 @@ export default function PlayerProfileView({
                     <SortHeader label="+" sortKey="plus" currentSort={pairSortKey} currentDir={pairSortDir} onSort={handlePairSort} tooltip="Plus" />
                     <SortHeader label="−" sortKey="minus" currentSort={pairSortKey} currentDir={pairSortDir} onSort={handlePairSort} tooltip="Minus" />
                     <SortHeader label="+/−" sortKey="plusMinus" currentSort={pairSortKey} currentDir={pairSortDir} onSort={handlePairSort} tooltip="Plus / Minus" />
+                    <SortHeader label="TKO" sortKey="tko" currentSort={pairSortKey} currentDir={pairSortDir} onSort={handlePairSort} tooltip="Team Knockouts (opponent KO'd while pair was on field)" />
                     <SortHeader label="CTRL" sortKey="controlMinutes" currentSort={pairSortKey} currentDir={pairSortDir} onSort={handlePairSort} tooltip="Control Minutes" />
                     <SortHeader label="TOT" sortKey="totalMinutes" currentSort={pairSortKey} currentDir={pairSortDir} onSort={handlePairSort} tooltip="Total Minutes" />
                     <SortHeader label="CTRL%" sortKey="controlPct" currentSort={pairSortKey} currentDir={pairSortDir} onSort={handlePairSort} tooltip="Control % (Percentage of possession time team has active Dodgeball Control)" />
@@ -980,6 +983,7 @@ export default function PlayerProfileView({
                       <Cell value={pStat.plus} highlight={pStat.plus > 0 ? 'pos' : undefined} />
                       <Cell value={pStat.minus} highlight={pStat.minus > 0 ? 'neg' : undefined} />
                       <Cell value={pStat.plusMinus > 0 ? `+${pStat.plusMinus}` : pStat.plusMinus || 'E'} bold highlight={pStat.plusMinus > 0 ? 'pos' : pStat.plusMinus < 0 ? 'neg' : undefined} />
+                      <Cell value={pStat.tko} highlight={pStat.tko > 0 ? 'pos' : undefined} />
                       <Cell value={pStat.controlMinutes} />
                       <Cell value={pStat.totalMinutes} />
                       <Cell value={`${pStat.controlPct}%`} bold highlight={pStat.controlPct >= 55 ? 'pos' : pStat.controlPct <= 45 ? 'neg' : undefined} />

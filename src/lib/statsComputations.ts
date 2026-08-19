@@ -2087,6 +2087,7 @@ export interface BeaterSoloStats {
   fEpr: number;
   bcl: number;                 // Bludger Control Leverage rating
   bva: number;                 // Beater Value Added (GA/20)
+  tko: number;                 // Team Knockouts (opponent KO'd while this beater was on field)
 }
 
 export function computeBeaterSoloStats(
@@ -2118,6 +2119,7 @@ export function computeBeaterSoloStats(
     verifiedGoalsScoredWithoutControl: number;
     verifiedGoalsConcededWithoutControl: number;
     gameIds: Set<string>;
+    tko: number;
   }>();
 
   const getAcc = (pid: string) => {
@@ -2139,7 +2141,8 @@ export function computeBeaterSoloStats(
         verifiedGoalsConcededWithControl: 0,
         verifiedGoalsScoredWithoutControl: 0,
         verifiedGoalsConcededWithoutControl: 0,
-        gameIds: new Set()
+        gameIds: new Set(),
+        tko: 0,
       });
     }
     return accum.get(pid)!;
@@ -2295,6 +2298,7 @@ export function computeBeaterSoloStats(
             if (isTeamEv) acc.attempts++;
             else acc.oppAttemptsOn++;
           }
+          if (isMissKo && !isTeamEv) acc.tko++;
           if (isTurnover) {
             if (isTeamEv) {
               acc.turnovers++;
@@ -2439,6 +2443,7 @@ export function computeBeaterSoloStats(
       fEpr: a.oppPoss > 0 ? Math.round((a.oppEmptyTurnovers / a.oppPoss) * 1000) / 10 : 0,
       bcl,
       bva: Math.round(bva * 100) / 100,
+      tko: a.tko,
     });
   }
 
@@ -2473,6 +2478,7 @@ export interface BeaterPairStats {
   fEpr: number;
   bcl: number;              // Bludger Control Leverage rating
   bva: number;              // Beater Value Added (GA/20)
+  tko: number;              // Team Knockouts (opponent KO'd while this pair was on field together)
 }
 
 /**
@@ -2541,6 +2547,7 @@ export function computeBeaterPairStats(
     verifiedGoalsScoredWithoutControl: number;
     verifiedGoalsConcededWithoutControl: number;
     gameIds: Set<string>;
+    tko: number;
   }>();
 
   const getPairAcc = (p1: string, p2: string, teamId: string) => {
@@ -2557,6 +2564,7 @@ export function computeBeaterPairStats(
         goalsScoredWithControl: 0, goalsConcededWithControl: 0, goalsScoredWithoutControl: 0, goalsConcededWithoutControl: 0,
         verifiedControlSeconds: 0, verifiedTotalSeconds: 0, verifiedGoalsScoredWithControl: 0, verifiedGoalsConcededWithControl: 0, verifiedGoalsScoredWithoutControl: 0, verifiedGoalsConcededWithoutControl: 0,
         gameIds: new Set(),
+        tko: 0,
       });
     }
     return accum.get(key)!;
@@ -2713,6 +2721,7 @@ export function computeBeaterPairStats(
             if (isTeamEv) acc.attempts++;
             else acc.oppAttemptsOn++;
           }
+          if (isMissKo && !isTeamEv) acc.tko++;
           if (isTurnover) {
             if (isTeamEv) {
               acc.turnovers++;
@@ -2866,6 +2875,7 @@ export function computeBeaterPairStats(
       fEpr: a.oppPoss > 0 ? Math.round((a.oppEmptyTurnovers / a.oppPoss) * 1000) / 10 : 0,
       bcl,
       bva: Math.round(bva * 100) / 100,
+      tko: a.tko,
     });
   }
 
