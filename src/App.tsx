@@ -229,6 +229,7 @@ export interface DraftEvent {
   position?: PositionType | null;
   subPlayerId?: string | null;
   color?: string | null;
+  swapPlayerId?: string | null; // For keeper cards: the on-field teammate swapping into keeper
 }
 
 export type PinType = 'sub' | 'control' | 'possession' | 'general';
@@ -6291,7 +6292,8 @@ export default function App() {
     teamId?: string | null,
     position?: PositionType | null,
     providedVideoTime?: number,
-    providedGameTime?: number
+    providedGameTime?: number,
+    color?: string | null
   ) => {
     if (!user || !currentVideo || (!player && providedVideoTime === undefined)) return;
 
@@ -6319,7 +6321,8 @@ export default function App() {
         teamId: teamId !== undefined ? teamId : null,
         subPlayerId: subPlayerId || null,
         relatedEventId: relatedEventId || null,
-        position: position || null
+        position: position || null,
+        color: color || null
       };
 
       const gameEventsRef = doc(db, 'gameEvents', currentVideo.gameId);
@@ -7007,7 +7010,8 @@ export default function App() {
       draft.teamId || null,
       draft.position || null,
       draft.videoTime,
-      draft.gameTime
+      draft.gameTime,
+      draft.color || null
     ).then((primaryEventId) => {
       if (draft.type === 'goal' && draft.assistedByPlayerId && primaryEventId) {
         handleAddEvent(
@@ -7034,6 +7038,60 @@ export default function App() {
           draft.videoTime,
           draft.gameTime
         );
+      }
+
+      // A card given to the keeper may trigger a keeper swap: the carded keeper
+      // moves to their swap partner's on-field position, and that partner takes
+      // over keeper. Modeled as two independent sub_out/sub_in pairs so it fits
+      // the existing substitution event schema.
+      if (draft.type === 'card' && draft.swapPlayerId && draft.playerId && draft.teamId) {
+        const outgoingKeeperId = draft.playerId;
+        const incomingKeeperId = draft.swapPlayerId;
+        const incomingPriorPosition = activePlayerPositions.get(incomingKeeperId) || 'chaser';
+
+        handleAddEvent(
+          'sub_out',
+          outgoingKeeperId,
+          undefined,
+          undefined,
+          draft.teamId,
+          'keeper',
+          draft.videoTime,
+          draft.gameTime
+        ).then((outSubId) => {
+          handleAddEvent(
+            'sub_in',
+            outgoingKeeperId,
+            undefined,
+            outSubId || undefined,
+            draft.teamId,
+            incomingPriorPosition,
+            draft.videoTime,
+            draft.gameTime
+          );
+        });
+
+        handleAddEvent(
+          'sub_out',
+          incomingKeeperId,
+          undefined,
+          undefined,
+          draft.teamId,
+          incomingPriorPosition,
+          draft.videoTime,
+          draft.gameTime
+        ).then((outSubId) => {
+          handleAddEvent(
+            'sub_in',
+            incomingKeeperId,
+            undefined,
+            outSubId || undefined,
+            draft.teamId,
+            'keeper',
+            draft.videoTime,
+            draft.gameTime
+          );
+        });
       }
     });
 
@@ -9265,12 +9323,15 @@ export default function App() {
 
                       const renderTrackingEventBody = (evt: any) => {
                         const cfg = EVENT_CONFIG[evt.type as EventType] || { label: evt.type, icon: <AlertCircle className="w-4 h-4" />, color: 'bg-neutral-500' };
-                        const label = (evt.type === 'sub_in' && evt.position) ? `${evt.position} In` : (evt.type === 'sub_out' && evt.position) ? `${evt.position} Out` : cfg.label;
+                        const label = (evt.type === 'sub_in' && evt.position) ? `${evt.position} In` : (evt.type === 'sub_out' && evt.position) ? `${evt.position} Out` : (evt.type === 'card' && evt.color) ? `${evt.color} Card` : cfg.label;
+                        const cardIconColor = evt.type === 'card' && evt.color
+                          ? (evt.color === 'blue' ? 'bg-blue-500' : evt.color === 'yellow' ? 'bg-yellow-400' : evt.color === 'red' ? 'bg-red-500' : cfg.color)
+                          : cfg.color;
                         return (
                           <>
                             <div className="flex items-start justify-between mb-2">
                               <div className="flex items-center gap-2">
-                                <div className={cn("p-1.5 rounded-md", cfg.color)}>
+                                <div className={cn("p-1.5 rounded-md", cardIconColor)}>
                                   {React.cloneElement(cfg.icon as React.ReactElement<any>, { className: 'w-3 h-3' })}
                                 </div>
                                 <div className="flex flex-col items-center">
@@ -9877,6 +9938,49 @@ export default function App() {
                                             </option>
                                           ))}
                                       </select>
+                                    )}
+
+                                    {draft.type === 'card' && (
+                                      <div className="col-span-2 flex flex-col gap-1.5 mt-1">
+                                        <div className="flex rounded-lg overflow-hidden border border-gray-200 shadow-sm">
+                                          {(['blue', 'yellow', 'red'] as const).map(c => (
+                                            <button
+                                              key={c}
+                                              type="button"
+                                              onClick={() => setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, color: c } : d))}
+                                              className={cn(
+                                                "flex-1 py-1.5 text-[10px] font-bold uppercase tracking-tight capitalize transition-all",
+                                                draft.color === c
+                                                  ? c === 'blue' ? 'bg-blue-500 text-white' : c === 'yellow' ? 'bg-yellow-400 text-yellow-900' : 'bg-red-500 text-white'
+                                                  : 'bg-white text-gray-500 hover:bg-gray-50'
+                                              )}
+                                            >
+                                              {c} Card
+                                            </button>
+                                          ))}
+                                        </div>
+
+                                        {draft.playerId && activePlayerPositions.get(draft.playerId) === 'keeper' && (
+                                          <div className="flex flex-col gap-1 p-2 border border-indigo-200 bg-indigo-50 rounded-lg">
+                                            <span className="text-[9px] uppercase font-bold text-indigo-600 tracking-wider">Keeper Swap (optional)</span>
+                                            <select
+                                              value={draft.swapPlayerId || ''}
+                                              onChange={(e) => setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, swapPlayerId: e.target.value || null } : d))}
+                                              className="text-xs border border-indigo-200 rounded p-1.5 bg-white text-indigo-800"
+                                            >
+                                              <option value="">No swap</option>
+                                              {draft.teamId && (draft.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)
+                                                .filter(rp => rp.playerId !== draft.playerId && activePlayerPositions.has(rp.playerId))
+                                                .sort((a, b) => (a.player?.lastName || '').localeCompare(b.player?.lastName || ''))
+                                                .map(rp => (
+                                                  <option key={rp.playerId} value={rp.playerId}>
+                                                    Swap in [{(activePlayerPositions.get(rp.playerId) || 'chaser').substring(0, 1).toUpperCase()}] {getPlayerShortName(rp.player, draft.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)}
+                                                  </option>
+                                                ))}
+                                            </select>
+                                          </div>
+                                        )}
+                                      </div>
                                     )}
 
                                     {draft.type === 'goal' && (
