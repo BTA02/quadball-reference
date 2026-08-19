@@ -6412,6 +6412,40 @@ export default function App() {
     setDraftEvents(prev => [newDraft, ...prev]);
   };
 
+  // UI-only convenience: a "swap" is not its own event type. It just queues the four
+  // sub events needed when a carded keeper hands off the position to a chaser (since a
+  // keeper can't serve time in the penalty box): keeper out, chaser out, keeper back in
+  // as chaser, chaser back in as keeper.
+  const handleCreateSwapEvent = (
+    teamId: string | null,
+    keeperPlayerId: string,
+    chaserPlayerId: string,
+    timeOverride?: number
+  ) => {
+    if (!currentVideo || !user) return;
+    const vTime = timeOverride !== undefined ? timeOverride : (player ? (function(){ try { return player.getCurrentTime(); } catch(e){ return 0; }})() : 0);
+
+    const makeDraft = (type: EventType, playerId: string, position: PositionType): DraftEvent => ({
+      id: crypto.randomUUID(),
+      type,
+      videoTime: vTime,
+      gameTime: gameTime,
+      teamId,
+      playerId,
+      relatedEventId: null,
+      assistedByPlayerId: null,
+      position,
+      subPlayerId: null
+    });
+
+    const keeperOut = makeDraft('sub_out', keeperPlayerId, 'keeper');
+    const chaserOut = makeDraft('sub_out', chaserPlayerId, 'chaser');
+    const keeperInAsChaser = makeDraft('sub_in', keeperPlayerId, 'chaser');
+    const chaserInAsKeeper = makeDraft('sub_in', chaserPlayerId, 'keeper');
+
+    setDraftEvents(prev => [keeperOut, chaserOut, keeperInAsChaser, chaserInAsKeeper, ...prev]);
+  };
+
   const handleDeleteDraftEvent = (id: string) => {
     setDraftEvents(prev => prev.filter(d => d.id !== id));
   };
@@ -10242,6 +10276,31 @@ export default function App() {
                                                   <button onClick={(e) => { e.stopPropagation(); handleCreateDraftEvent('sub_out', rp.teamId, rp.playerId, null, null, Math.max(0, (player ? (function(){try{return player.getCurrentTime()}catch(e){return 0}})() : 0) + popupTimeOffset)); setSelectedPlayerId(null); }} className="flex-1 py-1.5 bg-slate-800 hover:bg-red-900/40 text-red-400 rounded-lg font-bold text-[8px] border border-slate-700 transition-colors">SUB OUT</button>
                                                   <button onClick={(e) => { e.stopPropagation(); handleCreateDraftEvent('sub_in', rp.teamId, rp.playerId, null, null, Math.max(0, (player ? (function(){try{return player.getCurrentTime()}catch(e){return 0}})() : 0) + popupTimeOffset)); setSelectedPlayerId(null); }} className="flex-1 py-1.5 bg-slate-800 hover:bg-blue-900/40 text-blue-400 rounded-lg font-bold text-[8px] border border-slate-700 transition-colors">SUB IN</button>
                                                 </div>
+                                                {pos === 'keeper' && (() => {
+                                                  const teamChasers = (rp.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)
+                                                    .filter(r => activePlayerPositions.get(r.playerId) === 'chaser');
+                                                  if (teamChasers.length === 0) return null;
+                                                  return (
+                                                    <div className="flex flex-col gap-1 border-t border-slate-700/50 pt-1">
+                                                      <span className="text-[8px] uppercase font-bold text-purple-400 tracking-wide px-0.5" title="Not a real event — queues Sub Out (keeper), Sub Out (chaser), Sub In (keeper as chaser), Sub In (chaser as keeper) so this keeper's card can be served by a chaser.">Card Swap (Keeper ↔ Chaser)</span>
+                                                      <div className="flex flex-wrap gap-1">
+                                                        {teamChasers.map(cp => (
+                                                          <button
+                                                            key={cp.playerId}
+                                                            onClick={(e) => {
+                                                              e.stopPropagation();
+                                                              handleCreateSwapEvent(rp.teamId, rp.playerId, cp.playerId, Math.max(0, (player ? (function(){try{return player.getCurrentTime()}catch(e){return 0}})() : 0) + popupTimeOffset));
+                                                              setSelectedPlayerId(null);
+                                                            }}
+                                                            className="py-1 px-1.5 bg-slate-800 hover:bg-purple-900/40 text-purple-300 rounded-lg font-bold text-[8px] border border-slate-700 transition-colors"
+                                                          >
+                                                            SWAP w/ {getPlayerShortName(cp.player, rp.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)}
+                                                          </button>
+                                                        ))}
+                                                      </div>
+                                                    </div>
+                                                  );
+                                                })()}
                                               </div>
                                             </div>
                                           )}
