@@ -138,13 +138,18 @@ service cloud.firestore {
     }
 
     function isValidTeam(data) {
-      return hasOnlyAllowedFields(['name', 'nickname', 'colorPrimary', 'colorDark', 'colorLight', 'emails', 'createdAt']) &&
+      return hasOnlyAllowedFields(['name', 'nickname', 'colorPrimary', 'colorDark', 'colorLight', 'colorPrimaryDark', 'colorPrimaryLight', 'colorAccent', 'emails', 'leagueId', 'division', 'createdAt']) &&
              data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
              (!('nickname' in data) || data.nickname == null || data.nickname is string) &&
              (!('colorPrimary' in data) || data.colorPrimary is string) &&
              (!('colorDark' in data) || data.colorDark is string) &&
              (!('colorLight' in data) || data.colorLight is string) &&
-             (!('emails' in data) || data.emails is list);
+             (!('colorPrimaryDark' in data) || data.colorPrimaryDark is string) &&
+             (!('colorPrimaryLight' in data) || data.colorPrimaryLight is string) &&
+             (!('colorAccent' in data) || data.colorAccent is string) &&
+             (!('emails' in data) || data.emails is list) &&
+             (!('leagueId' in data) || data.leagueId is string) &&
+             (!('division' in data) || data.division is string);
     }
 
     function isValidSeason(data) {
