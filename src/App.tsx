@@ -704,6 +704,19 @@ function computeWinCondition(
   return { targetSet: runningThreshold !== null, flagOnPitch, threshold: runningThreshold, winner: null };
 }
 
+function hexToRgba(hex: string, alpha: number): string {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+const MEDIUM_GRAY = '#6b7280';
+function avoidWhite(hex: string): string {
+  const normalized = hex.trim().toLowerCase();
+  return (normalized === '#ffffff' || normalized === '#fff' || normalized === 'white') ? MEDIUM_GRAY : hex;
+}
+
 /**
  * Returns true if a season name refers to a season AFTER Fall 2019.
  * Parses the year from strings like "Fall 2021", "Spring 2022", etc.
@@ -9063,8 +9076,8 @@ export default function App() {
                         const awayTeamObj = teams.find(t => t.id === currentGame.awayTeamId);
                         const homeName = homeTeamObj?.nickname || homeTeamObj?.name || 'Home';
                         const awayName = awayTeamObj?.nickname || awayTeamObj?.name || 'Away';
-                        const homeColor = homeTeamObj?.colorPrimaryDark || homeTeamObj?.colorPrimary || '#dc2626';
-                        const awayColor = awayTeamObj?.colorPrimaryDark || awayTeamObj?.colorPrimary || '#2563eb';
+                        const homeColor = avoidWhite(homeTeamObj?.colorPrimaryDark || homeTeamObj?.colorPrimary || '#dc2626');
+                        const awayColor = avoidWhite(awayTeamObj?.colorPrimaryLight || awayTeamObj?.colorLight || '#2563eb');
                         const currentDodgeballTeamId = getControlTeamAtTime(computeControlPeriods(pastEvents), currentTime);
 
                         return (
@@ -9264,6 +9277,10 @@ export default function App() {
                     </div>
                     <div className="space-y-4">
                     {(() => {
+                      const feedHomeTeamObj = teams.find(t => t.id === currentGame?.homeTeamId);
+                      const feedAwayTeamObj = teams.find(t => t.id === currentGame?.awayTeamId);
+                      const feedHomeColor = avoidWhite(feedHomeTeamObj?.colorPrimaryDark || feedHomeTeamObj?.colorPrimary || '#dc2626');
+                      const feedAwayColor = avoidWhite(feedAwayTeamObj?.colorPrimaryLight || feedAwayTeamObj?.colorLight || '#2563eb');
                       const pinEvents = pins.filter(p => p.videoId === currentVideo?.id).map(p => ({
                         id: p.id,
                         type: `pin_${p.type}`,
@@ -9352,14 +9369,20 @@ export default function App() {
                                       {evt.playerId ? (() => {
                                         const p = allPlayers.find(pl => pl.id === evt.playerId);
                                         return p ? (
-                                          <span className={cn("font-bold tracking-tight", evt.teamId === currentGame?.homeTeamId ? "text-red-700" : evt.teamId === currentGame?.awayTeamId ? "text-blue-700" : "text-gray-700")}>
+                                          <span
+                                            className="font-bold tracking-tight"
+                                            style={evt.teamId === currentGame?.homeTeamId ? { color: feedHomeColor } : evt.teamId === currentGame?.awayTeamId ? { color: feedAwayColor } : { color: '#374151' }}
+                                          >
                                             {p.firstName.charAt(0)}. {p.lastName}
                                           </span>
                                         ) : 'Player';
                                       })() : (() => {
                                         const t = teams.find(tm => tm.id === evt.teamId);
                                         return t ? (
-                                          <span className={cn("font-bold text-[9px] uppercase tracking-wider", evt.teamId === currentGame?.homeTeamId ? "text-red-700" : evt.teamId === currentGame?.awayTeamId ? "text-blue-700" : "text-gray-500")}>
+                                          <span
+                                            className="font-bold text-[9px] uppercase tracking-wider"
+                                            style={evt.teamId === currentGame?.homeTeamId ? { color: feedHomeColor } : evt.teamId === currentGame?.awayTeamId ? { color: feedAwayColor } : { color: '#6b7280' }}
+                                          >
                                             {t.name}
                                           </span>
                                         ) : 'Team';
@@ -9532,11 +9555,14 @@ export default function App() {
                               data-event-time={event.videoTime}
                               className={cn(
                                 "group border rounded-xl p-3 transition-all",
-                                event.teamId === currentGame?.homeTeamId ? "bg-red-50/50 border-red-100 hover:border-red-200" :
-                                  event.teamId === currentGame?.awayTeamId ? "bg-blue-50/50 border-blue-100 hover:border-blue-200" :
-                                    "bg-white border-gray-200 hover:border-gray-300",
+                                !event.teamId && "bg-white border-gray-200 hover:border-gray-300",
                                 event.status === 'rejected' && "opacity-50 grayscale"
                               )}
+                              style={
+                                event.teamId === currentGame?.homeTeamId ? { backgroundColor: hexToRgba(feedHomeColor, 0.06), borderColor: hexToRgba(feedHomeColor, 0.25) } :
+                                  event.teamId === currentGame?.awayTeamId ? { backgroundColor: hexToRgba(feedAwayColor, 0.06), borderColor: hexToRgba(feedAwayColor, 0.25) } :
+                                    undefined
+                              }
                             >
                               {renderTrackingEventBody(event)}
                               {nestedAssist && (

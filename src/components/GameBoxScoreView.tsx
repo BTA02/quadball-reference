@@ -173,6 +173,7 @@ export default function GameBoxScoreView({
       <SortHeader label="+" sortKey="plus" currentSort={sortKey} currentDir={sortDir} onSort={onSort} />
       <SortHeader label="−" sortKey="minus" currentSort={sortKey} currentDir={sortDir} onSort={onSort} />
       <SortHeader label="+/−" sortKey="plusMinus" currentSort={sortKey} currentDir={sortDir} onSort={onSort} />
+      <SortHeader label="TKO" sortKey="tko" currentSort={sortKey} currentDir={sortDir} onSort={onSort} tooltip="Team Knockouts (opponent KO'd while pair was on field)" />
     </tr>
   );
 
@@ -192,6 +193,7 @@ export default function GameBoxScoreView({
       <Cell value={row.plus} />
       <Cell value={row.minus} />
       <Cell value={row.plusMinus} highlight={row.plusMinus > 0 ? 'pos' : row.plusMinus < 0 ? 'neg' : undefined} bold />
+      <Cell value={row.tko} highlight={row.tko > 0 ? 'pos' : undefined} />
     </tr>
   );
 

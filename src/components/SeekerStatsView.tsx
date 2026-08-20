@@ -103,11 +103,20 @@ export default function SeekerStatsView({
     [events, players, games, filters]
   );
 
-  const filtered = useMemo(() => {
-    let d = seekerStats.filter(s => s.gamesPlayed >= minGames);
-    if (search) { const q = search.toLowerCase(); d = d.filter(s => s.playerName.toLowerCase().includes(q)); }
+  // Sorted (but not search-filtered) list establishes each player's ORIGINAL rank,
+  // so a search doesn't renumber players relative to their un-searched standing.
+  const sorted = useMemo(() => {
+    const d = seekerStats.filter(s => s.gamesPlayed >= minGames);
     return sortBy(d, sortKey as keyof SeekerStats, sortDir);
-  }, [seekerStats, search, minGames, sortKey, sortDir]);
+  }, [seekerStats, minGames, sortKey, sortDir]);
+
+  const rankMap = useMemo(() => new Map(sorted.map((s, i) => [s.playerId, i + 1])), [sorted]);
+
+  const filtered = useMemo(() => {
+    if (!search) return sorted;
+    const q = search.toLowerCase();
+    return sorted.filter(s => s.playerName.toLowerCase().includes(q));
+  }, [sorted, search]);
 
   const totalPages = Math.ceil(filtered.length / perPage) || 1;
   const paged = filtered.slice((page - 1) * perPage, page * perPage);
@@ -150,8 +159,8 @@ export default function SeekerStatsView({
             <tbody>
               {paged.length === 0 ? (
                 <tr><td colSpan={10} className="py-8 text-center text-gray-400 text-xs">No seeker stats found</td></tr>
-              ) : paged.map((row, idx) => {
-                const rank = (page - 1) * perPage + idx + 1;
+              ) : paged.map((row) => {
+                const rank = rankMap.get(row.playerId) ?? '-';
                 return (
                   <tr key={row.playerId} className="border-b border-gray-50 hover:bg-amber-50/30 transition-colors">
                     <td className="px-2 py-1.5 sticky left-0 bg-white z-10">
