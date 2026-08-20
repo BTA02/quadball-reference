@@ -12,7 +12,7 @@ import type { TutorialStep } from './types';
  * ----------------------------------------------------------------------------
  *  AVAILABLE TARGETS
  * ----------------------------------------------------------------------------
- *   [data-tour="create-tabs"]          the rosters/teams/players/games tab bar
+ *   [data-tour="create-tabs"]          the rosters/teams/players/games/leaderboard tab bar
  *   [data-tour="create-roster-select"] Select / Create Roster panel
  *   [data-tour="create-roster-list"]   Existing Rosters list + search
  *   [data-tour="create-quick-add"]     Quick Add Player box (needs a roster picked)
@@ -57,13 +57,19 @@ export const CREATE_STEPS: TutorialStep[] = [
     body: (
       <>
         <p>
-          They're listed in the order you'll usually need them: a <strong>team</strong> exists
-          first, <strong>players</strong> exist independently of any team, a{' '}
-          <strong>roster</strong> ties players to a team for one season, and a{' '}
+          The first four are listed in the order you'll usually need them: a{' '}
+          <strong>team</strong> exists first, <strong>players</strong> exist independently of any
+          team, a <strong>roster</strong> ties players to a team for one season, and a{' '}
           <strong>game</strong> attaches a video to two teams.
         </p>
+        <p>
+          <strong>Leaderboard</strong> makes nothing — it just ranks who has contributed the most
+          stats, and how much of their work has held up to verification.
+        </p>
         <p className="text-gray-500">
-          Rosters is the tab you'll live in — the other three are mostly one-offs.
+          Rosters is the tab you'll live in — the other three are mostly one-offs. To see which
+          games have picked up new stats lately, check <strong>Recent Events</strong> on the Info
+          tab.
         </p>
       </>
     ),
