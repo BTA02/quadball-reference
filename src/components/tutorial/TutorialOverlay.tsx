@@ -3,7 +3,7 @@ import { Joyride, EVENTS, STATUS, type Step } from 'react-joyride';
 import type { TutorialContext, TutorialStep } from '../../lib/tutorial/types';
 import TutorialTooltip from './TutorialTooltip';
 
-interface GameTutorialProps {
+interface TutorialOverlayProps {
   /** Whether the tour is currently playing. */
   run: boolean;
   /** The authored steps, in order. */
@@ -23,10 +23,10 @@ const nextFrame = () =>
   });
 
 /**
- * Engine wrapper around react-joyride. Nothing in here is tutorial content —
- * steps live in `src/lib/tutorial/steps.tsx`.
+ * Engine wrapper around react-joyride, shared by every tour. Nothing in here
+ * is tutorial content — steps live in `src/lib/tutorial/*Steps.tsx`.
  */
-export default function GameTutorial({ run, steps, ctx, onFinish, onSkip }: GameTutorialProps) {
+export default function TutorialOverlay({ run, steps, ctx, onFinish, onSkip }: TutorialOverlayProps) {
   // Drop steps that don't apply to this user or form factor. Filtering here
   // (rather than skipping at runtime) keeps the "step 3 of N" counter honest.
   const joyrideSteps = useMemo<Step[]>(() => {

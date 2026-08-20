@@ -2,11 +2,14 @@ import type { TutorialStep } from './types';
 
 /**
  * ============================================================================
- *  THE TUTORIAL SCRIPT
+ *  THE GAME TRACKER TUTORIAL SCRIPT
  * ============================================================================
  *
- * This is the only file you need to touch to change the tutorial. Steps run
- * top to bottom; reorder by moving entries, remove one by deleting it.
+ * Runs the first time a signed-in user opens a game. This is the only file you
+ * need to touch to change it. Steps run top to bottom; reorder by moving
+ * entries, remove one by deleting it.
+ *
+ * The Create (moderator) tour lives in `createSteps.tsx` and works the same way.
  *
  * Every step needs four things:
  *
@@ -55,7 +58,7 @@ import type { TutorialStep } from './types';
  * The wording below is scaffolding so the flow can be walked end to end.
  * Replace it.
  */
-export const TUTORIAL_STEPS: TutorialStep[] = [
+export const TRACKER_STEPS: TutorialStep[] = [
   {
     id: 'welcome',
     target: 'body',

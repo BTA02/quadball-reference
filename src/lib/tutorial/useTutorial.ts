@@ -8,32 +8,35 @@ import {
   isTourPending,
   markTourSeen,
   setTourPending,
+  type TourId,
 } from './storage';
 
 /** The app state the host component feeds in. Does not need to be memoized. */
 export type TutorialAppState = Omit<TutorialContext, 'isMobile'>;
 
-interface UseGameTutorialArgs {
-  /** Firebase uid, or null when signed out (the tutorial never runs signed out). */
+interface UseTutorialArgs {
+  /** Which tour this instance drives. Each has its own "seen" flag. */
+  tourId: TourId;
+  /** Firebase uid, or null when signed out (tutorials never run signed out). */
   uid: string | null;
-  /** True when the tracker is open on a game, i.e. the tour's targets exist. */
+  /** True when the tour's screen is open, i.e. its targets exist. */
   ready: boolean;
   /** Current app state the steps can read and drive. */
   app: TutorialAppState;
 }
 
-/** Let the player, panels and rosters settle before spotlighting anything. */
+/** Let the screen settle before spotlighting anything. */
 const AUTO_START_DELAY_MS = 900;
 
 const MOBILE_QUERY = '(max-width: 1023px)'; // Tailwind's `lg` breakpoint
 
 /**
- * Owns the tutorial's run state and its "already seen" persistence.
+ * Owns one tour's run state and its "already seen" persistence.
  *
- * Auto-starts once per session the first time a signed-in user opens a game,
- * and exposes `replay()` for the Help page.
+ * Auto-starts once per session the first time a signed-in user reaches the
+ * tour's screen, and exposes `replay()` for the Help page.
  */
-export function useGameTutorial({ uid, ready, app }: UseGameTutorialArgs) {
+export function useTutorial({ tourId, uid, ready, app }: UseTutorialArgs) {
   const [run, setRun] = useState(false);
 
   // Everything the steps read goes through refs so `ctx` keeps a stable
@@ -61,6 +64,7 @@ export function useGameTutorial({ uid, ready, app }: UseGameTutorialArgs) {
     () => ({
       setRightPanelTab: tab => appRef.current.setRightPanelTab(tab),
       setIsExpandedLayout: expanded => appRef.current.setIsExpandedLayout(expanded),
+      setCreateTab: tab => appRef.current.setCreateTab(tab),
       get isExpandedLayout() {
         return appRef.current.isExpandedLayout;
       },
@@ -69,6 +73,9 @@ export function useGameTutorial({ uid, ready, app }: UseGameTutorialArgs) {
       },
       get canRecord() {
         return appRef.current.canRecord;
+      },
+      get canCreate() {
+        return appRef.current.canCreate;
       },
       get isMobile() {
         return isMobileRef.current;
@@ -83,7 +90,7 @@ export function useGameTutorial({ uid, ready, app }: UseGameTutorialArgs) {
     window.setTimeout(() => setRun(true), 0);
   }, []);
 
-  // Leaving the tracker ends the run — the tour's targets are gone.
+  // Leaving the screen ends the run — the tour's targets are gone.
   useEffect(() => {
     if (!ready) setRun(false);
   }, [ready]);
@@ -93,46 +100,46 @@ export function useGameTutorial({ uid, ready, app }: UseGameTutorialArgs) {
   useEffect(() => {
     if (!ready || !uid || autoStartedRef.current) return;
 
-    const shouldStart = isTourForced() || isTourPending(uid) || !hasSeenTour(uid);
+    const shouldStart = isTourForced(tourId) || isTourPending(tourId, uid) || !hasSeenTour(tourId, uid);
     if (!shouldStart) return;
 
     const timer = window.setTimeout(() => {
       autoStartedRef.current = true;
-      clearTourPending(uid);
+      clearTourPending(tourId, uid);
       setRun(true);
     }, AUTO_START_DELAY_MS);
 
     return () => window.clearTimeout(timer);
-  }, [ready, uid]);
+  }, [tourId, ready, uid]);
 
   const finish = useCallback(() => {
     setRun(false);
-    if (uid) markTourSeen(uid);
-  }, [uid]);
+    if (uid) markTourSeen(tourId, uid);
+  }, [tourId, uid]);
 
   /**
    * Clear the "seen" flag and run the tutorial again.
    *
-   * Returns `'started'` if it began immediately, or `'pending'` if no game is
-   * open — in that case it starts on the next game the user opens.
+   * Returns `'started'` if it began immediately, or `'pending'` if the tour's
+   * screen isn't open — in that case it starts as soon as the user gets there.
    */
   const replay = useCallback((): 'started' | 'pending' => {
     if (!uid) return 'pending';
-    clearTourSeen(uid);
+    clearTourSeen(tourId, uid);
     autoStartedRef.current = false;
 
     if (ready) {
-      clearTourPending(uid);
+      clearTourPending(tourId, uid);
       start();
       return 'started';
     }
 
-    setTourPending(uid);
+    setTourPending(tourId, uid);
     return 'pending';
-  }, [uid, ready, start]);
+  }, [tourId, uid, ready, start]);
 
   return {
-    /** Spread onto <GameTutorial />. */
+    /** Spread onto <TutorialOverlay />. */
     tourProps: { run, ctx, onFinish: finish, onSkip: finish },
     isRunning: run,
     start,

@@ -86,9 +86,10 @@ import LandingHero from './components/LandingHero';
 import GameCastView from './components/GameCastView';
 import { StatsTabSelector, StatsTabButton } from './components/ui/StatsTable';
 import { enrichEventsWithGameTime, getScoreboardName } from './lib/statsComputations';
-import GameTutorial from './components/tutorial/GameTutorial';
-import { useGameTutorial } from './lib/tutorial/useGameTutorial';
-import { TUTORIAL_STEPS } from './lib/tutorial/steps';
+import TutorialOverlay from './components/tutorial/TutorialOverlay';
+import { useTutorial } from './lib/tutorial/useTutorial';
+import { TRACKER_STEPS } from './lib/tutorial/trackerSteps';
+import { CREATE_STEPS } from './lib/tutorial/createSteps';
 // --- Types ---
 
 export type EventType = 'goal' | 'assist' | 'shot' | 'attempt' | 'miss_ko' | 'gameStart' | 'gamePause' | 'gameEnd' | 'foul' | 'card' | 'sub_in' | 'sub_out' | 'control_change' | 'turnover' | 'flag_released' | 'flag_catch' | 'control_start' | 'quadball_start';
@@ -1366,6 +1367,23 @@ function UnifiedRosterEditor({
 }: any) {
   const [teamSelection, setTeamSelection] = useState('');
   const [seasonSelection, setSeasonSelection] = useState('');
+  const [rosterSearch, setRosterSearch] = useState('');
+
+  // Free-text filter over the existing rosters list: team name, division,
+  // league or season all match, so "outlaws", "college" and "2026" all work.
+  const filteredRosters = useMemo(() => {
+    const q = rosterSearch.trim().toLowerCase();
+    if (!q) return rosters;
+    return rosters.filter((r: any) => {
+      const team = teams.find((t: any) => t.id === r.teamId);
+      const season = seasons.find((s: any) => s.id === r.seasonId);
+      return [team?.name, team?.division, team?.league, season ? getSeasonDisplayName(season, leaguesProp) : '']
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+        .includes(q);
+    });
+  }, [rosters, teams, seasons, leaguesProp, rosterSearch]);
   
   // Upsert Flow State
   const [searchName, setSearchName] = useState('');
@@ -1501,7 +1519,7 @@ function UnifiedRosterEditor({
       <div className="lg:col-span-1 flex flex-col gap-6 max-h-[calc(100vh-200px)]">
         
         {/* Selector */}
-        <div className="bg-gray-50 border border-gray-200 rounded-2xl p-5 shrink-0">
+        <div data-tour="create-roster-select" className="bg-gray-50 border border-gray-200 rounded-2xl p-5 shrink-0">
           <h3 className="text-base font-bold mb-3">Select / Create Roster</h3>
           <div className="space-y-3">
             <select className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-red-500" value={teamSelection} onChange={e => setTeamSelection(e.target.value)}>
@@ -1528,10 +1546,36 @@ function UnifiedRosterEditor({
         </div>
 
         {/* Existing Rosters List */}
-        <div className="bg-gray-50 border border-gray-200 rounded-2xl overflow-hidden flex flex-col flex-1 min-h-[300px]">
-          <div className="p-3 bg-gray-100 text-sm font-bold border-b border-gray-200 shrink-0">Existing Rosters</div>
+        <div data-tour="create-roster-list" className="bg-gray-50 border border-gray-200 rounded-2xl overflow-hidden flex flex-col flex-1 min-h-[300px]">
+          <div className="p-3 bg-gray-100 border-b border-gray-200 shrink-0 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-bold">Existing Rosters</span>
+              <span className="text-xs text-gray-400 font-medium">
+                {rosterSearch.trim() ? `${filteredRosters.length} of ${rosters.length}` : `${rosters.length} items`}
+              </span>
+            </div>
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+              <input
+                type="text"
+                value={rosterSearch}
+                onChange={e => setRosterSearch(e.target.value)}
+                placeholder="Search team or season..."
+                className="w-full bg-white border border-gray-200 rounded-lg pl-8 pr-8 py-1.5 text-sm outline-none focus:border-red-500"
+              />
+              {rosterSearch && (
+                <button
+                  onClick={() => setRosterSearch('')}
+                  title="Clear search"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-600 transition-colors"
+                >
+                  <XCircle className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          </div>
           <div className="overflow-y-auto custom-scrollbar flex-1 divide-y divide-gray-200">
-            {rosters.map((r: any) => {
+            {filteredRosters.map((r: any) => {
               const team = teams.find((t: any) => t.id === r.teamId);
               const season = seasons.find((s: any) => s.id === r.seasonId);
               return (
@@ -1545,6 +1589,9 @@ function UnifiedRosterEditor({
               )
             })}
             {rosters.length === 0 && <div className="p-6 text-center text-sm text-gray-400">No rosters found.</div>}
+            {rosters.length > 0 && filteredRosters.length === 0 && (
+              <div className="p-6 text-center text-sm text-gray-400">No rosters match "{rosterSearch}".</div>
+            )}
           </div>
         </div>
       </div>
@@ -1554,7 +1601,7 @@ function UnifiedRosterEditor({
         {selectedRoster ? (
           <>
             {/* Keyboard Upsert Flow */}
-            <div className="bg-white border-2 border-red-100 rounded-2xl p-5 shadow-sm shrink-0">
+            <div data-tour="create-quick-add" className="bg-white border-2 border-red-100 rounded-2xl p-5 shadow-sm shrink-0">
               <h3 className="text-sm font-bold text-red-900 mb-3 flex items-center gap-2 uppercase tracking-wider">
                 <Zap className="w-4 h-4" /> Quick Add Player
               </h3>
@@ -5209,6 +5256,18 @@ function CreateView({
   const [rosterPlayers, setRosterPlayers] = useState<(RosterPlayer & { player?: Player })[]>([]);
   const [allRosterPlayers, setAllRosterPlayers] = useState<(RosterPlayer & { rosterId: string })[]>([]);
   const [playerSearchText, setPlayerSearchText] = useState('');
+  const [teamSearchText, setTeamSearchText] = useState('');
+
+  // Name, league or division all match, so a moderator can check for an
+  // existing team before creating a duplicate.
+  const filteredTeams = useMemo(() => {
+    const q = teamSearchText.trim().toLowerCase();
+    const sorted = [...teams].sort((a: any, b: any) => (a.name || '').localeCompare(b.name || ''));
+    if (!q) return sorted;
+    return sorted.filter((t: any) =>
+      [t.name, t.league, t.division].filter(Boolean).join(' ').toLowerCase().includes(q),
+    );
+  }, [teams, teamSearchText]);
 
   useEffect(() => {
     if (activeTab === 'players') {
@@ -5253,7 +5312,7 @@ function CreateView({
     <div className="space-y-8 -mx-4 px-4 -mt-8 pt-6 pb-8 min-h-[80vh]">
       <div className="flex items-center justify-between">
         <h2 className="text-3xl font-bold">Moderator - Creation Tools</h2>
-        <div className="flex bg-gray-50 p-1 rounded-xl border border-gray-200">
+        <div data-tour="create-tabs" className="flex bg-gray-50 p-1 rounded-xl border border-gray-200">
           {(['rosters', 'teams', 'players', 'games', 'leaderboard'] as const).map(tab => (
             <button
               key={tab}
@@ -5289,9 +5348,59 @@ function CreateView({
           onDeleteRoster={onDeleteRoster}
         />
       ) : activeTab === 'teams' ? (
-        <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm max-w-xl">
+        <div className="grid lg:grid-cols-3 gap-8">
+        <div className="lg:col-span-2 space-y-4">
+          <div data-tour="create-team-list" className="bg-gray-50 border border-gray-200 rounded-2xl overflow-hidden flex flex-col max-h-[800px]">
+            <div className="p-4 border-b border-gray-200 bg-gray-50/50 flex flex-col gap-3 shrink-0">
+              <div className="flex items-center justify-between">
+                <h3 className="font-bold capitalize">Existing Teams</h3>
+                <span className="text-xs text-gray-400 font-medium">
+                  {teamSearchText.trim() ? `${filteredTeams.length} of ${teams.length}` : `${teams.length} items`}
+                </span>
+              </div>
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                <input
+                  type="text"
+                  value={teamSearchText}
+                  onChange={e => setTeamSearchText(e.target.value)}
+                  placeholder="Search existing teams..."
+                  className="w-full bg-white border border-gray-200 rounded-xl pl-10 pr-10 py-2.5 text-sm outline-none focus:border-red-500"
+                />
+                {teamSearchText && (
+                  <button
+                    onClick={() => setTeamSearchText('')}
+                    title="Clear search"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-600 transition-colors"
+                  >
+                    <XCircle className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="overflow-y-auto custom-scrollbar flex-1 divide-y divide-gray-100">
+              {filteredTeams.map((t: any) => (
+                <div key={t.id} className="p-3 flex items-center justify-between gap-3 hover:bg-white transition-colors">
+                  <div className="min-w-0">
+                    <p className="font-bold text-gray-900 text-sm truncate">{t.name}</p>
+                    <p className="text-xs text-gray-500 truncate">
+                      {[t.league, t.division].filter(Boolean).join(' · ') || 'No league or division set'}
+                    </p>
+                  </div>
+                </div>
+              ))}
+              {teams.length === 0 && (
+                <div className="p-6 text-center text-sm text-gray-400">No teams yet.</div>
+              )}
+              {teams.length > 0 && filteredTeams.length === 0 && (
+                <div className="p-6 text-center text-sm text-gray-400">No teams match "{teamSearchText}".</div>
+              )}
+            </div>
+          </div>
+        </div>
+        <div data-tour="create-team-form" className="lg:col-span-1 bg-white p-6 rounded-2xl border border-gray-200 shadow-sm h-fit sticky top-6">
           <h3 className="text-xl font-bold mb-4">Create New Team</h3>
-          <p className="text-sm text-gray-500 mb-6">Create a team once, and it will be available to all authors forever.</p>
+          <p className="text-sm text-gray-500 mb-6">Create a team once, and it will be available to all authors forever. Search the list first — duplicates split a team's history.</p>
           <form onSubmit={async (e) => {
             e.preventDefault();
             const data = new FormData(e.target as HTMLFormElement);
@@ -5311,10 +5420,11 @@ function CreateView({
             <button type="submit" className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold transition-colors hover:bg-red-700 w-full">Add Team</button>
           </form>
         </div>
+        </div>
       ) : activeTab === 'players' ? (
         <div className="grid lg:grid-cols-3 gap-8">
             <div className="lg:col-span-2 space-y-4">
-              <div className="bg-gray-50 border border-gray-200 rounded-2xl overflow-hidden flex flex-col max-h-[800px]">
+              <div data-tour="create-player-list" className="bg-gray-50 border border-gray-200 rounded-2xl overflow-hidden flex flex-col max-h-[800px]">
                 <div className="p-4 border-b border-gray-200 bg-gray-50/50 flex flex-col gap-3 shrink-0">
                   <div className="flex items-center justify-between">
                     <h3 className="font-bold capitalize">Existing Players</h3>
@@ -5360,7 +5470,7 @@ function CreateView({
             </div>
             
             <div className="lg:col-span-1 space-y-6">
-              <div className="bg-gray-50 border border-gray-200 rounded-2xl p-6 sticky top-6">
+              <div data-tour="create-player-form" className="bg-gray-50 border border-gray-200 rounded-2xl p-6 sticky top-6">
                 <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
                   <Plus className="w-5 h-5 text-red-500" />
                   Add New Player
@@ -5415,7 +5525,7 @@ function CreateView({
             </div>
         </div>
       ) : activeTab === 'games' ? (
-        <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm max-w-2xl mx-auto">
+        <div data-tour="create-game-form" className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm max-w-2xl mx-auto">
           <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
             <Plus className="w-5 h-5 text-red-500" />
             Add New Game
@@ -6138,23 +6248,37 @@ export default function App() {
     } as any;
   }, [currentVideo, games]);
 
-  // --- First-time author tutorial ------------------------------------------
-  // Steps and copy live in src/lib/tutorial/steps.tsx.
+  // --- Guided tutorials -----------------------------------------------------
+  // Steps and copy live in src/lib/tutorial/trackerSteps.tsx and createSteps.tsx.
   const canRecordEvents = !!user && effectiveRole !== 'voter';
-  const tutorial = useGameTutorial({
+  const canUseCreateTools = effectiveRole === 'moderator' || effectiveRole === 'trusted';
+
+  const tutorialApp = {
+    setRightPanelTab,
+    setIsExpandedLayout,
+    isExpandedLayout,
+    setCreateTab: setCreateActiveTab,
+    role: effectiveRole,
+    canRecord: canRecordEvents,
+    canCreate: canUseCreateTools,
+  };
+
+  const trackerTutorial = useTutorial({
+    tourId: 'game-tracker',
     uid: user?.uid ?? null,
     ready: isAuthReady && view === 'tracker' && !!currentVideo && !!currentGame,
-    app: {
-      setRightPanelTab,
-      setIsExpandedLayout,
-      isExpandedLayout,
-      role: effectiveRole,
-      canRecord: canRecordEvents,
-    },
+    app: tutorialApp,
+  });
+
+  const createTutorial = useTutorial({
+    tourId: 'create-tools',
+    uid: user?.uid ?? null,
+    ready: isAuthReady && view === 'create' && canUseCreateTools,
+    app: tutorialApp,
   });
 
   const handleReplayTutorial = () => {
-    const result = tutorial.replay();
+    const result = trackerTutorial.replay();
     if (result === 'started') return;
     if (currentVideo) {
       // A game is loaded but we're on another view — go back to it and the
@@ -6163,6 +6287,11 @@ export default function App() {
       return;
     }
     toast.success('Tutorial will start the next time you open a game.');
+  };
+
+  const handleReplayCreateTutorial = () => {
+    // Unlike the tracker, we can just take them straight there.
+    if (createTutorial.replay() === 'pending') setView('create');
   };
 
   // Roster Listeners for current video
@@ -8414,20 +8543,40 @@ export default function App() {
         {view === 'help' ? (
           <div className="bg-white rounded-xl shadow-sm border p-8 max-w-4xl mx-auto space-y-10">
             {user && (
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 bg-red-50/60 border border-red-100 rounded-xl">
-                <div>
-                  <h3 className="text-lg font-extrabold text-gray-900">Interactive tutorial</h3>
-                  <p className="text-sm text-gray-600 mt-1">
-                    A guided walkthrough of the game tracker, pointing at the real buttons as you go.
-                  </p>
+              <div className="p-5 bg-red-50/60 border border-red-100 rounded-xl space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
+                    <h3 className="text-lg font-extrabold text-gray-900">Game tracker tutorial</h3>
+                    <p className="text-sm text-gray-600 mt-1">
+                      A guided walkthrough of watching and recording a game, pointing at the real buttons as you go.
+                    </p>
+                  </div>
+                  <button
+                    onClick={handleReplayTutorial}
+                    className="shrink-0 flex items-center justify-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-bold transition-all active:scale-95"
+                  >
+                    <PlayCircle className="w-4 h-4" />
+                    Replay
+                  </button>
                 </div>
-                <button
-                  onClick={handleReplayTutorial}
-                  className="shrink-0 flex items-center justify-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-bold transition-all active:scale-95"
-                >
-                  <PlayCircle className="w-4 h-4" />
-                  Replay tutorial
-                </button>
+
+                {canUseCreateTools && (
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-t border-red-100 pt-4">
+                    <div>
+                      <h3 className="text-lg font-extrabold text-gray-900">Create tools tutorial</h3>
+                      <p className="text-sm text-gray-600 mt-1">
+                        The moderator walkthrough for building teams, players, rosters and games.
+                      </p>
+                    </div>
+                    <button
+                      onClick={handleReplayCreateTutorial}
+                      className="shrink-0 flex items-center justify-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-bold transition-all active:scale-95"
+                    >
+                      <PlayCircle className="w-4 h-4" />
+                      Replay
+                    </button>
+                  </div>
+                )}
               </div>
             )}
             <div className="mb-12">
@@ -8445,6 +8594,15 @@ export default function App() {
               <h2 className="text-3xl font-extrabold border-b pb-4 text-gray-900 mb-6">Become an Author</h2>
               <div className="space-y-4 text-gray-700 leading-relaxed text-sm">
                 <p>Just... sign in. That's it. Any stat you author becomes public<span className="text-red-500">*</span>. They get aggregated on the "pending" tab, but will move to verified after receiving enough votes.</p>
+              </div>
+            </div>
+
+            <div className="mb-12">
+              <h2 className="text-3xl font-extrabold border-b pb-4 text-gray-900 mb-6">Become a Moderator</h2>
+              <div className="space-y-4 text-gray-700 leading-relaxed text-sm">
+                <p>Moderators get the <strong>Create</strong> tab, which is where teams, players, rosters and games are made. Authors can only pick from what already exists, so when something is missing, a moderator has to add it.</p>
+                <p>Moderator access is granted by hand. To be added, email <a href="mailto:quadballreference@gmail.com" className="text-red-600 font-bold hover:underline">quadballreference@gmail.com</a> or message <a href="https://www.reddit.com/user/quadballreference" target="_blank" rel="noopener noreferrer" className="text-red-600 font-bold hover:underline">u/quadballreference</a> on Reddit.</p>
+                <p>Either way, include the email address you sign in with — the role is attached to that address, so we can't grant it without one.</p>
               </div>
             </div>
 
@@ -9157,7 +9315,7 @@ export default function App() {
                                 <Activity className="w-5 h-5" />
                               </button>
                               {user && (
-                                <button onClick={tutorial.start} className="p-1.5 text-gray-400 hover:text-red-600 transition-colors" title="Replay the tutorial">
+                                <button onClick={trackerTutorial.start} className="p-1.5 text-gray-400 hover:text-red-600 transition-colors" title="Replay the tutorial">
                                   <HelpCircle className="w-5 h-5" />
                                 </button>
                               )}
@@ -10536,7 +10694,11 @@ export default function App() {
 
       {/* Global Command Palette (Cmd+K) */}
       {view === 'tracker' && currentVideo && (
-        <GameTutorial steps={TUTORIAL_STEPS} {...tutorial.tourProps} />
+        <TutorialOverlay steps={TRACKER_STEPS} {...trackerTutorial.tourProps} />
+      )}
+
+      {view === 'create' && canUseCreateTools && (
+        <TutorialOverlay steps={CREATE_STEPS} {...createTutorial.tourProps} />
       )}
 
       {isCommandPaletteOpen && (

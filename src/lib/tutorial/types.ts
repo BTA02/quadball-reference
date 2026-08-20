@@ -16,19 +16,31 @@ export type TutorialPlacement =
 /**
  * The slice of app state a step is allowed to read and drive.
  * Passed to every `before()` and `enabled()` hook.
+ *
+ * One shared shape covers every tour, so a step author only has one thing to
+ * learn. Fields are grouped by the screen they belong to.
  */
 export interface TutorialContext {
+  // --- Game tracker ---
   /** Switch the tracker's right-hand panel before a step is shown. */
   setRightPanelTab: (tab: 'live_events' | 'record' | 'momentum' | 'rosters') => void;
   /** Enter/leave Cinema Mode (hides the video, shows all four panels side by side). */
   setIsExpandedLayout: (expanded: boolean) => void;
   /** Currently in Cinema Mode? */
   isExpandedLayout: boolean;
-  /** The signed-in user's effective role. `voter` accounts have no Record tab. */
-  role: string;
   /** True when the user can record events (i.e. the Record tab is rendered). */
   canRecord: boolean;
-  /** True below the `lg` breakpoint, where the tracker stacks into one column. */
+
+  // --- Create (moderator tools) ---
+  /** Switch the Create screen's sub-tab before a step is shown. */
+  setCreateTab: (tab: 'rosters' | 'teams' | 'players' | 'games' | 'leaderboard') => void;
+  /** True when the user can reach the Create tab (moderator or trusted). */
+  canCreate: boolean;
+
+  // --- Everywhere ---
+  /** The signed-in user's effective role: voter | author | moderator | trusted. */
+  role: string;
+  /** True below the `lg` breakpoint, where layouts stack into one column. */
   isMobile: boolean;
 }
 
