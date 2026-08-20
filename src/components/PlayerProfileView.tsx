@@ -502,7 +502,48 @@ export default function PlayerProfileView({
     else { setSortKey(k); setSortDir('desc'); }
   };
 
-  if (!player) return <div>Player not found.</div>;
+  // Compute teams played for, grouped by league
+  const teamsByLeague = useMemo(() => {
+    const leagues: Record<string, { id: string; name: string; nickname?: string; colorPrimary?: string; colorPrimaryDark?: string }[]> = {};
+    // Find all teams this player has played for via events
+    const playerTeamIds = new Set<string>();
+    events.forEach(e => {
+      if (e.playerId === activePlayerId && e.teamId && e.teamId !== 'null') {
+        playerTeamIds.add(e.teamId);
+      }
+    });
+    // Group by league using game's season
+    playerTeamIds.forEach(teamId => {
+      const team = teams.find(t => t.id === teamId);
+      if (!team) return;
+      // Find which leagues this player played for this team
+      const playerGamesForTeam = playedGames.filter(g => {
+        const isOnTeam = g.homeTeamId === teamId || g.awayTeamId === teamId;
+        const playedForTeam = events.some(e => e.gameId === g.id && e.playerId === activePlayerId && e.teamId === teamId);
+        return isOnTeam && playedForTeam;
+      });
+      const leaguesForTeam = new Set<string>();
+      playerGamesForTeam.forEach(g => {
+        const season = seasons.find(s => s.id === g.seasonId);
+        leaguesForTeam.add(season?.league || 'Other');
+      });
+      leaguesForTeam.forEach(league => {
+        if (!leagues[league]) leagues[league] = [];
+        if (!leagues[league].some(t => t.id === teamId)) {
+          leagues[league].push({ id: teamId, name: team.name, nickname: (team as any).nickname, colorPrimaryDark: (team as any).colorPrimaryDark || (team as any).colorPrimary });
+        }
+      });
+    });
+    return leagues;
+  }, [events, activePlayerId, teams, playedGames, seasons]);
+
+  // Global data loads async, so an empty roster means "still loading", not "missing".
+  // Every hook must run before this returns — a conditional hook here breaks deep links.
+  if (!player) {
+    return players.length === 0
+      ? <div className="p-6 text-sm text-gray-400">Loading player…</div>
+      : <div className="p-6 text-sm text-gray-500">Player not found.</div>;
+  }
 
   const renderTableHeader = () => (
     <tr className="border-b border-gray-100 bg-gray-50/80">
@@ -662,40 +703,6 @@ export default function PlayerProfileView({
     </tr>
   );
 
-  // Compute teams played for, grouped by league
-  const teamsByLeague = useMemo(() => {
-    const leagues: Record<string, { id: string; name: string; nickname?: string; colorPrimary?: string; colorPrimaryDark?: string }[]> = {};
-    // Find all teams this player has played for via events
-    const playerTeamIds = new Set<string>();
-    events.forEach(e => {
-      if (e.playerId === activePlayerId && e.teamId && e.teamId !== 'null') {
-        playerTeamIds.add(e.teamId);
-      }
-    });
-    // Group by league using game's season
-    playerTeamIds.forEach(teamId => {
-      const team = teams.find(t => t.id === teamId);
-      if (!team) return;
-      // Find which leagues this player played for this team
-      const playerGamesForTeam = playedGames.filter(g => {
-        const isOnTeam = g.homeTeamId === teamId || g.awayTeamId === teamId;
-        const playedForTeam = events.some(e => e.gameId === g.id && e.playerId === activePlayerId && e.teamId === teamId);
-        return isOnTeam && playedForTeam;
-      });
-      const leaguesForTeam = new Set<string>();
-      playerGamesForTeam.forEach(g => {
-        const season = seasons.find(s => s.id === g.seasonId);
-        leaguesForTeam.add(season?.league || 'Other');
-      });
-      leaguesForTeam.forEach(league => {
-        if (!leagues[league]) leagues[league] = [];
-        if (!leagues[league].some(t => t.id === teamId)) {
-          leagues[league].push({ id: teamId, name: team.name, nickname: (team as any).nickname, colorPrimaryDark: (team as any).colorPrimaryDark || (team as any).colorPrimary });
-        }
-      });
-    });
-    return leagues;
-  }, [events, activePlayerId, teams, playedGames, seasons]);
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12">
@@ -908,6 +915,7 @@ export default function PlayerProfileView({
                     <QuadHeaderCell label="+" sortKey="plus" tooltip="Plus" />
                     <QuadHeaderCell label="−" sortKey="minus" tooltip="Minus" />
                     <QuadHeaderCell label="+/−" sortKey="plusMinus" tooltip="Plus / Minus" />
+                    <QuadHeaderCell label="TKO" sortKey="tko" tooltip="Team Knockouts (opponent KO'd while on field)" />
                     <QuadHeaderCell label="CTRL" sortKey="controlMinutes" tooltip="Control Minutes" />
                     <QuadHeaderCell label="TOT" sortKey="totalMinutes" tooltip="Total Minutes" />
                     <QuadHeaderCell label="CTRL%" sortKey="controlPct" tooltip="Control % (Percentage of possession time team has active Dodgeball Control)" />
@@ -929,6 +937,7 @@ export default function PlayerProfileView({
                     <Cell value={dodgeSoloStats.plus} highlight={dodgeSoloStats.plus > 0 ? 'pos' : undefined} />
                     <Cell value={dodgeSoloStats.minus} highlight={dodgeSoloStats.minus > 0 ? 'neg' : undefined} />
                     <Cell value={dodgeSoloStats.plusMinus > 0 ? `+${dodgeSoloStats.plusMinus}` : dodgeSoloStats.plusMinus || 'E'} bold highlight={dodgeSoloStats.plusMinus > 0 ? 'pos' : dodgeSoloStats.plusMinus < 0 ? 'neg' : undefined} />
+                    <Cell value={dodgeSoloStats.tko} highlight={dodgeSoloStats.tko > 0 ? 'pos' : undefined} />
                     <Cell value={dodgeSoloStats.controlMinutes} />
                     <Cell value={dodgeSoloStats.totalMinutes} />
                     <Cell value={`${dodgeSoloStats.controlPct}%`} bold highlight={dodgeSoloStats.controlPct >= 55 ? 'pos' : dodgeSoloStats.controlPct <= 45 ? 'neg' : undefined} />
@@ -955,6 +964,7 @@ export default function PlayerProfileView({
                     <SortHeader label="+" sortKey="plus" currentSort={pairSortKey} currentDir={pairSortDir} onSort={handlePairSort} tooltip="Plus" />
                     <SortHeader label="−" sortKey="minus" currentSort={pairSortKey} currentDir={pairSortDir} onSort={handlePairSort} tooltip="Minus" />
                     <SortHeader label="+/−" sortKey="plusMinus" currentSort={pairSortKey} currentDir={pairSortDir} onSort={handlePairSort} tooltip="Plus / Minus" />
+                    <SortHeader label="TKO" sortKey="tko" currentSort={pairSortKey} currentDir={pairSortDir} onSort={handlePairSort} tooltip="Team Knockouts (opponent KO'd while pair was on field)" />
                     <SortHeader label="CTRL" sortKey="controlMinutes" currentSort={pairSortKey} currentDir={pairSortDir} onSort={handlePairSort} tooltip="Control Minutes" />
                     <SortHeader label="TOT" sortKey="totalMinutes" currentSort={pairSortKey} currentDir={pairSortDir} onSort={handlePairSort} tooltip="Total Minutes" />
                     <SortHeader label="CTRL%" sortKey="controlPct" currentSort={pairSortKey} currentDir={pairSortDir} onSort={handlePairSort} tooltip="Control % (Percentage of possession time team has active Dodgeball Control)" />
@@ -980,6 +990,7 @@ export default function PlayerProfileView({
                       <Cell value={pStat.plus} highlight={pStat.plus > 0 ? 'pos' : undefined} />
                       <Cell value={pStat.minus} highlight={pStat.minus > 0 ? 'neg' : undefined} />
                       <Cell value={pStat.plusMinus > 0 ? `+${pStat.plusMinus}` : pStat.plusMinus || 'E'} bold highlight={pStat.plusMinus > 0 ? 'pos' : pStat.plusMinus < 0 ? 'neg' : undefined} />
+                      <Cell value={pStat.tko} highlight={pStat.tko > 0 ? 'pos' : undefined} />
                       <Cell value={pStat.controlMinutes} />
                       <Cell value={pStat.totalMinutes} />
                       <Cell value={`${pStat.controlPct}%`} bold highlight={pStat.controlPct >= 55 ? 'pos' : pStat.controlPct <= 45 ? 'neg' : undefined} />

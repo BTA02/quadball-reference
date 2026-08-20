@@ -15,6 +15,7 @@ import {
   Target,
   Clock,
   HelpCircle,
+  PlayCircle,
   CheckCircle2,
   XCircle,
   Search,
@@ -85,6 +86,10 @@ import LandingHero from './components/LandingHero';
 import GameCastView from './components/GameCastView';
 import { StatsTabSelector, StatsTabButton } from './components/ui/StatsTable';
 import { enrichEventsWithGameTime, getScoreboardName } from './lib/statsComputations';
+import TutorialOverlay from './components/tutorial/TutorialOverlay';
+import { useTutorial } from './lib/tutorial/useTutorial';
+import { TRACKER_STEPS } from './lib/tutorial/trackerSteps';
+import { CREATE_STEPS } from './lib/tutorial/createSteps';
 // --- Types ---
 
 export type EventType = 'goal' | 'assist' | 'shot' | 'attempt' | 'miss_ko' | 'gameStart' | 'gamePause' | 'gameEnd' | 'foul' | 'card' | 'sub_in' | 'sub_out' | 'control_change' | 'turnover' | 'flag_released' | 'flag_catch' | 'control_start' | 'quadball_start';
@@ -702,6 +707,19 @@ function computeWinCondition(
   }
 
   return { targetSet: runningThreshold !== null, flagOnPitch, threshold: runningThreshold, winner: null };
+}
+
+function hexToRgba(hex: string, alpha: number): string {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+const MEDIUM_GRAY = '#6b7280';
+function avoidWhite(hex: string): string {
+  const normalized = hex.trim().toLowerCase();
+  return (normalized === '#ffffff' || normalized === '#fff' || normalized === 'white') ? MEDIUM_GRAY : hex;
 }
 
 /**
@@ -1362,6 +1380,23 @@ function UnifiedRosterEditor({
 }: any) {
   const [teamSelection, setTeamSelection] = useState('');
   const [seasonSelection, setSeasonSelection] = useState('');
+  const [rosterSearch, setRosterSearch] = useState('');
+
+  // Free-text filter over the existing rosters list: team name, division,
+  // league or season all match, so "outlaws", "college" and "2026" all work.
+  const filteredRosters = useMemo(() => {
+    const q = rosterSearch.trim().toLowerCase();
+    if (!q) return rosters;
+    return rosters.filter((r: any) => {
+      const team = teams.find((t: any) => t.id === r.teamId);
+      const season = seasons.find((s: any) => s.id === r.seasonId);
+      return [team?.name, team?.division, team?.league, season ? getSeasonDisplayName(season, leaguesProp) : '']
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+        .includes(q);
+    });
+  }, [rosters, teams, seasons, leaguesProp, rosterSearch]);
   
   // Upsert Flow State
   const [searchName, setSearchName] = useState('');
@@ -1497,7 +1532,7 @@ function UnifiedRosterEditor({
       <div className="lg:col-span-1 flex flex-col gap-6 max-h-[calc(100vh-200px)]">
         
         {/* Selector */}
-        <div className="bg-gray-50 border border-gray-200 rounded-2xl p-5 shrink-0">
+        <div data-tour="create-roster-select" className="bg-gray-50 border border-gray-200 rounded-2xl p-5 shrink-0">
           <h3 className="text-base font-bold mb-3">Select / Create Roster</h3>
           <div className="space-y-3">
             <select className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-red-500" value={teamSelection} onChange={e => setTeamSelection(e.target.value)}>
@@ -1524,10 +1559,36 @@ function UnifiedRosterEditor({
         </div>
 
         {/* Existing Rosters List */}
-        <div className="bg-gray-50 border border-gray-200 rounded-2xl overflow-hidden flex flex-col flex-1 min-h-[300px]">
-          <div className="p-3 bg-gray-100 text-sm font-bold border-b border-gray-200 shrink-0">Existing Rosters</div>
+        <div data-tour="create-roster-list" className="bg-gray-50 border border-gray-200 rounded-2xl overflow-hidden flex flex-col flex-1 min-h-[300px]">
+          <div className="p-3 bg-gray-100 border-b border-gray-200 shrink-0 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-bold">Existing Rosters</span>
+              <span className="text-xs text-gray-400 font-medium">
+                {rosterSearch.trim() ? `${filteredRosters.length} of ${rosters.length}` : `${rosters.length} items`}
+              </span>
+            </div>
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+              <input
+                type="text"
+                value={rosterSearch}
+                onChange={e => setRosterSearch(e.target.value)}
+                placeholder="Search team or season..."
+                className="w-full bg-white border border-gray-200 rounded-lg pl-8 pr-8 py-1.5 text-sm outline-none focus:border-red-500"
+              />
+              {rosterSearch && (
+                <button
+                  onClick={() => setRosterSearch('')}
+                  title="Clear search"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-600 transition-colors"
+                >
+                  <XCircle className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          </div>
           <div className="overflow-y-auto custom-scrollbar flex-1 divide-y divide-gray-200">
-            {rosters.map((r: any) => {
+            {filteredRosters.map((r: any) => {
               const team = teams.find((t: any) => t.id === r.teamId);
               const season = seasons.find((s: any) => s.id === r.seasonId);
               return (
@@ -1541,6 +1602,9 @@ function UnifiedRosterEditor({
               )
             })}
             {rosters.length === 0 && <div className="p-6 text-center text-sm text-gray-400">No rosters found.</div>}
+            {rosters.length > 0 && filteredRosters.length === 0 && (
+              <div className="p-6 text-center text-sm text-gray-400">No rosters match "{rosterSearch}".</div>
+            )}
           </div>
         </div>
       </div>
@@ -1550,7 +1614,7 @@ function UnifiedRosterEditor({
         {selectedRoster ? (
           <>
             {/* Keyboard Upsert Flow */}
-            <div className="bg-white border-2 border-red-100 rounded-2xl p-5 shadow-sm shrink-0">
+            <div data-tour="create-quick-add" className="bg-white border-2 border-red-100 rounded-2xl p-5 shadow-sm shrink-0">
               <h3 className="text-sm font-bold text-red-900 mb-3 flex items-center gap-2 uppercase tracking-wider">
                 <Zap className="w-4 h-4" /> Quick Add Player
               </h3>
@@ -5205,6 +5269,18 @@ function CreateView({
   const [rosterPlayers, setRosterPlayers] = useState<(RosterPlayer & { player?: Player })[]>([]);
   const [allRosterPlayers, setAllRosterPlayers] = useState<(RosterPlayer & { rosterId: string })[]>([]);
   const [playerSearchText, setPlayerSearchText] = useState('');
+  const [teamSearchText, setTeamSearchText] = useState('');
+
+  // Name, league or division all match, so a moderator can check for an
+  // existing team before creating a duplicate.
+  const filteredTeams = useMemo(() => {
+    const q = teamSearchText.trim().toLowerCase();
+    const sorted = [...teams].sort((a: any, b: any) => (a.name || '').localeCompare(b.name || ''));
+    if (!q) return sorted;
+    return sorted.filter((t: any) =>
+      [t.name, t.league, t.division].filter(Boolean).join(' ').toLowerCase().includes(q),
+    );
+  }, [teams, teamSearchText]);
 
   useEffect(() => {
     if (activeTab === 'players') {
@@ -5249,7 +5325,7 @@ function CreateView({
     <div className="space-y-8 -mx-4 px-4 -mt-8 pt-6 pb-8 min-h-[80vh]">
       <div className="flex items-center justify-between">
         <h2 className="text-3xl font-bold">Moderator - Creation Tools</h2>
-        <div className="flex bg-gray-50 p-1 rounded-xl border border-gray-200">
+        <div data-tour="create-tabs" className="flex bg-gray-50 p-1 rounded-xl border border-gray-200">
           {(['rosters', 'teams', 'players', 'games', 'leaderboard'] as const).map(tab => (
             <button
               key={tab}
@@ -5285,9 +5361,59 @@ function CreateView({
           onDeleteRoster={onDeleteRoster}
         />
       ) : activeTab === 'teams' ? (
-        <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm max-w-xl">
+        <div className="grid lg:grid-cols-3 gap-8">
+        <div className="lg:col-span-2 space-y-4">
+          <div data-tour="create-team-list" className="bg-gray-50 border border-gray-200 rounded-2xl overflow-hidden flex flex-col max-h-[800px]">
+            <div className="p-4 border-b border-gray-200 bg-gray-50/50 flex flex-col gap-3 shrink-0">
+              <div className="flex items-center justify-between">
+                <h3 className="font-bold capitalize">Existing Teams</h3>
+                <span className="text-xs text-gray-400 font-medium">
+                  {teamSearchText.trim() ? `${filteredTeams.length} of ${teams.length}` : `${teams.length} items`}
+                </span>
+              </div>
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                <input
+                  type="text"
+                  value={teamSearchText}
+                  onChange={e => setTeamSearchText(e.target.value)}
+                  placeholder="Search existing teams..."
+                  className="w-full bg-white border border-gray-200 rounded-xl pl-10 pr-10 py-2.5 text-sm outline-none focus:border-red-500"
+                />
+                {teamSearchText && (
+                  <button
+                    onClick={() => setTeamSearchText('')}
+                    title="Clear search"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-600 transition-colors"
+                  >
+                    <XCircle className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="overflow-y-auto custom-scrollbar flex-1 divide-y divide-gray-100">
+              {filteredTeams.map((t: any) => (
+                <div key={t.id} className="p-3 flex items-center justify-between gap-3 hover:bg-white transition-colors">
+                  <div className="min-w-0">
+                    <p className="font-bold text-gray-900 text-sm truncate">{t.name}</p>
+                    <p className="text-xs text-gray-500 truncate">
+                      {[t.league, t.division].filter(Boolean).join(' · ') || 'No league or division set'}
+                    </p>
+                  </div>
+                </div>
+              ))}
+              {teams.length === 0 && (
+                <div className="p-6 text-center text-sm text-gray-400">No teams yet.</div>
+              )}
+              {teams.length > 0 && filteredTeams.length === 0 && (
+                <div className="p-6 text-center text-sm text-gray-400">No teams match "{teamSearchText}".</div>
+              )}
+            </div>
+          </div>
+        </div>
+        <div data-tour="create-team-form" className="lg:col-span-1 bg-white p-6 rounded-2xl border border-gray-200 shadow-sm h-fit sticky top-6">
           <h3 className="text-xl font-bold mb-4">Create New Team</h3>
-          <p className="text-sm text-gray-500 mb-6">Create a team once, and it will be available to all authors forever.</p>
+          <p className="text-sm text-gray-500 mb-6">Create a team once, and it will be available to all authors forever. Search the list first — duplicates split a team's history.</p>
           <form onSubmit={async (e) => {
             e.preventDefault();
             const data = new FormData(e.target as HTMLFormElement);
@@ -5307,10 +5433,11 @@ function CreateView({
             <button type="submit" className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold transition-colors hover:bg-red-700 w-full">Add Team</button>
           </form>
         </div>
+        </div>
       ) : activeTab === 'players' ? (
         <div className="grid lg:grid-cols-3 gap-8">
             <div className="lg:col-span-2 space-y-4">
-              <div className="bg-gray-50 border border-gray-200 rounded-2xl overflow-hidden flex flex-col max-h-[800px]">
+              <div data-tour="create-player-list" className="bg-gray-50 border border-gray-200 rounded-2xl overflow-hidden flex flex-col max-h-[800px]">
                 <div className="p-4 border-b border-gray-200 bg-gray-50/50 flex flex-col gap-3 shrink-0">
                   <div className="flex items-center justify-between">
                     <h3 className="font-bold capitalize">Existing Players</h3>
@@ -5356,7 +5483,7 @@ function CreateView({
             </div>
             
             <div className="lg:col-span-1 space-y-6">
-              <div className="bg-gray-50 border border-gray-200 rounded-2xl p-6 sticky top-6">
+              <div data-tour="create-player-form" className="bg-gray-50 border border-gray-200 rounded-2xl p-6 sticky top-6">
                 <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
                   <Plus className="w-5 h-5 text-red-500" />
                   Add New Player
@@ -5411,7 +5538,7 @@ function CreateView({
             </div>
         </div>
       ) : activeTab === 'games' ? (
-        <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm max-w-2xl mx-auto">
+        <div data-tour="create-game-form" className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm max-w-2xl mx-auto">
           <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
             <Plus className="w-5 h-5 text-red-500" />
             Add New Game
@@ -5542,6 +5669,45 @@ function CreateView({
   );
 }
 
+type RouteView = 'tracker' | 'video' | 'manage' | 'create' | 'stats' | 'review' | 'help' | 'playerProfile' | 'teamProfile' | 'gameProfile' | 'lists';
+
+const SIMPLE_ROUTES = ['tracker', 'video', 'manage', 'create', 'review', 'help', 'lists'];
+
+// Parses a location hash into the routing/filter state it represents.
+//
+// This runs BOTH as the lazy initializer for the relevant useState calls and on every
+// hashchange. Initializing synchronously matters: the effect that writes state back out
+// to the URL also runs on mount, and if state were still at its defaults at that point it
+// would overwrite the incoming deep link (with '#/stats') before the URL had been read.
+function splitParam(params: URLSearchParams, key: string): string[] {
+  return params.has(key) ? params.get(key)!.split(',').filter(Boolean) : [];
+}
+
+function parseHashRoute(hashFull: string): {
+  view: RouteView | null;
+  playerId: string | null;
+  teamId: string | null;
+  gameId: string | null;
+  isStats: boolean;
+  params: URLSearchParams;
+} {
+  const [hash, queryString] = (hashFull || '').split('?');
+  const params = new URLSearchParams(queryString || '');
+  const base = { view: null as RouteView | null, playerId: null, teamId: null, gameId: null, isStats: false, params };
+
+  if (hash.startsWith('#/game/')) return { ...base, view: 'gameProfile', gameId: hash.replace('#/game/', '') };
+  if (hash.startsWith('#/team/')) return { ...base, view: 'teamProfile', teamId: hash.replace('#/team/', '') };
+  if (hash.startsWith('#/player/')) return { ...base, view: 'playerProfile', playerId: hash.replace('#/player/', '') };
+  if (hash === '#/stats' || hash === '') return { ...base, view: 'stats', isStats: true };
+  if (hash.startsWith('#/')) {
+    const route = hash.replace('#/', '');
+    // 'lists' is intentionally excluded from any nav UI — it's a hidden page,
+    // reachable only by navigating directly to #/lists.
+    if (SIMPLE_ROUTES.includes(route)) return { ...base, view: route as RouteView };
+  }
+  return base;
+}
+
 export default function App() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [hasSeenLanding, setHasSeenLanding] = useState<boolean>(() => {
@@ -5593,15 +5759,18 @@ export default function App() {
   const [selectedTeamContext, setSelectedTeamContext] = useState<'home' | 'away' | null>('home');
 
   // Management State
-  const [view, setView] = useState<'tracker' | 'video' | 'manage' | 'create' | 'stats' | 'review' | 'help' | 'playerProfile' | 'teamProfile' | 'gameProfile' | 'lists'>('stats');
+  // Parsed once, before first render, so a deep-linked URL is never clobbered on mount.
+  const initialRoute = useRef(parseHashRoute(typeof window !== 'undefined' ? window.location.hash : '')).current;
+  const initialParams = initialRoute.params;
+  const [view, setView] = useState<RouteView>(initialRoute.view || 'stats');
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
   const mobileMenuRef = useRef<HTMLDivElement>(null);
   const [managementActiveTab, setManagementActiveTab] = useState<'leagues' | 'tournaments' | 'search' | 'teams' | 'seasons' | 'players' | 'rosters' | 'games' | 'videos' | 'roles' | 'events' | 'import' | 'merge'>('teams');
   const [createActiveTab, setCreateActiveTab] = useState<'rosters' | 'teams' | 'players' | 'games' | 'leaderboard'>('rosters');
   const [beaterStatsTab, setBeaterStatsTab] = useState<'pairs' | 'solo' | 'team'>('pairs');
-  const [activePlayerId, setActivePlayerId] = useState<string | null>(null);
-  const [activeTeamId, setActiveTeamId] = useState<string | null>(null);
-  const [activeGameId, setActiveGameId] = useState<string | null>(null);
+  const [activePlayerId, setActivePlayerId] = useState<string | null>(initialRoute.playerId);
+  const [activeTeamId, setActiveTeamId] = useState<string | null>(initialRoute.teamId);
+  const [activeGameId, setActiveGameId] = useState<string | null>(initialRoute.gameId);
   const [playerJerseyNumbers, setPlayerJerseyNumbers] = useState<string[]>([]);
 
   // Load jersey numbers for the active player from all roster entries
@@ -5659,58 +5828,47 @@ export default function App() {
   };
 
   // Stats Filter State
-  const [statsSubView, setStatsSubView] = useState<'quadball' | 'beaters' | 'seekers' | 'gamecast'>('quadball');
-  const [statsFilter, setStatsFilter] = useState<'all' | 'verified' | 'verified_events'>('all');
-  const [statsTeamIds, setStatsTeamIds] = useState<string[]>([]);
-  const [statsSearch, setStatsSearch] = useState<string>('');
-  const [statsMinGames, setStatsMinGames] = useState<number>(1);
-  const [bludgerControlMode, setBludgerControlMode] = useState<'all' | 'separate'>('all');
-  const [statsFlagFilter, setStatsFlagFilter] = useState<'all' | 'on' | 'off'>('all');
-  const [statsPositionFilter, setStatsPositionFilter] = useState<'all' | 'chaser' | 'keeper'>('all');
-  const [statsSelectedYears, setStatsSelectedYears] = useState<string[]>([]);
-  const [statsLeagueDivs, setStatsLeagueDivs] = useState<string[]>([]);
-  const [statsTournamentIds, setStatsTournamentIds] = useState<string[]>([]);
+  const [statsSubView, setStatsSubView] = useState<'quadball' | 'beaters' | 'seekers' | 'gamecast'>((initialParams.get('sport') as any) || 'quadball');
+  const [statsFilter, setStatsFilter] = useState<'all' | 'verified' | 'verified_events'>((initialParams.get('verify') as any) || 'all');
+  const [statsTeamIds, setStatsTeamIds] = useState<string[]>(splitParam(initialParams, 'teams'));
+  const [statsSearch, setStatsSearch] = useState<string>(initialParams.get('q') || '');
+  const [statsMinGames, setStatsMinGames] = useState<number>(parseInt(initialParams.get('minGP') || '1') || 1);
+  const [bludgerControlMode, setBludgerControlMode] = useState<'all' | 'separate'>((initialParams.get('bc') as any) || 'all');
+  const [statsFlagFilter, setStatsFlagFilter] = useState<'all' | 'on' | 'off'>((initialParams.get('flag') as any) || 'all');
+  const [statsPositionFilter, setStatsPositionFilter] = useState<'all' | 'chaser' | 'keeper'>((initialParams.get('pos') as any) || 'all');
+  const [statsSelectedYears, setStatsSelectedYears] = useState<string[]>(splitParam(initialParams, 'years'));
+  const [statsLeagueDivs, setStatsLeagueDivs] = useState<string[]>(splitParam(initialParams, 'leagues'));
+  const [statsTournamentIds, setStatsTournamentIds] = useState<string[]>(splitParam(initialParams, 'events'));
 
   // URL Deep Linking / Routing Sync
   useEffect(() => {
     const handleHashChange = () => {
-      const hashFull = window.location.hash;
-      const [hash, queryString] = hashFull.split('?');
-      const params = new URLSearchParams(queryString || '');
+      const route = parseHashRoute(window.location.hash);
+      const params = route.params;
 
-      if (hash.startsWith('#/game/')) {
-        setActiveGameId(hash.replace('#/game/', ''));
-        setView('gameProfile');
-      } else if (hash.startsWith('#/team/')) {
-        setActiveTeamId(hash.replace('#/team/', ''));
-        setView('teamProfile');
-      } else if (hash.startsWith('#/player/')) {
-        setActivePlayerId(hash.replace('#/player/', ''));
-        setView('playerProfile');
-      } else if (hash === '#/stats' || hash === '') {
-        setView('stats');
+      if (route.gameId) setActiveGameId(route.gameId);
+      if (route.teamId) setActiveTeamId(route.teamId);
+      if (route.playerId) setActivePlayerId(route.playerId);
+
+      if (route.isStats) {
         setStatsSubView((params.get('sport') as any) || 'quadball');
-        setStatsLeagueDivs(params.has('leagues') ? params.get('leagues')!.split(',').filter(Boolean) : []);
-        setStatsSelectedYears(params.has('years') ? params.get('years')!.split(',').filter(Boolean) : []);
-        setStatsTournamentIds(params.has('events') ? params.get('events')!.split(',').filter(Boolean) : []);
-        setStatsTeamIds(params.has('teams') ? params.get('teams')!.split(',').filter(Boolean) : []);
+        setStatsLeagueDivs(splitParam(params, 'leagues'));
+        setStatsSelectedYears(splitParam(params, 'years'));
+        setStatsTournamentIds(splitParam(params, 'events'));
+        setStatsTeamIds(splitParam(params, 'teams'));
         setStatsFilter((params.get('verify') as any) || 'all');
         setStatsPositionFilter((params.get('pos') as any) || 'all');
         setBludgerControlMode((params.get('bc') as any) || 'all');
         setStatsFlagFilter((params.get('flag') as any) || 'all');
         setStatsMinGames(parseInt(params.get('minGP') || '1') || 1);
         setStatsSearch(params.get('q') || '');
-      } else if (hash.startsWith('#/')) {
-        const route = hash.replace('#/', '') as ViewState;
-        // 'lists' is intentionally excluded from any nav UI — it's a hidden page,
-        // reachable only by navigating directly to #/lists.
-        if (['tracker', 'video', 'manage', 'create', 'review', 'help', 'lists'].includes(route)) {
-          setView(route);
-        }
       }
+
+      // An unrecognised hash leaves the current view alone.
+      if (route.view) setView(route.view);
     };
 
-    handleHashChange(); // Run once on startup
+    // No initial call — the state above is seeded from parseHashRoute at first render.
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
@@ -6113,9 +6271,12 @@ export default function App() {
     loadGlobalData();
   }, [loadGlobalData]);
 
-  // Lazy load full events registry ONLY if the user accesses heavy statistical views to circumvent massive read quotas
+  // Lazy load full events registry ONLY if the user accesses heavy statistical views to circumvent massive read quotas.
+  // Profile and lists views read off the same registry, so they must be listed here too — otherwise a direct
+  // link to e.g. #/player/<id> lands on a view that never triggers the load and renders with no stats.
+  const EVENT_BACKED_VIEWS: ViewState[] = ['stats', 'review', 'lists', 'playerProfile', 'teamProfile', 'gameProfile'];
   useEffect(() => {
-    if (view === 'stats' || view === 'review') {
+    if (EVENT_BACKED_VIEWS.includes(view)) {
       loadAllEvents();
     }
   }, [view, loadAllEvents]);
@@ -6133,6 +6294,52 @@ export default function App() {
       createdAt: new Date(),
     } as any;
   }, [currentVideo, games]);
+
+  // --- Guided tutorials -----------------------------------------------------
+  // Steps and copy live in src/lib/tutorial/trackerSteps.tsx and createSteps.tsx.
+  const canRecordEvents = !!user && effectiveRole !== 'voter';
+  const canUseCreateTools = effectiveRole === 'moderator' || effectiveRole === 'trusted';
+
+  const tutorialApp = {
+    setRightPanelTab,
+    setIsExpandedLayout,
+    isExpandedLayout,
+    setCreateTab: setCreateActiveTab,
+    role: effectiveRole,
+    canRecord: canRecordEvents,
+    canCreate: canUseCreateTools,
+  };
+
+  const trackerTutorial = useTutorial({
+    tourId: 'game-tracker',
+    uid: user?.uid ?? null,
+    ready: isAuthReady && view === 'tracker' && !!currentVideo && !!currentGame,
+    app: tutorialApp,
+  });
+
+  const createTutorial = useTutorial({
+    tourId: 'create-tools',
+    uid: user?.uid ?? null,
+    ready: isAuthReady && view === 'create' && canUseCreateTools,
+    app: tutorialApp,
+  });
+
+  const handleReplayTutorial = () => {
+    const result = trackerTutorial.replay();
+    if (result === 'started') return;
+    if (currentVideo) {
+      // A game is loaded but we're on another view — go back to it and the
+      // pending flag picks it up from there.
+      setView('tracker');
+      return;
+    }
+    toast.success('Tutorial will start the next time you open a game.');
+  };
+
+  const handleReplayCreateTutorial = () => {
+    // Unlike the tracker, we can just take them straight there.
+    if (createTutorial.replay() === 'pending') setView('create');
+  };
 
   // Roster Listeners for current video
   useEffect(() => {
@@ -8382,6 +8589,43 @@ export default function App() {
       <main className={cn("mx-auto transition-all w-full", (view === 'tracker' && currentVideo) ? "max-w-[100vw] px-2 py-2 flex-1 min-h-0 flex flex-col" : view === 'tracker' ? "max-w-[1600px] px-4 py-8" : "max-w-7xl px-4 py-8")}>
         {view === 'help' ? (
           <div className="bg-white rounded-xl shadow-sm border p-8 max-w-4xl mx-auto space-y-10">
+            {user && (
+              <div className="p-5 bg-red-50/60 border border-red-100 rounded-xl space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
+                    <h3 className="text-lg font-extrabold text-gray-900">Game tracker tutorial</h3>
+                    <p className="text-sm text-gray-600 mt-1">
+                      A guided walkthrough of watching and recording a game, pointing at the real buttons as you go.
+                    </p>
+                  </div>
+                  <button
+                    onClick={handleReplayTutorial}
+                    className="shrink-0 flex items-center justify-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-bold transition-all active:scale-95"
+                  >
+                    <PlayCircle className="w-4 h-4" />
+                    Replay
+                  </button>
+                </div>
+
+                {canUseCreateTools && (
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-t border-red-100 pt-4">
+                    <div>
+                      <h3 className="text-lg font-extrabold text-gray-900">Create tools tutorial</h3>
+                      <p className="text-sm text-gray-600 mt-1">
+                        The moderator walkthrough for building teams, players, rosters and games.
+                      </p>
+                    </div>
+                    <button
+                      onClick={handleReplayCreateTutorial}
+                      className="shrink-0 flex items-center justify-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-bold transition-all active:scale-95"
+                    >
+                      <PlayCircle className="w-4 h-4" />
+                      Replay
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
             <div className="mb-12">
               <h2 className="text-3xl font-extrabold border-b pb-4 text-gray-900 mb-6">How to Watch a Game</h2>
               <div className="space-y-4 text-gray-700 leading-relaxed text-sm">
@@ -8397,6 +8641,15 @@ export default function App() {
               <h2 className="text-3xl font-extrabold border-b pb-4 text-gray-900 mb-6">Become an Author</h2>
               <div className="space-y-4 text-gray-700 leading-relaxed text-sm">
                 <p>Just... sign in. That's it. Any stat you author becomes public<span className="text-red-500">*</span>. They get aggregated on the "pending" tab, but will move to verified after receiving enough votes.</p>
+              </div>
+            </div>
+
+            <div className="mb-12">
+              <h2 className="text-3xl font-extrabold border-b pb-4 text-gray-900 mb-6">Become a Moderator</h2>
+              <div className="space-y-4 text-gray-700 leading-relaxed text-sm">
+                <p>Moderators get the <strong>Create</strong> tab, which is where teams, players, rosters and games are made. Authors can only pick from what already exists, so when something is missing, a moderator has to add it.</p>
+                <p>Moderator access is granted by hand. To be added, email <a href="mailto:quadballreference@gmail.com" className="text-red-600 font-bold hover:underline">quadballreference@gmail.com</a> or message <a href="https://www.reddit.com/user/quadballreference" target="_blank" rel="noopener noreferrer" className="text-red-600 font-bold hover:underline">u/quadballreference</a> on Reddit.</p>
+                <p>Either way, include the email address you sign in with — the role is attached to that address, so we can't grant it without one.</p>
               </div>
             </div>
 
@@ -8991,7 +9244,7 @@ export default function App() {
           <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 gap-4">
             {/* Left Column: Player & Controls */}
             <div className={cn("flex flex-col gap-2 min-h-0 overflow-hidden", isExpandedLayout ? "lg:col-span-12 shrink-0" : "lg:col-span-9")}>
-              <div className={cn("rounded-2xl overflow-hidden shadow-2xl border border-gray-200 flex items-center justify-center relative", isExpandedLayout ? "hidden" : "bg-black flex-1 min-h-0")}>
+              <div data-tour="video-player" className={cn("rounded-2xl overflow-hidden shadow-2xl border border-gray-200 flex items-center justify-center relative", isExpandedLayout ? "hidden" : "bg-black flex-1 min-h-0")}>
                 {(() => {
                   const url = currentVideo?.youtubeId || '';
                   let validId = '';
@@ -9032,7 +9285,7 @@ export default function App() {
               {/* Controls and Scoreboard Row */}
               {(() => {
                 const renderScrubControls = () => (
-                  <div className="flex gap-1 items-center shrink-0">
+                  <div data-tour="scrub-controls" className="flex gap-1 items-center shrink-0">
                     <button onClick={() => player?.seekTo(Math.max(0, currentTime - 15))} className="p-1.5 md:px-2 md:py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-[9px] md:text-[10px] uppercase tracking-wider font-bold rounded shadow-sm flex items-center justify-center gap-0.5 md:gap-1 transition-all" title="Rewind 15s"><Rewind className="w-3 h-3"/> <span className="hidden md:block">15s</span></button>
                     <button onClick={() => player?.seekTo(Math.max(0, currentTime - 5))} className="p-1.5 md:px-2 md:py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-[9px] md:text-[10px] uppercase tracking-wider font-bold rounded shadow-sm flex items-center justify-center gap-0.5 md:gap-1 transition-all" title="Rewind 5s"><Rewind className="w-3 h-3"/> <span className="hidden md:block">5s</span></button>
                     <button onClick={() => isVideoPlaying ? player?.pauseVideo() : player?.playVideo()} className="p-1.5 md:px-3 md:py-1.5 bg-red-100 hover:bg-red-200 text-red-700 text-[9px] md:text-[10px] uppercase tracking-wider font-bold rounded shadow-sm flex items-center justify-center gap-0.5 md:gap-1 transition-all" title={isVideoPlaying ? "Pause" : "Play"}>
@@ -9044,7 +9297,7 @@ export default function App() {
                 );
 
                 return (
-                  <div className={cn("w-full mt-2 mb-3", isExpandedLayout ? "grid grid-cols-4 gap-4 items-center" : "flex flex-row items-center justify-between gap-3")}>
+                  <div data-tour="scoreboard" className={cn("w-full mt-2 mb-3", isExpandedLayout ? "grid grid-cols-4 gap-4 items-center" : "flex flex-row items-center justify-between gap-3")}>
                     {/* Video Scrub Controls - Left side in Expanded Mode */}
                     {isExpandedLayout && player && (
                       <div className="col-span-1 flex items-center justify-center">
@@ -9063,8 +9316,8 @@ export default function App() {
                         const awayTeamObj = teams.find(t => t.id === currentGame.awayTeamId);
                         const homeName = homeTeamObj?.nickname || homeTeamObj?.name || 'Home';
                         const awayName = awayTeamObj?.nickname || awayTeamObj?.name || 'Away';
-                        const homeColor = homeTeamObj?.colorPrimaryDark || homeTeamObj?.colorPrimary || '#dc2626';
-                        const awayColor = awayTeamObj?.colorPrimaryDark || awayTeamObj?.colorPrimary || '#2563eb';
+                        const homeColor = avoidWhite(homeTeamObj?.colorPrimaryDark || homeTeamObj?.colorPrimary || '#dc2626');
+                        const awayColor = avoidWhite(awayTeamObj?.colorPrimaryLight || awayTeamObj?.colorLight || '#2563eb');
                         const currentDodgeballTeamId = getControlTeamAtTime(computeControlPeriods(pastEvents), currentTime);
 
                         return (
@@ -9102,12 +9355,17 @@ export default function App() {
                             </div>
 
                             <div className="pl-3 ml-2 border-l border-gray-200 flex items-center justify-center shrink-0 gap-1">
-                              <button onClick={() => setIsExpandedLayout(v => !v)} className={cn("p-1.5 rounded transition-colors", isExpandedLayout ? "text-red-600 bg-red-50 hover:bg-red-100" : "text-gray-400 hover:text-red-600")} title={isExpandedLayout ? "Restore Video" : "Cinema Mode (Hide Video)"}>
+                              <button data-tour="cinema-toggle" onClick={() => setIsExpandedLayout(v => !v)} className={cn("p-1.5 rounded transition-colors", isExpandedLayout ? "text-red-600 bg-red-50 hover:bg-red-100" : "text-gray-400 hover:text-red-600")} title={isExpandedLayout ? "Restore Video" : "Cinema Mode (Hide Video)"}>
                                 <Maximize2 className="w-5 h-5" />
                               </button>
                               <button onClick={() => handleGameProfileClick(currentGame.id)} className="p-1.5 text-gray-400 hover:text-blue-600 transition-colors" title="View Box Score">
                                 <Activity className="w-5 h-5" />
                               </button>
+                              {user && (
+                                <button onClick={trackerTutorial.start} className="p-1.5 text-gray-400 hover:text-red-600 transition-colors" title="Replay the tutorial">
+                                  <HelpCircle className="w-5 h-5" />
+                                </button>
+                              )}
                             </div>
                           </div>
                         );
@@ -9134,8 +9392,9 @@ export default function App() {
               <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden flex flex-col h-full relative">
                 {!isExpandedLayout && (
                   <div className="p-0 border-b border-gray-200 flex items-center justify-between bg-gray-50/50 z-10 shrink-0">
-                    <div className="flex w-full">
+                    <div data-tour="panel-tabs" className="flex w-full">
                     <button
+                      data-tour="tab-events"
                       onClick={() => setRightPanelTab('live_events')}
                       className={cn("flex-1 px-4 py-3 text-sm font-bold flex items-center justify-center gap-2 transition-colors", rightPanelTab === 'live_events' ? "bg-white text-red-600 border-b-2 border-red-600" : "text-gray-500 hover:text-gray-700 hover:bg-gray-100")}
                     >
@@ -9143,6 +9402,7 @@ export default function App() {
                     </button>
                     {user && effectiveRole !== 'voter' && (
                       <button
+                        data-tour="tab-record"
                         onClick={() => setRightPanelTab('record')}
                         className={cn("flex-1 px-4 py-3 text-sm font-bold flex items-center justify-center gap-2 transition-colors relative", rightPanelTab === 'record' ? "bg-white text-emerald-600 border-b-2 border-emerald-600" : "text-gray-500 hover:text-gray-700 hover:bg-gray-100")}
                       >
@@ -9155,12 +9415,14 @@ export default function App() {
                       </button>
                     )}
                     <button
+                      data-tour="tab-players"
                       onClick={() => setRightPanelTab('rosters')}
                       className={cn("flex-1 px-4 py-3 text-sm font-bold flex items-center justify-center gap-2 transition-colors", rightPanelTab === 'rosters' ? "bg-white text-red-600 border-b-2 border-red-600" : "text-gray-500 hover:text-gray-700 hover:bg-gray-100")}
                     >
                       <User className="w-4 h-4" /> Players
                     </button>
                     <button
+                      data-tour="tab-momentum"
                       onClick={() => setRightPanelTab('momentum')}
                       className={cn("flex-1 px-4 py-3 text-sm font-bold flex items-center justify-center gap-2 transition-colors", rightPanelTab === 'momentum' ? "bg-white text-red-600 border-b-2 border-red-600" : "text-gray-500 hover:text-gray-700 hover:bg-gray-100")}
                     >
@@ -9172,7 +9434,7 @@ export default function App() {
 
                 <div className={cn("flex-1 overflow-hidden relative", isExpandedLayout ? "grid grid-cols-1 lg:grid-cols-4 divide-y lg:divide-y-0 lg:divide-x divide-gray-200" : "")}>
 
-<div className={cn(isExpandedLayout ? "flex flex-col h-full relative" : "absolute inset-0", (rightPanelTab === 'live_events' || isExpandedLayout) ? "block" : "hidden", "overflow-y-auto p-4 custom-scrollbar bg-gray-50")} id="events-scroll-container">
+<div className={cn(isExpandedLayout ? "flex flex-col h-full relative" : "absolute inset-0", (rightPanelTab === 'live_events' || isExpandedLayout) ? "block" : "hidden", "overflow-y-auto p-4 custom-scrollbar bg-gray-50")} id="events-scroll-container" data-tour="events-feed">
                     <div className="sticky top-0 z-10 bg-gray-50/95 backdrop-blur-md pb-3 pt-1 mb-4 border-b border-gray-200/60 flex flex-col gap-2.5">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-1">
@@ -9264,6 +9526,10 @@ export default function App() {
                     </div>
                     <div className="space-y-4">
                     {(() => {
+                      const feedHomeTeamObj = teams.find(t => t.id === currentGame?.homeTeamId);
+                      const feedAwayTeamObj = teams.find(t => t.id === currentGame?.awayTeamId);
+                      const feedHomeColor = avoidWhite(feedHomeTeamObj?.colorPrimaryDark || feedHomeTeamObj?.colorPrimary || '#dc2626');
+                      const feedAwayColor = avoidWhite(feedAwayTeamObj?.colorPrimaryLight || feedAwayTeamObj?.colorLight || '#2563eb');
                       const pinEvents = pins.filter(p => p.videoId === currentVideo?.id).map(p => ({
                         id: p.id,
                         type: `pin_${p.type}`,
@@ -9352,14 +9618,20 @@ export default function App() {
                                       {evt.playerId ? (() => {
                                         const p = allPlayers.find(pl => pl.id === evt.playerId);
                                         return p ? (
-                                          <span className={cn("font-bold tracking-tight", evt.teamId === currentGame?.homeTeamId ? "text-red-700" : evt.teamId === currentGame?.awayTeamId ? "text-blue-700" : "text-gray-700")}>
+                                          <span
+                                            className="font-bold tracking-tight"
+                                            style={evt.teamId === currentGame?.homeTeamId ? { color: feedHomeColor } : evt.teamId === currentGame?.awayTeamId ? { color: feedAwayColor } : { color: '#374151' }}
+                                          >
                                             {p.firstName.charAt(0)}. {p.lastName}
                                           </span>
                                         ) : 'Player';
                                       })() : (() => {
                                         const t = teams.find(tm => tm.id === evt.teamId);
                                         return t ? (
-                                          <span className={cn("font-bold text-[9px] uppercase tracking-wider", evt.teamId === currentGame?.homeTeamId ? "text-red-700" : evt.teamId === currentGame?.awayTeamId ? "text-blue-700" : "text-gray-500")}>
+                                          <span
+                                            className="font-bold text-[9px] uppercase tracking-wider"
+                                            style={evt.teamId === currentGame?.homeTeamId ? { color: feedHomeColor } : evt.teamId === currentGame?.awayTeamId ? { color: feedAwayColor } : { color: '#6b7280' }}
+                                          >
                                             {t.name}
                                           </span>
                                         ) : 'Team';
@@ -9532,11 +9804,14 @@ export default function App() {
                               data-event-time={event.videoTime}
                               className={cn(
                                 "group border rounded-xl p-3 transition-all",
-                                event.teamId === currentGame?.homeTeamId ? "bg-red-50/50 border-red-100 hover:border-red-200" :
-                                  event.teamId === currentGame?.awayTeamId ? "bg-blue-50/50 border-blue-100 hover:border-blue-200" :
-                                    "bg-white border-gray-200 hover:border-gray-300",
+                                !event.teamId && "bg-white border-gray-200 hover:border-gray-300",
                                 event.status === 'rejected' && "opacity-50 grayscale"
                               )}
+                              style={
+                                event.teamId === currentGame?.homeTeamId ? { backgroundColor: hexToRgba(feedHomeColor, 0.06), borderColor: hexToRgba(feedHomeColor, 0.25) } :
+                                  event.teamId === currentGame?.awayTeamId ? { backgroundColor: hexToRgba(feedAwayColor, 0.06), borderColor: hexToRgba(feedAwayColor, 0.25) } :
+                                    undefined
+                              }
                             >
                               {renderTrackingEventBody(event)}
                               {nestedAssist && (
@@ -9557,7 +9832,7 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className={cn(isExpandedLayout ? "flex flex-col h-full relative" : "absolute inset-0", (rightPanelTab === 'record' || isExpandedLayout) ? "block" : "hidden", "overflow-y-auto custom-scrollbar p-4 bg-white")}>
+                  <div data-tour="record-panel" className={cn(isExpandedLayout ? "flex flex-col h-full relative" : "absolute inset-0", (rightPanelTab === 'record' || isExpandedLayout) ? "block" : "hidden", "overflow-y-auto custom-scrollbar p-4 bg-white")}>
 
                     {/* Voice & NLP Event Logger (Hidden for production deploy) */}
                     {/*
@@ -9620,14 +9895,14 @@ export default function App() {
                     */}
 
                     {/* Event Type Grid ALWAYS visible because Player Actions are now local popups */}
-                    <div className="flex flex-col gap-3 mb-2">
+                    <div data-tour="event-grid" className="flex flex-col gap-3 mb-2">
                       {(() => {
                         const chaserTypes = ['goal', 'shot', 'attempt', 'miss_ko', 'turnover'];
                         const clockTypes = ['gameStart', 'gamePause', 'gameEnd'];
 
                         return (
                           <>
-                            <div className="flex flex-col gap-1.5 mb-2">
+                            <div data-tour="record-actions" className="flex flex-col gap-1.5 mb-2">
                               <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Chaser Actions</span>
                               <div className="grid grid-cols-5 gap-1.5">
                                 {chaserTypes.map(type => {
@@ -9646,7 +9921,7 @@ export default function App() {
                               </div>
                             </div>
 
-                            <div className="flex flex-col gap-1.5">
+                            <div data-tour="record-clock" className="flex flex-col gap-1.5">
                               <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Game Clock</span>
                               <div className="grid grid-cols-3 gap-1.5">
                                 {clockTypes.map(type => {
@@ -9669,7 +9944,7 @@ export default function App() {
                       })()}
 
                       {/* Control Change UI */}
-                      <div className="flex flex-col gap-1.5 mt-1">
+                      <div data-tour="record-control" className="flex flex-col gap-1.5 mt-1">
                         <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Control Change</span>
                         <div className="flex rounded-lg overflow-hidden border border-emerald-200 shadow-sm">
                           <button
@@ -9689,7 +9964,7 @@ export default function App() {
 
                       {/* Drop Pins UI */}
                       {player && currentVideo && (
-                        <div className="flex flex-col gap-1.5 mt-1">
+                        <div data-tour="record-pins" className="flex flex-col gap-1.5 mt-1">
                           <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Drop Pin</span>
                           <div className="grid grid-cols-4 gap-1.5">
                             <button onClick={() => setPins(prev => [...prev, { id: crypto.randomUUID(), videoId: currentVideo.id, time: player.getCurrentTime(), type: 'sub' }])} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-yellow-200 hover:border-yellow-500 hover:bg-yellow-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[9px] uppercase font-bold tracking-tight text-yellow-700">Sub Pin</span></button>
@@ -9722,7 +9997,7 @@ export default function App() {
                       </div>
 
                       {/* Sub UI */}
-                      <div className="flex flex-col gap-1.5 mt-1 border border-gray-200 bg-gray-50 p-2 rounded-lg">
+                      <div data-tour="record-subs" className="flex flex-col gap-1.5 mt-1 border border-gray-200 bg-gray-50 p-2 rounded-lg">
                         <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest">Substitutions</span>
                         <div className="flex gap-4">
                           <div className="flex-1 flex flex-col gap-1">
@@ -9745,7 +10020,7 @@ export default function App() {
                       {/* End Event Grid */}
                     </div>
                     {/* Draft Cards Pipeline */}
-                    <div className="flex flex-col gap-4">
+                    <div data-tour="draft-queue" className="flex flex-col gap-4">
                       {draftEvents.length > 0 ? (
                         <div className="flex flex-col gap-3">
                           <h4 className="text-[11px] font-bold uppercase tracking-widest text-emerald-600 border-b border-emerald-100 pb-2">Pending Events Queue ({draftEvents.length})</h4>
@@ -10062,7 +10337,7 @@ export default function App() {
 
                   </div>
 
-                  <div className={cn(isExpandedLayout ? "flex flex-col h-full relative" : "absolute inset-0", (rightPanelTab === 'rosters' || isExpandedLayout) ? "block" : "hidden", "overflow-y-auto custom-scrollbar p-4 space-y-8 bg-gray-50")}>
+                  <div data-tour="rosters-panel" className={cn(isExpandedLayout ? "flex flex-col h-full relative" : "absolute inset-0", (rightPanelTab === 'rosters' || isExpandedLayout) ? "block" : "hidden", "overflow-y-auto custom-scrollbar p-4 space-y-8 bg-gray-50")}>
                     {(rightPanelTab === 'rosters' || isExpandedLayout) && (() => {
                       const pastEvents = activeTrackingEvents.filter(e => e.videoTime <= currentTime);
                       const liveStats = new Map<string, { g: number, a: number, plus: number, minus: number }>();
@@ -10441,12 +10716,12 @@ export default function App() {
                     })()}
                   </div>
 
-                  <div className={cn(isExpandedLayout ? "flex flex-col h-full relative" : "absolute inset-0", (rightPanelTab === 'momentum' || isExpandedLayout) ? "block" : "hidden", "overflow-y-auto custom-scrollbar bg-white")}>
+                  <div data-tour="momentum-panel" className={cn(isExpandedLayout ? "flex flex-col h-full relative" : "absolute inset-0", (rightPanelTab === 'momentum' || isExpandedLayout) ? "block" : "hidden", "overflow-y-auto custom-scrollbar bg-white")}>
                     {(rightPanelTab === 'momentum' || isExpandedLayout) && <MatchMomentumView events={enrichedEvents} teams={teams} homeTeamId={currentGame?.homeTeamId || ''} awayTeamId={currentGame?.awayTeamId || ''} currentTime={player?.getCurrentTime() || 0} onSeek={(t) => player?.seekTo(t, true)} />}
                   </div>
                 </div>
 
-                <div className="px-3 py-2 bg-white border-t border-gray-200 shrink-0">
+                <div data-tour="switch-video" className="px-3 py-2 bg-white border-t border-gray-200 shrink-0">
                   <button
                     onClick={() => setCurrentVideo(null)}
                     className="w-full py-1 text-xs font-bold uppercase tracking-wider text-gray-400 hover:text-gray-900 flex items-center justify-center gap-2 transition-colors"
@@ -10478,6 +10753,14 @@ export default function App() {
       `}</style>
 
       {/* Global Command Palette (Cmd+K) */}
+      {view === 'tracker' && currentVideo && (
+        <TutorialOverlay steps={TRACKER_STEPS} {...trackerTutorial.tourProps} />
+      )}
+
+      {view === 'create' && canUseCreateTools && (
+        <TutorialOverlay steps={CREATE_STEPS} {...createTutorial.tourProps} />
+      )}
+
       {isCommandPaletteOpen && (
         <div className="fixed inset-0 z-[100] flex items-start justify-center pt-[15vh] px-4">
           <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-sm transition-opacity" onClick={() => setIsCommandPaletteOpen(false)} />

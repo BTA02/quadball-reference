@@ -38,8 +38,12 @@ export default function MatchMomentumView({
   const awayTeam = teams.find(t => t.id === awayTeamId);
   const homeName = homeTeam?.nickname || homeTeam?.name || 'Home';
   const awayName = awayTeam?.nickname || awayTeam?.name || 'Away';
-  const homeColor = homeTeam?.colorPrimaryDark || homeTeam?.colorPrimary || '#ef4444';
-  const awayColor = awayTeam?.colorPrimaryDark || awayTeam?.colorPrimary || '#3b82f6';
+  const avoidWhite = (hex: string) => {
+    const normalized = hex.trim().toLowerCase();
+    return (normalized === '#ffffff' || normalized === '#fff' || normalized === 'white') ? '#6b7280' : hex;
+  };
+  const homeColor = avoidWhite(homeTeam?.colorPrimaryDark || homeTeam?.colorPrimary || '#ef4444');
+  const awayColor = avoidWhite(awayTeam?.colorPrimaryLight || awayTeam?.colorLight || '#3b82f6');
 
   // Helper to convert hex to rgba
   const hexToRgba = (hex: string, alpha: number) => {

@@ -159,19 +159,35 @@ export default function QuadballStatsView({
     return validIds;
   }, [events, players]);
 
-  const filteredPlayers = useMemo(() => {
-    let d = mergedPlayers.filter(s => s.gamesPlayed >= minGames && validQuadballPlayerIds.has(s.playerId));
-    if (search) { const q = search.toLowerCase(); d = d.filter(s => s.playerName.toLowerCase().includes(q)); }
+  // Sorted (but not search-filtered) lists establish each row's ORIGINAL rank,
+  // so a search doesn't renumber players/teams relative to their un-searched standing.
+  const sortedPlayers = useMemo(() => {
+    const d = mergedPlayers.filter(s => s.gamesPlayed >= minGames && validQuadballPlayerIds.has(s.playerId));
     return sortBy(d, sortKey as keyof ExtendedPlayerStats, sortDir);
-  }, [mergedPlayers, search, minGames, sortKey, sortDir, validQuadballPlayerIds]);
+  }, [mergedPlayers, minGames, sortKey, sortDir, validQuadballPlayerIds]);
+
+  const sortedTeam = useMemo(() => {
+    const d = mergedTeams.filter(s => s.gamesPlayed >= minGames);
+    return sortBy(d, sortKey as keyof TeamQuadballStats, sortDir);
+  }, [mergedTeams, minGames, sortKey, sortDir]);
+
+  const playerRankMap = useMemo(() => new Map(sortedPlayers.map((s, i) => [s.playerId, i + 1])), [sortedPlayers]);
+  const teamRankMap = useMemo(() => new Map(sortedTeam.map((s, i) => [s.teamId, i + 1])), [sortedTeam]);
+
+  const filteredPlayers = useMemo(() => {
+    if (!search) return sortedPlayers;
+    const q = search.toLowerCase();
+    return sortedPlayers.filter(s => s.playerName.toLowerCase().includes(q));
+  }, [sortedPlayers, search]);
 
   const filteredTeam = useMemo(() => {
-    let d = mergedTeams.filter(s => s.gamesPlayed >= minGames);
-    if (search) { const q = search.toLowerCase(); d = d.filter(s => s.teamName.toLowerCase().includes(q)); }
-    return sortBy(d, sortKey as keyof TeamQuadballStats, sortDir);
-  }, [mergedTeams, search, minGames, sortKey, sortDir]);
+    if (!search) return sortedTeam;
+    const q = search.toLowerCase();
+    return sortedTeam.filter(s => s.teamName.toLowerCase().includes(q));
+  }, [sortedTeam, search]);
 
   const data = tab === 'team' ? filteredTeam : filteredPlayers;
+  const rankMap = tab === 'team' ? teamRankMap : playerRankMap;
   const totalPages = Math.ceil(data.length / perPage) || 1;
   const paged = data.slice((page - 1) * perPage, page * perPage);
 
@@ -223,6 +239,7 @@ export default function QuadballStatsView({
               <li><strong>MIN</strong> — Minutes Played. Total on-field time across all games.</li>
               <li><strong>G</strong> — Goals. Total goals scored (10 points each).</li>
               <li><strong>A</strong> — Assists. Passes leading directly to a scored goal.</li>
+              <li><strong>PTS</strong> — Points. Goals + Assists.</li>
               <li><strong>mTOT</strong> — Miss Total. mS + mAtt + mKO combined.</li>
               <li><strong>S%</strong> — Scoring Percentage. Goals ÷ (Goals + Shots + Attempts + KOs).</li>
               <li><strong>mS</strong> — Missed Shots. Thrown shots that did not result in a goal.</li>
@@ -253,6 +270,7 @@ export default function QuadballStatsView({
               <li><strong>MIN</strong> — Minutes Played.</li>
               <li><strong>+</strong> — Plus. Total goals scored by the player's team while they are on the field.</li>
               <li><strong>−</strong> — Minus. Total goals conceded by the player's team while they are on the field.</li>
+              <li><strong>+/−</strong> — Plus minus Minus. Net goal differential while on the field.</li>
               <li><strong>+:−</strong> — Plus-to-Minus Ratio. Team goals scored ÷ Team goals conceded while on the field.</li>
               <li><strong>Off+:−</strong> — Off-Field Ratio. The team's plus-to-minus ratio when this player is NOT on the field.</li>
               <li><strong>REL +:−</strong> — Relative Value. The player's on-field ratio divided by the off-field ratio. Values above 1.0 indicate the team performs better with the player on the field.</li>
@@ -308,6 +326,7 @@ export default function QuadballStatsView({
                   <HeaderCell label="MIN" sortKey="minutesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Minutes Played" />
                   <HeaderCell label="G" sortKey="goals" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals" />
                   <HeaderCell label="A" sortKey="assists" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Assists" />
+                  <HeaderCell label="PTS" sortKey="points" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Points (Goals + Assists)" />
                   <HeaderCell label="mTOT" sortKey="missTotal" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Miss Total (mS + mAtt + mKO)" />
                   <HeaderCell label="S%" sortKey="shotPct" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Scoring % (Goals / (Goals + Shots + Attempts + KOs))" />
                   <HeaderCell label="mS" sortKey="shots" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Missed Shot (throws)" className={MISS_GROUP_START} />
@@ -344,6 +363,7 @@ export default function QuadballStatsView({
                   <HeaderCell label="MIN" sortKey="minutesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Minutes Played" />
                   <HeaderCell label="+" sortKey="plus" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals scored while on field" />
                   <HeaderCell label="−" sortKey="minus" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals conceded while on field" />
+                  <HeaderCell label="+/−" sortKey="plusMinus" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Plus minus Minus" />
                   <HeaderCell label="+:−" sortKey="plusMinusRatio" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Ratio of Plus to Minus" />
                   <HeaderCell label="Off+:−" sortKey="offPlusMinusRatio" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Ratio of Plus to Minus while player is off the field" />
                   <HeaderCell label="REL +:−" sortKey="relPlusMinusRatio" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Relative Value (Your +:− Ratio vs. your team's when you are off)" />
@@ -368,8 +388,8 @@ export default function QuadballStatsView({
             <tbody>
               {paged.length === 0 ? (
                 <tr><td colSpan={12} className="py-8 text-center text-slate-500 text-xs">No stats found</td></tr>
-              ) : paged.map((row: any, idx) => {
-                const rank = (page - 1) * perPage + idx + 1;
+              ) : paged.map((row: any) => {
+                const rank = rankMap.get(tab === 'team' ? row.teamId : row.playerId) ?? '-';
                 const DataCell = ({ prop, fmt, bold, group }: { prop?: string, fmt?: (v: any, rowObj?: any) => string|number, bold?: boolean, group?: 'start' | 'mid' | 'end' }) => {
                   const groupClass = group === 'start' ? MISS_GROUP_START : group === 'mid' ? MISS_GROUP_MID : group === 'end' ? MISS_GROUP_END : undefined;
                   if (useSplit && tab !== 'team') {
@@ -405,6 +425,7 @@ export default function QuadballStatsView({
                       <DataCell prop="minutesPlayed" />
                       <DataCell prop="goals" bold />
                       <DataCell prop="assists" bold />
+                      <DataCell prop="points" bold />
                       <DataCell prop="missTotal" />
                       <DataCell prop="shotPct" fmt={v => `${v}%`} />
                       <DataCell prop="shots" group="start" />
@@ -441,6 +462,7 @@ export default function QuadballStatsView({
                       <DataCell prop="minutesPlayed" />
                       <DataCell prop="plus" />
                       <DataCell prop="minus" />
+                      <DataCell prop="plusMinus" bold fmt={v => v > 0 ? `+${v}` : v || 'E'} />
                       <DataCell prop="plusMinusRatio" fmt={v => v === Infinity ? '∞' : v} />
                       <DataCell prop="offPlusMinusRatio" fmt={v => v === Infinity ? '∞' : v} />
                       <DataCell prop="relPlusMinusRatio" fmt={v => v > 0 ? `+${v}` : v || 'E'} />
