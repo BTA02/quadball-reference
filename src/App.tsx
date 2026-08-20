@@ -15,6 +15,7 @@ import {
   Target,
   Clock,
   HelpCircle,
+  PlayCircle,
   CheckCircle2,
   XCircle,
   Search,
@@ -85,6 +86,9 @@ import LandingHero from './components/LandingHero';
 import GameCastView from './components/GameCastView';
 import { StatsTabSelector, StatsTabButton } from './components/ui/StatsTable';
 import { enrichEventsWithGameTime, getScoreboardName } from './lib/statsComputations';
+import GameTutorial from './components/tutorial/GameTutorial';
+import { useGameTutorial } from './lib/tutorial/useGameTutorial';
+import { TUTORIAL_STEPS } from './lib/tutorial/steps';
 // --- Types ---
 
 export type EventType = 'goal' | 'assist' | 'shot' | 'attempt' | 'miss_ko' | 'gameStart' | 'gamePause' | 'gameEnd' | 'foul' | 'card' | 'sub_in' | 'sub_out' | 'control_change' | 'turnover' | 'flag_released' | 'flag_catch' | 'control_start' | 'quadball_start';
@@ -6134,6 +6138,33 @@ export default function App() {
     } as any;
   }, [currentVideo, games]);
 
+  // --- First-time author tutorial ------------------------------------------
+  // Steps and copy live in src/lib/tutorial/steps.tsx.
+  const canRecordEvents = !!user && effectiveRole !== 'voter';
+  const tutorial = useGameTutorial({
+    uid: user?.uid ?? null,
+    ready: isAuthReady && view === 'tracker' && !!currentVideo && !!currentGame,
+    app: {
+      setRightPanelTab,
+      setIsExpandedLayout,
+      isExpandedLayout,
+      role: effectiveRole,
+      canRecord: canRecordEvents,
+    },
+  });
+
+  const handleReplayTutorial = () => {
+    const result = tutorial.replay();
+    if (result === 'started') return;
+    if (currentVideo) {
+      // A game is loaded but we're on another view — go back to it and the
+      // pending flag picks it up from there.
+      setView('tracker');
+      return;
+    }
+    toast.success('Tutorial will start the next time you open a game.');
+  };
+
   // Roster Listeners for current video
   useEffect(() => {
     if (!currentVideo || !currentGame || !allPlayers.length) return;
@@ -8382,6 +8413,23 @@ export default function App() {
       <main className={cn("mx-auto transition-all w-full", (view === 'tracker' && currentVideo) ? "max-w-[100vw] px-2 py-2 flex-1 min-h-0 flex flex-col" : view === 'tracker' ? "max-w-[1600px] px-4 py-8" : "max-w-7xl px-4 py-8")}>
         {view === 'help' ? (
           <div className="bg-white rounded-xl shadow-sm border p-8 max-w-4xl mx-auto space-y-10">
+            {user && (
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 bg-red-50/60 border border-red-100 rounded-xl">
+                <div>
+                  <h3 className="text-lg font-extrabold text-gray-900">Interactive tutorial</h3>
+                  <p className="text-sm text-gray-600 mt-1">
+                    A guided walkthrough of the game tracker, pointing at the real buttons as you go.
+                  </p>
+                </div>
+                <button
+                  onClick={handleReplayTutorial}
+                  className="shrink-0 flex items-center justify-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-bold transition-all active:scale-95"
+                >
+                  <PlayCircle className="w-4 h-4" />
+                  Replay tutorial
+                </button>
+              </div>
+            )}
             <div className="mb-12">
               <h2 className="text-3xl font-extrabold border-b pb-4 text-gray-900 mb-6">How to Watch a Game</h2>
               <div className="space-y-4 text-gray-700 leading-relaxed text-sm">
@@ -8991,7 +9039,7 @@ export default function App() {
           <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 gap-4">
             {/* Left Column: Player & Controls */}
             <div className={cn("flex flex-col gap-2 min-h-0 overflow-hidden", isExpandedLayout ? "lg:col-span-12 shrink-0" : "lg:col-span-9")}>
-              <div className={cn("rounded-2xl overflow-hidden shadow-2xl border border-gray-200 flex items-center justify-center relative", isExpandedLayout ? "hidden" : "bg-black flex-1 min-h-0")}>
+              <div data-tour="video-player" className={cn("rounded-2xl overflow-hidden shadow-2xl border border-gray-200 flex items-center justify-center relative", isExpandedLayout ? "hidden" : "bg-black flex-1 min-h-0")}>
                 {(() => {
                   const url = currentVideo?.youtubeId || '';
                   let validId = '';
@@ -9032,7 +9080,7 @@ export default function App() {
               {/* Controls and Scoreboard Row */}
               {(() => {
                 const renderScrubControls = () => (
-                  <div className="flex gap-1 items-center shrink-0">
+                  <div data-tour="scrub-controls" className="flex gap-1 items-center shrink-0">
                     <button onClick={() => player?.seekTo(Math.max(0, currentTime - 15))} className="p-1.5 md:px-2 md:py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-[9px] md:text-[10px] uppercase tracking-wider font-bold rounded shadow-sm flex items-center justify-center gap-0.5 md:gap-1 transition-all" title="Rewind 15s"><Rewind className="w-3 h-3"/> <span className="hidden md:block">15s</span></button>
                     <button onClick={() => player?.seekTo(Math.max(0, currentTime - 5))} className="p-1.5 md:px-2 md:py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-[9px] md:text-[10px] uppercase tracking-wider font-bold rounded shadow-sm flex items-center justify-center gap-0.5 md:gap-1 transition-all" title="Rewind 5s"><Rewind className="w-3 h-3"/> <span className="hidden md:block">5s</span></button>
                     <button onClick={() => isVideoPlaying ? player?.pauseVideo() : player?.playVideo()} className="p-1.5 md:px-3 md:py-1.5 bg-red-100 hover:bg-red-200 text-red-700 text-[9px] md:text-[10px] uppercase tracking-wider font-bold rounded shadow-sm flex items-center justify-center gap-0.5 md:gap-1 transition-all" title={isVideoPlaying ? "Pause" : "Play"}>
@@ -9044,7 +9092,7 @@ export default function App() {
                 );
 
                 return (
-                  <div className={cn("w-full mt-2 mb-3", isExpandedLayout ? "grid grid-cols-4 gap-4 items-center" : "flex flex-row items-center justify-between gap-3")}>
+                  <div data-tour="scoreboard" className={cn("w-full mt-2 mb-3", isExpandedLayout ? "grid grid-cols-4 gap-4 items-center" : "flex flex-row items-center justify-between gap-3")}>
                     {/* Video Scrub Controls - Left side in Expanded Mode */}
                     {isExpandedLayout && player && (
                       <div className="col-span-1 flex items-center justify-center">
@@ -9102,12 +9150,17 @@ export default function App() {
                             </div>
 
                             <div className="pl-3 ml-2 border-l border-gray-200 flex items-center justify-center shrink-0 gap-1">
-                              <button onClick={() => setIsExpandedLayout(v => !v)} className={cn("p-1.5 rounded transition-colors", isExpandedLayout ? "text-red-600 bg-red-50 hover:bg-red-100" : "text-gray-400 hover:text-red-600")} title={isExpandedLayout ? "Restore Video" : "Cinema Mode (Hide Video)"}>
+                              <button data-tour="cinema-toggle" onClick={() => setIsExpandedLayout(v => !v)} className={cn("p-1.5 rounded transition-colors", isExpandedLayout ? "text-red-600 bg-red-50 hover:bg-red-100" : "text-gray-400 hover:text-red-600")} title={isExpandedLayout ? "Restore Video" : "Cinema Mode (Hide Video)"}>
                                 <Maximize2 className="w-5 h-5" />
                               </button>
                               <button onClick={() => handleGameProfileClick(currentGame.id)} className="p-1.5 text-gray-400 hover:text-blue-600 transition-colors" title="View Box Score">
                                 <Activity className="w-5 h-5" />
                               </button>
+                              {user && (
+                                <button onClick={tutorial.start} className="p-1.5 text-gray-400 hover:text-red-600 transition-colors" title="Replay the tutorial">
+                                  <HelpCircle className="w-5 h-5" />
+                                </button>
+                              )}
                             </div>
                           </div>
                         );
@@ -9134,8 +9187,9 @@ export default function App() {
               <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden flex flex-col h-full relative">
                 {!isExpandedLayout && (
                   <div className="p-0 border-b border-gray-200 flex items-center justify-between bg-gray-50/50 z-10 shrink-0">
-                    <div className="flex w-full">
+                    <div data-tour="panel-tabs" className="flex w-full">
                     <button
+                      data-tour="tab-events"
                       onClick={() => setRightPanelTab('live_events')}
                       className={cn("flex-1 px-4 py-3 text-sm font-bold flex items-center justify-center gap-2 transition-colors", rightPanelTab === 'live_events' ? "bg-white text-red-600 border-b-2 border-red-600" : "text-gray-500 hover:text-gray-700 hover:bg-gray-100")}
                     >
@@ -9143,6 +9197,7 @@ export default function App() {
                     </button>
                     {user && effectiveRole !== 'voter' && (
                       <button
+                        data-tour="tab-record"
                         onClick={() => setRightPanelTab('record')}
                         className={cn("flex-1 px-4 py-3 text-sm font-bold flex items-center justify-center gap-2 transition-colors relative", rightPanelTab === 'record' ? "bg-white text-emerald-600 border-b-2 border-emerald-600" : "text-gray-500 hover:text-gray-700 hover:bg-gray-100")}
                       >
@@ -9155,12 +9210,14 @@ export default function App() {
                       </button>
                     )}
                     <button
+                      data-tour="tab-players"
                       onClick={() => setRightPanelTab('rosters')}
                       className={cn("flex-1 px-4 py-3 text-sm font-bold flex items-center justify-center gap-2 transition-colors", rightPanelTab === 'rosters' ? "bg-white text-red-600 border-b-2 border-red-600" : "text-gray-500 hover:text-gray-700 hover:bg-gray-100")}
                     >
                       <User className="w-4 h-4" /> Players
                     </button>
                     <button
+                      data-tour="tab-momentum"
                       onClick={() => setRightPanelTab('momentum')}
                       className={cn("flex-1 px-4 py-3 text-sm font-bold flex items-center justify-center gap-2 transition-colors", rightPanelTab === 'momentum' ? "bg-white text-red-600 border-b-2 border-red-600" : "text-gray-500 hover:text-gray-700 hover:bg-gray-100")}
                     >
@@ -9172,7 +9229,7 @@ export default function App() {
 
                 <div className={cn("flex-1 overflow-hidden relative", isExpandedLayout ? "grid grid-cols-1 lg:grid-cols-4 divide-y lg:divide-y-0 lg:divide-x divide-gray-200" : "")}>
 
-<div className={cn(isExpandedLayout ? "flex flex-col h-full relative" : "absolute inset-0", (rightPanelTab === 'live_events' || isExpandedLayout) ? "block" : "hidden", "overflow-y-auto p-4 custom-scrollbar bg-gray-50")} id="events-scroll-container">
+<div className={cn(isExpandedLayout ? "flex flex-col h-full relative" : "absolute inset-0", (rightPanelTab === 'live_events' || isExpandedLayout) ? "block" : "hidden", "overflow-y-auto p-4 custom-scrollbar bg-gray-50")} id="events-scroll-container" data-tour="events-feed">
                     <div className="sticky top-0 z-10 bg-gray-50/95 backdrop-blur-md pb-3 pt-1 mb-4 border-b border-gray-200/60 flex flex-col gap-2.5">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-1">
@@ -9557,7 +9614,7 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className={cn(isExpandedLayout ? "flex flex-col h-full relative" : "absolute inset-0", (rightPanelTab === 'record' || isExpandedLayout) ? "block" : "hidden", "overflow-y-auto custom-scrollbar p-4 bg-white")}>
+                  <div data-tour="record-panel" className={cn(isExpandedLayout ? "flex flex-col h-full relative" : "absolute inset-0", (rightPanelTab === 'record' || isExpandedLayout) ? "block" : "hidden", "overflow-y-auto custom-scrollbar p-4 bg-white")}>
 
                     {/* Voice & NLP Event Logger (Hidden for production deploy) */}
                     {/*
@@ -9620,14 +9677,14 @@ export default function App() {
                     */}
 
                     {/* Event Type Grid ALWAYS visible because Player Actions are now local popups */}
-                    <div className="flex flex-col gap-3 mb-2">
+                    <div data-tour="event-grid" className="flex flex-col gap-3 mb-2">
                       {(() => {
                         const chaserTypes = ['goal', 'shot', 'attempt', 'miss_ko', 'turnover'];
                         const clockTypes = ['gameStart', 'gamePause', 'gameEnd'];
 
                         return (
                           <>
-                            <div className="flex flex-col gap-1.5 mb-2">
+                            <div data-tour="record-actions" className="flex flex-col gap-1.5 mb-2">
                               <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Chaser Actions</span>
                               <div className="grid grid-cols-5 gap-1.5">
                                 {chaserTypes.map(type => {
@@ -9646,7 +9703,7 @@ export default function App() {
                               </div>
                             </div>
 
-                            <div className="flex flex-col gap-1.5">
+                            <div data-tour="record-clock" className="flex flex-col gap-1.5">
                               <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Game Clock</span>
                               <div className="grid grid-cols-3 gap-1.5">
                                 {clockTypes.map(type => {
@@ -9669,7 +9726,7 @@ export default function App() {
                       })()}
 
                       {/* Control Change UI */}
-                      <div className="flex flex-col gap-1.5 mt-1">
+                      <div data-tour="record-control" className="flex flex-col gap-1.5 mt-1">
                         <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Control Change</span>
                         <div className="flex rounded-lg overflow-hidden border border-emerald-200 shadow-sm">
                           <button
@@ -9689,7 +9746,7 @@ export default function App() {
 
                       {/* Drop Pins UI */}
                       {player && currentVideo && (
-                        <div className="flex flex-col gap-1.5 mt-1">
+                        <div data-tour="record-pins" className="flex flex-col gap-1.5 mt-1">
                           <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Drop Pin</span>
                           <div className="grid grid-cols-4 gap-1.5">
                             <button onClick={() => setPins(prev => [...prev, { id: crypto.randomUUID(), videoId: currentVideo.id, time: player.getCurrentTime(), type: 'sub' }])} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-yellow-200 hover:border-yellow-500 hover:bg-yellow-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[9px] uppercase font-bold tracking-tight text-yellow-700">Sub Pin</span></button>
@@ -9745,7 +9802,7 @@ export default function App() {
                       {/* End Event Grid */}
                     </div>
                     {/* Draft Cards Pipeline */}
-                    <div className="flex flex-col gap-4">
+                    <div data-tour="draft-queue" className="flex flex-col gap-4">
                       {draftEvents.length > 0 ? (
                         <div className="flex flex-col gap-3">
                           <h4 className="text-[11px] font-bold uppercase tracking-widest text-emerald-600 border-b border-emerald-100 pb-2">Pending Events Queue ({draftEvents.length})</h4>
@@ -10062,7 +10119,7 @@ export default function App() {
 
                   </div>
 
-                  <div className={cn(isExpandedLayout ? "flex flex-col h-full relative" : "absolute inset-0", (rightPanelTab === 'rosters' || isExpandedLayout) ? "block" : "hidden", "overflow-y-auto custom-scrollbar p-4 space-y-8 bg-gray-50")}>
+                  <div data-tour="rosters-panel" className={cn(isExpandedLayout ? "flex flex-col h-full relative" : "absolute inset-0", (rightPanelTab === 'rosters' || isExpandedLayout) ? "block" : "hidden", "overflow-y-auto custom-scrollbar p-4 space-y-8 bg-gray-50")}>
                     {(rightPanelTab === 'rosters' || isExpandedLayout) && (() => {
                       const pastEvents = activeTrackingEvents.filter(e => e.videoTime <= currentTime);
                       const liveStats = new Map<string, { g: number, a: number, plus: number, minus: number }>();
@@ -10441,12 +10498,12 @@ export default function App() {
                     })()}
                   </div>
 
-                  <div className={cn(isExpandedLayout ? "flex flex-col h-full relative" : "absolute inset-0", (rightPanelTab === 'momentum' || isExpandedLayout) ? "block" : "hidden", "overflow-y-auto custom-scrollbar bg-white")}>
+                  <div data-tour="momentum-panel" className={cn(isExpandedLayout ? "flex flex-col h-full relative" : "absolute inset-0", (rightPanelTab === 'momentum' || isExpandedLayout) ? "block" : "hidden", "overflow-y-auto custom-scrollbar bg-white")}>
                     {(rightPanelTab === 'momentum' || isExpandedLayout) && <MatchMomentumView events={enrichedEvents} teams={teams} homeTeamId={currentGame?.homeTeamId || ''} awayTeamId={currentGame?.awayTeamId || ''} currentTime={player?.getCurrentTime() || 0} onSeek={(t) => player?.seekTo(t, true)} />}
                   </div>
                 </div>
 
-                <div className="px-3 py-2 bg-white border-t border-gray-200 shrink-0">
+                <div data-tour="switch-video" className="px-3 py-2 bg-white border-t border-gray-200 shrink-0">
                   <button
                     onClick={() => setCurrentVideo(null)}
                     className="w-full py-1 text-xs font-bold uppercase tracking-wider text-gray-400 hover:text-gray-900 flex items-center justify-center gap-2 transition-colors"
@@ -10478,6 +10535,10 @@ export default function App() {
       `}</style>
 
       {/* Global Command Palette (Cmd+K) */}
+      {view === 'tracker' && currentVideo && (
+        <GameTutorial steps={TUTORIAL_STEPS} {...tutorial.tourProps} />
+      )}
+
       {isCommandPaletteOpen && (
         <div className="fixed inset-0 z-[100] flex items-start justify-center pt-[15vh] px-4">
           <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-sm transition-opacity" onClick={() => setIsCommandPaletteOpen(false)} />
