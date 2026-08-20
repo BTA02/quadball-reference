@@ -5669,6 +5669,45 @@ function CreateView({
   );
 }
 
+type RouteView = 'tracker' | 'video' | 'manage' | 'create' | 'stats' | 'review' | 'help' | 'playerProfile' | 'teamProfile' | 'gameProfile' | 'lists';
+
+const SIMPLE_ROUTES = ['tracker', 'video', 'manage', 'create', 'review', 'help', 'lists'];
+
+// Parses a location hash into the routing/filter state it represents.
+//
+// This runs BOTH as the lazy initializer for the relevant useState calls and on every
+// hashchange. Initializing synchronously matters: the effect that writes state back out
+// to the URL also runs on mount, and if state were still at its defaults at that point it
+// would overwrite the incoming deep link (with '#/stats') before the URL had been read.
+function splitParam(params: URLSearchParams, key: string): string[] {
+  return params.has(key) ? params.get(key)!.split(',').filter(Boolean) : [];
+}
+
+function parseHashRoute(hashFull: string): {
+  view: RouteView | null;
+  playerId: string | null;
+  teamId: string | null;
+  gameId: string | null;
+  isStats: boolean;
+  params: URLSearchParams;
+} {
+  const [hash, queryString] = (hashFull || '').split('?');
+  const params = new URLSearchParams(queryString || '');
+  const base = { view: null as RouteView | null, playerId: null, teamId: null, gameId: null, isStats: false, params };
+
+  if (hash.startsWith('#/game/')) return { ...base, view: 'gameProfile', gameId: hash.replace('#/game/', '') };
+  if (hash.startsWith('#/team/')) return { ...base, view: 'teamProfile', teamId: hash.replace('#/team/', '') };
+  if (hash.startsWith('#/player/')) return { ...base, view: 'playerProfile', playerId: hash.replace('#/player/', '') };
+  if (hash === '#/stats' || hash === '') return { ...base, view: 'stats', isStats: true };
+  if (hash.startsWith('#/')) {
+    const route = hash.replace('#/', '');
+    // 'lists' is intentionally excluded from any nav UI — it's a hidden page,
+    // reachable only by navigating directly to #/lists.
+    if (SIMPLE_ROUTES.includes(route)) return { ...base, view: route as RouteView };
+  }
+  return base;
+}
+
 export default function App() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [hasSeenLanding, setHasSeenLanding] = useState<boolean>(() => {
@@ -5720,15 +5759,18 @@ export default function App() {
   const [selectedTeamContext, setSelectedTeamContext] = useState<'home' | 'away' | null>('home');
 
   // Management State
-  const [view, setView] = useState<'tracker' | 'video' | 'manage' | 'create' | 'stats' | 'review' | 'help' | 'playerProfile' | 'teamProfile' | 'gameProfile' | 'lists'>('stats');
+  // Parsed once, before first render, so a deep-linked URL is never clobbered on mount.
+  const initialRoute = useRef(parseHashRoute(typeof window !== 'undefined' ? window.location.hash : '')).current;
+  const initialParams = initialRoute.params;
+  const [view, setView] = useState<RouteView>(initialRoute.view || 'stats');
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
   const mobileMenuRef = useRef<HTMLDivElement>(null);
   const [managementActiveTab, setManagementActiveTab] = useState<'leagues' | 'tournaments' | 'search' | 'teams' | 'seasons' | 'players' | 'rosters' | 'games' | 'videos' | 'roles' | 'events' | 'import' | 'merge'>('teams');
   const [createActiveTab, setCreateActiveTab] = useState<'rosters' | 'teams' | 'players' | 'games' | 'leaderboard'>('rosters');
   const [beaterStatsTab, setBeaterStatsTab] = useState<'pairs' | 'solo' | 'team'>('pairs');
-  const [activePlayerId, setActivePlayerId] = useState<string | null>(null);
-  const [activeTeamId, setActiveTeamId] = useState<string | null>(null);
-  const [activeGameId, setActiveGameId] = useState<string | null>(null);
+  const [activePlayerId, setActivePlayerId] = useState<string | null>(initialRoute.playerId);
+  const [activeTeamId, setActiveTeamId] = useState<string | null>(initialRoute.teamId);
+  const [activeGameId, setActiveGameId] = useState<string | null>(initialRoute.gameId);
   const [playerJerseyNumbers, setPlayerJerseyNumbers] = useState<string[]>([]);
 
   // Load jersey numbers for the active player from all roster entries
@@ -5786,58 +5828,47 @@ export default function App() {
   };
 
   // Stats Filter State
-  const [statsSubView, setStatsSubView] = useState<'quadball' | 'beaters' | 'seekers' | 'gamecast'>('quadball');
-  const [statsFilter, setStatsFilter] = useState<'all' | 'verified' | 'verified_events'>('all');
-  const [statsTeamIds, setStatsTeamIds] = useState<string[]>([]);
-  const [statsSearch, setStatsSearch] = useState<string>('');
-  const [statsMinGames, setStatsMinGames] = useState<number>(1);
-  const [bludgerControlMode, setBludgerControlMode] = useState<'all' | 'separate'>('all');
-  const [statsFlagFilter, setStatsFlagFilter] = useState<'all' | 'on' | 'off'>('all');
-  const [statsPositionFilter, setStatsPositionFilter] = useState<'all' | 'chaser' | 'keeper'>('all');
-  const [statsSelectedYears, setStatsSelectedYears] = useState<string[]>([]);
-  const [statsLeagueDivs, setStatsLeagueDivs] = useState<string[]>([]);
-  const [statsTournamentIds, setStatsTournamentIds] = useState<string[]>([]);
+  const [statsSubView, setStatsSubView] = useState<'quadball' | 'beaters' | 'seekers' | 'gamecast'>((initialParams.get('sport') as any) || 'quadball');
+  const [statsFilter, setStatsFilter] = useState<'all' | 'verified' | 'verified_events'>((initialParams.get('verify') as any) || 'all');
+  const [statsTeamIds, setStatsTeamIds] = useState<string[]>(splitParam(initialParams, 'teams'));
+  const [statsSearch, setStatsSearch] = useState<string>(initialParams.get('q') || '');
+  const [statsMinGames, setStatsMinGames] = useState<number>(parseInt(initialParams.get('minGP') || '1') || 1);
+  const [bludgerControlMode, setBludgerControlMode] = useState<'all' | 'separate'>((initialParams.get('bc') as any) || 'all');
+  const [statsFlagFilter, setStatsFlagFilter] = useState<'all' | 'on' | 'off'>((initialParams.get('flag') as any) || 'all');
+  const [statsPositionFilter, setStatsPositionFilter] = useState<'all' | 'chaser' | 'keeper'>((initialParams.get('pos') as any) || 'all');
+  const [statsSelectedYears, setStatsSelectedYears] = useState<string[]>(splitParam(initialParams, 'years'));
+  const [statsLeagueDivs, setStatsLeagueDivs] = useState<string[]>(splitParam(initialParams, 'leagues'));
+  const [statsTournamentIds, setStatsTournamentIds] = useState<string[]>(splitParam(initialParams, 'events'));
 
   // URL Deep Linking / Routing Sync
   useEffect(() => {
     const handleHashChange = () => {
-      const hashFull = window.location.hash;
-      const [hash, queryString] = hashFull.split('?');
-      const params = new URLSearchParams(queryString || '');
+      const route = parseHashRoute(window.location.hash);
+      const params = route.params;
 
-      if (hash.startsWith('#/game/')) {
-        setActiveGameId(hash.replace('#/game/', ''));
-        setView('gameProfile');
-      } else if (hash.startsWith('#/team/')) {
-        setActiveTeamId(hash.replace('#/team/', ''));
-        setView('teamProfile');
-      } else if (hash.startsWith('#/player/')) {
-        setActivePlayerId(hash.replace('#/player/', ''));
-        setView('playerProfile');
-      } else if (hash === '#/stats' || hash === '') {
-        setView('stats');
+      if (route.gameId) setActiveGameId(route.gameId);
+      if (route.teamId) setActiveTeamId(route.teamId);
+      if (route.playerId) setActivePlayerId(route.playerId);
+
+      if (route.isStats) {
         setStatsSubView((params.get('sport') as any) || 'quadball');
-        setStatsLeagueDivs(params.has('leagues') ? params.get('leagues')!.split(',').filter(Boolean) : []);
-        setStatsSelectedYears(params.has('years') ? params.get('years')!.split(',').filter(Boolean) : []);
-        setStatsTournamentIds(params.has('events') ? params.get('events')!.split(',').filter(Boolean) : []);
-        setStatsTeamIds(params.has('teams') ? params.get('teams')!.split(',').filter(Boolean) : []);
+        setStatsLeagueDivs(splitParam(params, 'leagues'));
+        setStatsSelectedYears(splitParam(params, 'years'));
+        setStatsTournamentIds(splitParam(params, 'events'));
+        setStatsTeamIds(splitParam(params, 'teams'));
         setStatsFilter((params.get('verify') as any) || 'all');
         setStatsPositionFilter((params.get('pos') as any) || 'all');
         setBludgerControlMode((params.get('bc') as any) || 'all');
         setStatsFlagFilter((params.get('flag') as any) || 'all');
         setStatsMinGames(parseInt(params.get('minGP') || '1') || 1);
         setStatsSearch(params.get('q') || '');
-      } else if (hash.startsWith('#/')) {
-        const route = hash.replace('#/', '') as ViewState;
-        // 'lists' is intentionally excluded from any nav UI — it's a hidden page,
-        // reachable only by navigating directly to #/lists.
-        if (['tracker', 'video', 'manage', 'create', 'review', 'help', 'lists'].includes(route)) {
-          setView(route);
-        }
       }
+
+      // An unrecognised hash leaves the current view alone.
+      if (route.view) setView(route.view);
     };
 
-    handleHashChange(); // Run once on startup
+    // No initial call — the state above is seeded from parseHashRoute at first render.
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
@@ -6240,9 +6271,12 @@ export default function App() {
     loadGlobalData();
   }, [loadGlobalData]);
 
-  // Lazy load full events registry ONLY if the user accesses heavy statistical views to circumvent massive read quotas
+  // Lazy load full events registry ONLY if the user accesses heavy statistical views to circumvent massive read quotas.
+  // Profile and lists views read off the same registry, so they must be listed here too — otherwise a direct
+  // link to e.g. #/player/<id> lands on a view that never triggers the load and renders with no stats.
+  const EVENT_BACKED_VIEWS: ViewState[] = ['stats', 'review', 'lists', 'playerProfile', 'teamProfile', 'gameProfile'];
   useEffect(() => {
-    if (view === 'stats' || view === 'review') {
+    if (EVENT_BACKED_VIEWS.includes(view)) {
       loadAllEvents();
     }
   }, [view, loadAllEvents]);

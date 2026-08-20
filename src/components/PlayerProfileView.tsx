@@ -502,7 +502,48 @@ export default function PlayerProfileView({
     else { setSortKey(k); setSortDir('desc'); }
   };
 
-  if (!player) return <div>Player not found.</div>;
+  // Compute teams played for, grouped by league
+  const teamsByLeague = useMemo(() => {
+    const leagues: Record<string, { id: string; name: string; nickname?: string; colorPrimary?: string; colorPrimaryDark?: string }[]> = {};
+    // Find all teams this player has played for via events
+    const playerTeamIds = new Set<string>();
+    events.forEach(e => {
+      if (e.playerId === activePlayerId && e.teamId && e.teamId !== 'null') {
+        playerTeamIds.add(e.teamId);
+      }
+    });
+    // Group by league using game's season
+    playerTeamIds.forEach(teamId => {
+      const team = teams.find(t => t.id === teamId);
+      if (!team) return;
+      // Find which leagues this player played for this team
+      const playerGamesForTeam = playedGames.filter(g => {
+        const isOnTeam = g.homeTeamId === teamId || g.awayTeamId === teamId;
+        const playedForTeam = events.some(e => e.gameId === g.id && e.playerId === activePlayerId && e.teamId === teamId);
+        return isOnTeam && playedForTeam;
+      });
+      const leaguesForTeam = new Set<string>();
+      playerGamesForTeam.forEach(g => {
+        const season = seasons.find(s => s.id === g.seasonId);
+        leaguesForTeam.add(season?.league || 'Other');
+      });
+      leaguesForTeam.forEach(league => {
+        if (!leagues[league]) leagues[league] = [];
+        if (!leagues[league].some(t => t.id === teamId)) {
+          leagues[league].push({ id: teamId, name: team.name, nickname: (team as any).nickname, colorPrimaryDark: (team as any).colorPrimaryDark || (team as any).colorPrimary });
+        }
+      });
+    });
+    return leagues;
+  }, [events, activePlayerId, teams, playedGames, seasons]);
+
+  // Global data loads async, so an empty roster means "still loading", not "missing".
+  // Every hook must run before this returns — a conditional hook here breaks deep links.
+  if (!player) {
+    return players.length === 0
+      ? <div className="p-6 text-sm text-gray-400">Loading player…</div>
+      : <div className="p-6 text-sm text-gray-500">Player not found.</div>;
+  }
 
   const renderTableHeader = () => (
     <tr className="border-b border-gray-100 bg-gray-50/80">
@@ -662,40 +703,6 @@ export default function PlayerProfileView({
     </tr>
   );
 
-  // Compute teams played for, grouped by league
-  const teamsByLeague = useMemo(() => {
-    const leagues: Record<string, { id: string; name: string; nickname?: string; colorPrimary?: string; colorPrimaryDark?: string }[]> = {};
-    // Find all teams this player has played for via events
-    const playerTeamIds = new Set<string>();
-    events.forEach(e => {
-      if (e.playerId === activePlayerId && e.teamId && e.teamId !== 'null') {
-        playerTeamIds.add(e.teamId);
-      }
-    });
-    // Group by league using game's season
-    playerTeamIds.forEach(teamId => {
-      const team = teams.find(t => t.id === teamId);
-      if (!team) return;
-      // Find which leagues this player played for this team
-      const playerGamesForTeam = playedGames.filter(g => {
-        const isOnTeam = g.homeTeamId === teamId || g.awayTeamId === teamId;
-        const playedForTeam = events.some(e => e.gameId === g.id && e.playerId === activePlayerId && e.teamId === teamId);
-        return isOnTeam && playedForTeam;
-      });
-      const leaguesForTeam = new Set<string>();
-      playerGamesForTeam.forEach(g => {
-        const season = seasons.find(s => s.id === g.seasonId);
-        leaguesForTeam.add(season?.league || 'Other');
-      });
-      leaguesForTeam.forEach(league => {
-        if (!leagues[league]) leagues[league] = [];
-        if (!leagues[league].some(t => t.id === teamId)) {
-          leagues[league].push({ id: teamId, name: team.name, nickname: (team as any).nickname, colorPrimaryDark: (team as any).colorPrimaryDark || (team as any).colorPrimary });
-        }
-      });
-    });
-    return leagues;
-  }, [events, activePlayerId, teams, playedGames, seasons]);
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12">
