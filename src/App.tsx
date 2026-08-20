@@ -9779,7 +9779,7 @@ export default function App() {
                       </div>
 
                       {/* Sub UI */}
-                      <div className="flex flex-col gap-1.5 mt-1 border border-gray-200 bg-gray-50 p-2 rounded-lg">
+                      <div data-tour="record-subs" className="flex flex-col gap-1.5 mt-1 border border-gray-200 bg-gray-50 p-2 rounded-lg">
                         <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest">Substitutions</span>
                         <div className="flex gap-4">
                           <div className="flex-1 flex flex-col gap-1">

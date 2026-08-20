@@ -41,6 +41,7 @@ import type { TutorialStep } from './types';
  *   [data-tour="record-clock"]     Game Clock row
  *   [data-tour="record-control"]   Home/Away Control buttons
  *   [data-tour="record-pins"]      Drop Pin buttons
+ *   [data-tour="record-subs"]      Substitutions IN/OUT buttons
  *   [data-tour="draft-queue"]      Pending Events Queue
  *   [data-tour="rosters-panel"]    the Players panel body
  *   [data-tour="momentum-panel"]   the Momentum panel body
@@ -191,6 +192,52 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
         Not sure what you just saw? Drop a pin and move on. Pins mark a timestamp to come back to
         without interrupting your flow.
       </p>
+    ),
+  },
+  {
+    id: 'record-subs',
+    target: '[data-tour="record-subs"]',
+    placement: 'left',
+    enabled: ctx => ctx.canRecord,
+    before: ctx => ctx.setRightPanelTab('record'),
+    title: 'Subbing players on and off',
+    body: (
+      <>
+        <p>
+          Each team gets its own pair. <strong>IN</strong> puts a player on the pitch,{' '}
+          <strong>OUT</strong> takes one off — both stamped at the current video time.
+        </p>
+        <p>
+          An <strong>IN</strong> card asks for the position they're taking, so their time on pitch
+          lands in the right column. An <strong>OUT</strong> card has an optional{' '}
+          <strong>Sub In…</strong> picker: name the replacement there and the swap is recorded in
+          one action instead of two.
+        </p>
+      </>
+    ),
+  },
+  {
+    id: 'record-subs-chain',
+    target: '[data-tour="record-subs"]',
+    placement: 'left',
+    enabled: ctx => ctx.canRecord,
+    before: ctx => ctx.setRightPanelTab('record'),
+    title: 'Run a whole line change at once',
+    body: (
+      <>
+        <p>
+          On a sub card, <strong>Save</strong> files it and closes the card.{' '}
+          <strong>+ Next</strong> files it and immediately reopens the same card — same team, same
+          type, <em>same timestamp</em> — with the player cleared. Tap through your line without
+          touching the video.
+        </p>
+        <p>
+          <strong>One timestamp for the whole group is the right call.</strong> A line change
+          happens in a cluster, and being a few seconds off on any individual player doesn't move
+          the stats. Don't rewind to time each one separately — it costs you a lot and buys
+          nothing.
+        </p>
+      </>
     ),
   },
   {
