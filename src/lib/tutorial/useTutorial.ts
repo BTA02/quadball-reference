@@ -34,7 +34,7 @@ const MOBILE_QUERY = '(max-width: 1023px)'; // Tailwind's `lg` breakpoint
  * Owns one tour's run state and its "already seen" persistence.
  *
  * Auto-starts once per session the first time a signed-in user reaches the
- * tour's screen, and exposes `replay()` for the Help page.
+ * tour's screen, and exposes `replay()` for the Info page.
  */
 export function useTutorial({ tourId, uid, ready, app }: UseTutorialArgs) {
   const [run, setRun] = useState(false);

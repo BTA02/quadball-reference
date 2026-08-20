@@ -74,7 +74,7 @@ export const TRACKER_STEPS: TutorialStep[] = [
         </p>
         <p className="text-gray-500">
           Use <strong>Next</strong> and <strong>Back</strong>, or the arrow keys. You can leave at
-          any time and replay it later from the Help page.
+          any time and replay it later from the Info page.
         </p>
       </>
     ),
