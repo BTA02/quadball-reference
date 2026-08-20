@@ -59,7 +59,7 @@ export function clearTourSeen(tourId: TourId, uid: string): void {
 }
 
 /**
- * "Replay" was pressed from the Help page while the tour's screen wasn't open.
+ * "Replay" was pressed from the Info page while the tour's screen wasn't open.
  * The tour starts as soon as the user gets there. Session-scoped on purpose —
  * a stale request shouldn't survive a browser restart.
  */

@@ -84,6 +84,7 @@ import GameBoxScoreView from './components/GameBoxScoreView';
 import StatsFilters from './components/StatsFilters';
 import LandingHero from './components/LandingHero';
 import GameCastView from './components/GameCastView';
+import RecentEventsView from './components/RecentEventsView';
 import { StatsTabSelector, StatsTabButton } from './components/ui/StatsTable';
 import { enrichEventsWithGameTime, getScoreboardName } from './lib/statsComputations';
 import TutorialOverlay from './components/tutorial/TutorialOverlay';
@@ -5669,9 +5670,9 @@ function CreateView({
   );
 }
 
-type RouteView = 'tracker' | 'video' | 'manage' | 'create' | 'stats' | 'review' | 'help' | 'playerProfile' | 'teamProfile' | 'gameProfile' | 'lists';
+type RouteView = 'tracker' | 'video' | 'manage' | 'create' | 'stats' | 'review' | 'info' | 'playerProfile' | 'teamProfile' | 'gameProfile' | 'lists';
 
-const SIMPLE_ROUTES = ['tracker', 'video', 'manage', 'create', 'review', 'help', 'lists'];
+const SIMPLE_ROUTES = ['tracker', 'video', 'manage', 'create', 'review', 'info', 'lists'];
 
 // Parses a location hash into the routing/filter state it represents.
 //
@@ -5701,6 +5702,8 @@ function parseHashRoute(hashFull: string): {
   if (hash === '#/stats' || hash === '') return { ...base, view: 'stats', isStats: true };
   if (hash.startsWith('#/')) {
     const route = hash.replace('#/', '');
+    // The Info page used to be called Help; keep old links working.
+    if (route === 'help') return { ...base, view: 'info' };
     // 'lists' is intentionally excluded from any nav UI — it's a hidden page,
     // reachable only by navigating directly to #/lists.
     if (SIMPLE_ROUTES.includes(route)) return { ...base, view: route as RouteView };
@@ -5911,6 +5914,20 @@ export default function App() {
   const handlePlayerProfileClick = (id: string) => { pushProfile('playerProfile', { p: id }); };
   const handleTeamProfileClick = (id: string) => { pushProfile('teamProfile', { t: id }); };
   const handleGameProfileClick = (id: string) => { pushProfile('gameProfile', { g: id }); };
+
+  // Recent Events sends a moderator straight to the tracker, since that's where the
+  // vote and verify controls live. Games without a video fall back to the box score.
+  const handleOpenGameForReview = (gameId: string) => {
+    const game = games.find(g => g.id === gameId);
+    const vid = videos.find(v => v.gameId === gameId || v.id === (game as any)?.videoId);
+    if (vid) {
+      setCurrentVideo(vid);
+      setView('tracker');
+      return;
+    }
+    toast.error('No video is linked to this game — opening the box score instead.');
+    handleGameProfileClick(gameId);
+  };
   const [allEvents, setAllEvents] = useState<GameEvent[]>([]);
   const ADMIN_EMAIL = 'andrew.axtell@gmail.com';
   const isAdmin = user?.email === ADMIN_EMAIL;
@@ -6274,7 +6291,8 @@ export default function App() {
   // Lazy load full events registry ONLY if the user accesses heavy statistical views to circumvent massive read quotas.
   // Profile and lists views read off the same registry, so they must be listed here too — otherwise a direct
   // link to e.g. #/player/<id> lands on a view that never triggers the load and renders with no stats.
-  const EVENT_BACKED_VIEWS: ViewState[] = ['stats', 'review', 'lists', 'playerProfile', 'teamProfile', 'gameProfile'];
+  // 'create' is here for the Leaderboard tab, which is built from the same registry.
+  const EVENT_BACKED_VIEWS: ViewState[] = ['stats', 'review', 'lists', 'playerProfile', 'teamProfile', 'gameProfile', 'create'];
   useEffect(() => {
     if (EVENT_BACKED_VIEWS.includes(view)) {
       loadAllEvents();
@@ -8411,14 +8429,14 @@ export default function App() {
               Watch
             </button>
             <button
-              onClick={() => setView('help')}
+              onClick={() => setView('info')}
               className={cn(
                 "px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-2",
-                view === 'help' ? "bg-red-600 text-white" : "bg-gray-50 text-gray-500 hover:text-gray-900 border border-gray-200"
+                view === 'info' ? "bg-red-600 text-white" : "bg-gray-50 text-gray-500 hover:text-gray-900 border border-gray-200"
               )}
             >
               <HelpCircle className="w-4 h-4" />
-              Help
+              Info
             </button>
 
             {view === 'tracker' && isAdmin && (
@@ -8511,14 +8529,14 @@ export default function App() {
                   Watch
                 </button>
                 <button
-                  onClick={() => setView('help')}
+                  onClick={() => setView('info')}
                   className={cn(
                     "w-full px-4 py-2.5 flex items-center gap-2 text-left font-medium transition-colors",
-                    view === 'help' ? "text-red-600 bg-red-50" : "text-gray-600 hover:bg-gray-50"
+                    view === 'info' ? "text-red-600 bg-red-50" : "text-gray-600 hover:bg-gray-50"
                   )}
                 >
                   <HelpCircle className="w-4 h-4" />
-                  Help
+                  Info
                 </button>
 
                 {(effectiveRole === 'moderator' || effectiveRole === 'trusted') && (
@@ -8587,8 +8605,15 @@ export default function App() {
       </header>
 
       <main className={cn("mx-auto transition-all w-full", (view === 'tracker' && currentVideo) ? "max-w-[100vw] px-2 py-2 flex-1 min-h-0 flex flex-col" : view === 'tracker' ? "max-w-[1600px] px-4 py-8" : "max-w-7xl px-4 py-8")}>
-        {view === 'help' ? (
-          <div className="bg-white rounded-xl shadow-sm border p-8 max-w-4xl mx-auto space-y-10">
+        {view === 'info' ? (
+          <div className="max-w-4xl mx-auto space-y-8">
+            <RecentEventsView
+              games={games}
+              teams={teams}
+              seasons={seasons}
+              onOpenGame={handleOpenGameForReview}
+            />
+            <div className="bg-white rounded-xl shadow-sm border p-8 space-y-10">
             {user && (
               <div className="p-5 bg-red-50/60 border border-red-100 rounded-xl space-y-4">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -8797,6 +8822,7 @@ export default function App() {
                 </div>
               </div>
             </section>
+            </div>
           </div>
         ) : view === 'manage' ? (
           <ManagementView
