@@ -12,7 +12,7 @@ import type { TutorialStep } from './types';
  * ----------------------------------------------------------------------------
  *  AVAILABLE TARGETS
  * ----------------------------------------------------------------------------
- *   [data-tour="create-tabs"]          the rosters/teams/players/games/leaderboard tab bar
+ *   [data-tour="create-tabs"]          the rosters/teams/players/games/activity tab bar
  *   [data-tour="create-roster-select"] Select / Create Roster panel
  *   [data-tour="create-roster-list"]   Existing Rosters list + search
  *   [data-tour="create-quick-add"]     Quick Add Player box (needs a roster picked)
