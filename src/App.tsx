@@ -5255,14 +5255,14 @@ function LeaderboardView({ events }: { events: any[] }) {
 }
 
 function CreateView({
-  teams, seasons, players, leagues, tournaments, events,
+  teams, seasons, players, leagues, tournaments, events, games, onOpenGame,
   searchQuery, setSearchQuery, newVideoData, setNewVideoData, isAddingGame, setIsAddingGame, onAddGame,
   onAddTeam, onAddPlayer, onAddPlayerToRoster, onRemovePlayerFromRoster,
   onCreateRoster, onDeleteRoster, onEditPlayer, onDeletePlayer,
   activeTab: activeTabProp,
   setActiveTab: setActiveTabProp
 }: any) {
-  const [localActiveTab, setLocalActiveTab] = useState<'rosters' | 'teams' | 'players' | 'games' | 'leaderboard'>('rosters');
+  const [localActiveTab, setLocalActiveTab] = useState<'rosters' | 'teams' | 'players' | 'games' | 'activity'>('rosters');
   const activeTab = activeTabProp || localActiveTab;
   const setActiveTab = setActiveTabProp || setLocalActiveTab;
   const [selectedRosterId, setSelectedRosterId] = useState('');
@@ -5327,7 +5327,7 @@ function CreateView({
       <div className="flex items-center justify-between">
         <h2 className="text-3xl font-bold">Moderator - Creation Tools</h2>
         <div data-tour="create-tabs" className="flex bg-gray-50 p-1 rounded-xl border border-gray-200">
-          {(['rosters', 'teams', 'players', 'games', 'leaderboard'] as const).map(tab => (
+          {(['rosters', 'teams', 'players', 'games', 'activity'] as const).map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -5342,8 +5342,11 @@ function CreateView({
         </div>
       </div>
 
-      {activeTab === 'leaderboard' ? (
-        <LeaderboardView events={events} />
+      {activeTab === 'activity' ? (
+        <div className="space-y-8">
+          <RecentEventsView games={games} teams={teams} seasons={seasons} onOpenGame={onOpenGame} />
+          <LeaderboardView events={events} />
+        </div>
       ) : activeTab === 'rosters' ? (
         <UnifiedRosterEditor
           teams={teams}
@@ -5769,7 +5772,7 @@ export default function App() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
   const mobileMenuRef = useRef<HTMLDivElement>(null);
   const [managementActiveTab, setManagementActiveTab] = useState<'leagues' | 'tournaments' | 'search' | 'teams' | 'seasons' | 'players' | 'rosters' | 'games' | 'videos' | 'roles' | 'events' | 'import' | 'merge'>('teams');
-  const [createActiveTab, setCreateActiveTab] = useState<'rosters' | 'teams' | 'players' | 'games' | 'leaderboard'>('rosters');
+  const [createActiveTab, setCreateActiveTab] = useState<'rosters' | 'teams' | 'players' | 'games' | 'activity'>('rosters');
   const [beaterStatsTab, setBeaterStatsTab] = useState<'pairs' | 'solo' | 'team'>('pairs');
   const [activePlayerId, setActivePlayerId] = useState<string | null>(initialRoute.playerId);
   const [activeTeamId, setActiveTeamId] = useState<string | null>(initialRoute.teamId);
@@ -8607,12 +8610,6 @@ export default function App() {
       <main className={cn("mx-auto transition-all w-full", (view === 'tracker' && currentVideo) ? "max-w-[100vw] px-2 py-2 flex-1 min-h-0 flex flex-col" : view === 'tracker' ? "max-w-[1600px] px-4 py-8" : "max-w-7xl px-4 py-8")}>
         {view === 'info' ? (
           <div className="max-w-4xl mx-auto space-y-8">
-            <RecentEventsView
-              games={games}
-              teams={teams}
-              seasons={seasons}
-              onOpenGame={handleOpenGameForReview}
-            />
             <div className="bg-white rounded-xl shadow-sm border p-8 space-y-10">
             {user && (
               <div className="p-5 bg-red-50/60 border border-red-100 rounded-xl space-y-4">
@@ -8876,6 +8873,8 @@ export default function App() {
             players={allPlayers}
             leagues={leagues}
             tournaments={tournaments}
+            games={games}
+            onOpenGame={handleOpenGameForReview}
             searchQuery={searchQuery}
             setSearchQuery={setSearchQuery}
             newVideoData={newVideoData}
