@@ -4508,7 +4508,8 @@ function ManagementView({
                     you promote them straight from the leaderboard. */}
                 <p className="text-[11px] text-gray-400 mt-2">
                   A user can copy their own ID from the chip in the header. You can also promote
-                  someone directly from the leaderboard on the Create tab.
+                  someone directly from the leaderboard on the Create tab. Granting and revoking
+                  moderator access is admin-only — moderators cannot promote each other.
                 </p>
                 <div className="flex-1 overflow-y-auto mt-4 divide-y divide-gray-100">
                   {(moderatorUids || []).map(uid => (
@@ -5215,6 +5216,8 @@ const getPlayerShortName = (p: Player | undefined | null, rosterPool: { player?:
 function LeaderboardView({ events, moderatorUids = [], onMakeModerator }: {
   events: any[];
   moderatorUids?: string[];
+  // Only ever passed for the admin. Granting moderator access is an admin-only action, and a
+  // moderator viewing this table sees the roles but no way to change them.
   onMakeModerator?: (uid: string) => void;
 }) {
   const leaderboardStats = useMemo(() => {
@@ -5248,6 +5251,11 @@ function LeaderboardView({ events, moderatorUids = [], onMakeModerator }: {
         <p className="text-sm text-gray-500 mt-1">
           Ranking by verified events contributed. This is the one place a contributor's ID is
           visible, so it doubles as the way to hand someone moderator access.
+        </p>
+        <p className="text-xs text-gray-400 mt-1">
+          {onMakeModerator
+            ? 'Only you, as the admin, can grant moderator access.'
+            : 'Only the admin can grant moderator access.'}
         </p>
       </div>
       <div className="overflow-x-auto">
@@ -5295,7 +5303,7 @@ function LeaderboardView({ events, moderatorUids = [], onMakeModerator }: {
                       Make moderator
                     </button>
                   ) : (
-                    <span className="text-gray-300">—</span>
+                    <span className="text-[10px] uppercase tracking-wider text-gray-300">Author</span>
                   )}
                 </td>
               </tr>

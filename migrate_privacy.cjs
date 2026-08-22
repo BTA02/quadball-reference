@@ -18,7 +18,8 @@
  *   DRY RUN (default):  node migrate_privacy.cjs
  *   LIVE RUN:           node migrate_privacy.cjs --commit
  *
- * Requires ./service-account.json (same as migrate_author_teams.cjs). BACK UP FIRESTORE FIRST
+ * Requires a Firebase Admin key at ./service-account.json (override with SERVICE_ACCOUNT_PATH).
+ * Running it prints step-by-step instructions if the key is missing. BACK UP FIRESTORE FIRST
  * — step 1 is irreversible, which is the point: leaving `userName` as a fallback is the leak.
  *
  * Note on the email lookup: this deliberately does NOT use `firebase-admin/auth`. That module
@@ -38,13 +39,29 @@ const COMMIT = process.argv.includes('--commit');
 // The emulators ignore credentials entirely, so a rehearsal run needs no service account.
 const USING_EMULATOR = !!process.env.FIRESTORE_EMULATOR_HOST;
 
-if (!USING_EMULATOR && !fs.existsSync('./service-account.json')) {
-  console.error('No service-account.json found. This migration needs Admin credentials to');
-  console.error('rewrite world-readable docs and to resolve emails to uids.');
+const KEY_PATH = process.env.SERVICE_ACCOUNT_PATH || './service-account.json';
+
+if (!USING_EMULATOR && !fs.existsSync(KEY_PATH)) {
+  console.error(`No service account key found at ${KEY_PATH}.`);
+  console.error('');
+  console.error('This migration rewrites world-readable documents and resolves email');
+  console.error('addresses to uids, both of which need Admin credentials. To create a key:');
+  console.error('');
+  console.error('  1. https://console.firebase.google.com  ->  pick the project');
+  console.error('  2. Gear icon > Project settings > Service accounts');
+  console.error('  3. "Generate new private key" > Generate key');
+  console.error('  4. Save the downloaded file as service-account.json in the repo root');
+  console.error('');
+  console.error('The filename is covered by .gitignore. It grants full project access, so');
+  console.error('do not commit it, paste it anywhere, or leave it on a shared machine —');
+  console.error('delete it once the migration is done, and revoke the key in that same');
+  console.error('Service accounts tab if it is ever exposed.');
+  console.error('');
+  console.error('Set SERVICE_ACCOUNT_PATH to keep the key outside the repo instead.');
   process.exit(1);
 }
 
-const serviceAccount = USING_EMULATOR ? null : require('./service-account.json');
+const serviceAccount = USING_EMULATOR ? null : require(require('path').resolve(KEY_PATH));
 const firebaseConfig = JSON.parse(fs.readFileSync('./firebase-applet-config.json', 'utf8'));
 const projectId = process.env.GCLOUD_PROJECT || serviceAccount?.project_id || firebaseConfig.projectId;
 

@@ -139,6 +139,7 @@ Four tiers. `trusted` is deleted.
 | Verify / unverify | no | **no** | **yes — only** | yes |
 | Accept / reject a suggestion | no | own unverified events only | yes | yes |
 | **Create tab** — teams, players, rosters, seasons, games | no | no | yes | yes |
+| **Grant / revoke moderator access** | no | no | **no** | **yes — only** |
 | **Manage tab** | no | no | no | yes |
 
 Role derivation needs no `authors` list — the tier falls out of the auth state:
@@ -157,6 +158,12 @@ So `appConfig/roles` collapses from three email arrays to one uid array:
 **Verified is a latch.** Once verified, an event is frozen to its author. Only a moderator can
 unverify it, and only then does it become editable again. Trivial to express in rules, and it
 gives the shield badge real meaning.
+
+**Moderators cannot promote each other.** Granting and revoking moderator access is admin-only,
+enforced in three places: the "Make moderator" action on the leaderboard is only wired up for
+the admin, `handleAddRole`/`handleRemoveRole` re-check it, and `appConfig` is `allow write: if
+isAdmin()`. A moderator viewing the leaderboard sees who holds which role and no way to change
+it. Covered by the rules test "a moderator may NOT grant moderator access".
 
 **Assumption to confirm:** an author may accept a suggestion on their own *unverified* event.
 They can already edit that event freely, so blocking it is friction with no security benefit.
@@ -455,13 +462,19 @@ method → Anonymous. Without it `ensureAnonymousSession()` logs a clear error a
 works for signed-in users, but nobody else can vote or suggest.
 
 1. **Back up Firestore.** Step 2 is irreversible by design.
-2. **Run the migration** with `service-account.json` in the repo root:
+2. **Get an Admin key.** Firebase console → gear icon → Project settings → Service accounts →
+   "Generate new private key", saved as `service-account.json` in the repo root. The filename
+   is covered by `.gitignore`; it grants full project access, so delete it once the migration
+   is done and revoke it from that same tab if it is ever exposed. `SERVICE_ACCOUNT_PATH`
+   overrides the location if you would rather keep it outside the repo. Running the migration
+   without a key prints these steps.
+3. **Run the migration:**
    `node migrate_privacy.cjs` (dry run), then `node migrate_privacy.cjs --commit`.
    It strips `userName` from every event, normalises the vote arrays the new rules read,
    rewrites `appConfig/roles` to uids, and converts `teams.emails` to `memberUids` in both the
    team docs and the `aggregated/teams` mirror. Anyone who had access but never signed in
    cannot be resolved to a uid and is listed at the end for you to re-add by hand.
-3. **Deploy rules and app together.** Between the migration and the deploy, the live app reads
+4. **Deploy rules and app together.** Between the migration and the deploy, the live app reads
    a `userName` that no longer exists and falls back to "Anonymous" in the leaderboard.
 
 ### Verification
