@@ -239,6 +239,151 @@ await it('a team manager may edit their team', async () => {
   await assertSucceeds(updateDoc(doc(asAuthor(), 'teams', 'team1'), { name: 'Renamed' }));
 });
 
+console.log('\nsuggestions: creating');
+
+// The admin test above promoted AUTHOR_UID to moderator — reset to a clean single-moderator
+// roster so the suggestion tests are not accidentally exercising moderator rights.
+await testEnv.withSecurityRulesDisabled(async ctx => {
+  await setDoc(doc(ctx.firestore(), 'appConfig', 'roles'), { moderators: [MOD_UID] });
+  await setDoc(doc(ctx.firestore(), 'gameEvents', GAME_ID), {
+    events: [makeEvent({ id: 'e1', userId: OTHER_UID })],
+  });
+});
+
+function makeSuggestion(overrides = {}) {
+  return {
+    gameId: GAME_ID,
+    videoId: 'v1',
+    kind: 'edit',
+    targetEventId: 'e1',
+    patch: { videoTime: 15 },
+    baseline: { videoTime: 10 },
+    authorId: AUTHOR_UID,
+    status: 'open',
+    upvoterIds: [],
+    downvoterIds: [],
+    score: 0,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+const suggDoc = (ctxDb, id = 'sugg1') => doc(ctxDb, 'gameEvents', GAME_ID, 'suggestions', id);
+
+await it('an author may suggest an edit', async () => {
+  await assertSucceeds(setDoc(suggDoc(asAuthor()), makeSuggestion()));
+});
+
+await it('an anonymous session may suggest an edit', async () => {
+  await assertSucceeds(setDoc(suggDoc(asAnon(), 'sugg-anon'), makeSuggestion({ authorId: ANON_UID })));
+});
+
+await it('a suggestion may NOT be created under someone else\'s authorId', async () => {
+  await assertFails(setDoc(suggDoc(asAuthor(), 'sugg-forged'), makeSuggestion({ authorId: OTHER_UID })));
+});
+
+await it('a suggestion may NOT arrive pre-voted', async () => {
+  await assertFails(setDoc(suggDoc(asAuthor(), 'sugg-prevoted'), makeSuggestion({ upvoterIds: [AUTHOR_UID] })));
+});
+
+await it('a "delete" suggestion needs a non-empty note', async () => {
+  await assertFails(setDoc(suggDoc(asAuthor(), 'sugg-del'), makeSuggestion({ kind: 'delete', targetEventId: 'e1', patch: {}, baseline: {} })));
+});
+
+await it('a "delete" suggestion with a note succeeds', async () => {
+  await assertSucceeds(setDoc(suggDoc(asAuthor(), 'sugg-del'), makeSuggestion({ kind: 'delete', targetEventId: 'e1', patch: {}, baseline: {}, note: 'This never happened, wrong clip.' })));
+});
+
+await it('a note over 280 characters is rejected', async () => {
+  await assertFails(setDoc(suggDoc(asAuthor(), 'sugg-long'), makeSuggestion({ note: 'x'.repeat(281) })));
+});
+
+await it('an unrecognised extra field is rejected', async () => {
+  await assertFails(setDoc(suggDoc(asAuthor(), 'sugg-extra'), { ...makeSuggestion(), weight: 5 }));
+});
+
+console.log('\nsuggestions: voting');
+
+await it('an anonymous session may upvote a suggestion', async () => {
+  await testEnv.withSecurityRulesDisabled(async ctx => { await setDoc(suggDoc(ctx.firestore()), makeSuggestion()); });
+  await assertSucceeds(updateDoc(suggDoc(asAnon()), { upvoterIds: [ANON_UID], score: 1 }));
+});
+
+await it('a voter may NOT stuff another uid into a suggestion\'s vote arrays', async () => {
+  await testEnv.withSecurityRulesDisabled(async ctx => { await setDoc(suggDoc(ctx.firestore()), makeSuggestion()); });
+  await assertFails(updateDoc(suggDoc(asAnon()), { upvoterIds: ['someone-else'], score: 1 }));
+});
+
+await it('a vote may NOT smuggle a patch change alongside it', async () => {
+  await testEnv.withSecurityRulesDisabled(async ctx => { await setDoc(suggDoc(ctx.firestore()), makeSuggestion()); });
+  await assertFails(updateDoc(suggDoc(asAnon()), { upvoterIds: [ANON_UID], score: 1, patch: { videoTime: 999 } }));
+});
+
+console.log('\nsuggestions: resolving');
+
+await it('the suggestion\'s own author may NOT accept it', async () => {
+  await testEnv.withSecurityRulesDisabled(async ctx => { await setDoc(suggDoc(ctx.firestore()), makeSuggestion()); });
+  await assertFails(updateDoc(suggDoc(asAuthor()), { status: 'accepted', resolvedBy: AUTHOR_UID }));
+});
+
+await it('the target event\'s author may NOT accept a suggestion on their own event', async () => {
+  await testEnv.withSecurityRulesDisabled(async ctx => { await setDoc(suggDoc(ctx.firestore()), makeSuggestion()); });
+  // e1 is authored by OTHER_UID; confirm even the event's own author has no special path in.
+  await assertFails(updateDoc(suggDoc(asAuthor(OTHER_UID)), { status: 'accepted', resolvedBy: OTHER_UID }));
+});
+
+await it('a moderator may accept a suggestion', async () => {
+  await testEnv.withSecurityRulesDisabled(async ctx => { await setDoc(suggDoc(ctx.firestore()), makeSuggestion()); });
+  await assertSucceeds(updateDoc(suggDoc(asModerator()), { status: 'accepted', resolvedBy: MOD_UID, resolvedAt: '2026-01-02T00:00:00.000Z' }));
+});
+
+await it('a moderator may reject a suggestion', async () => {
+  await testEnv.withSecurityRulesDisabled(async ctx => { await setDoc(suggDoc(ctx.firestore()), makeSuggestion()); });
+  await assertSucceeds(updateDoc(suggDoc(asModerator()), { status: 'rejected', resolvedBy: MOD_UID, resolvedAt: '2026-01-02T00:00:00.000Z' }));
+});
+
+console.log('\nsuggestions: withdrawing / removing');
+
+await it('the author may withdraw their own OPEN suggestion', async () => {
+  await testEnv.withSecurityRulesDisabled(async ctx => { await setDoc(suggDoc(ctx.firestore()), makeSuggestion()); });
+  await assertSucceeds(deleteDoc(suggDoc(asAuthor())));
+});
+
+await it('the author may NOT withdraw it once it is no longer open', async () => {
+  await testEnv.withSecurityRulesDisabled(async ctx => { await setDoc(suggDoc(ctx.firestore()), makeSuggestion({ status: 'rejected' })); });
+  await assertFails(deleteDoc(suggDoc(asAuthor())));
+});
+
+await it('another author may NOT delete someone else\'s suggestion', async () => {
+  await testEnv.withSecurityRulesDisabled(async ctx => { await setDoc(suggDoc(ctx.firestore()), makeSuggestion()); });
+  await assertFails(deleteDoc(suggDoc(asAuthor(OTHER_UID))));
+});
+
+await it('a moderator may delete any suggestion', async () => {
+  await testEnv.withSecurityRulesDisabled(async ctx => { await setDoc(suggDoc(ctx.firestore()), makeSuggestion()); });
+  await assertSucceeds(deleteDoc(suggDoc(asModerator())));
+});
+
+console.log('\nrevisions');
+
+const revDoc = (ctxDb, id = 'rev1') => doc(ctxDb, 'gameEvents', GAME_ID, 'revisions', id);
+const makeRevision = () => ({
+  gameId: GAME_ID, targetEventId: 'e1', before: { videoTime: 10 }, after: { videoTime: 15 },
+  suggestionId: 'sugg1', suggestedBy: AUTHOR_UID, resolvedBy: MOD_UID, createdAt: '2026-01-02T00:00:00.000Z',
+});
+
+await it('an author may NOT write a revision', async () => {
+  await assertFails(setDoc(revDoc(asAuthor()), makeRevision()));
+});
+
+await it('a moderator may write a revision', async () => {
+  await assertSucceeds(setDoc(revDoc(asModerator()), makeRevision()));
+});
+
+await it('revisions are publicly readable', async () => {
+  await assertSucceeds(getDoc(revDoc(testEnv.unauthenticatedContext().firestore())));
+});
+
 await testEnv.cleanup();
 
 console.log(`\n${passed} passed, ${failures.length} failed`);

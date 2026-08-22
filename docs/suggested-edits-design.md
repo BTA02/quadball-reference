@@ -137,7 +137,7 @@ Four tiers. `trusted` is deleted.
 | Edit / delete a **verified** event | no | **no** | no — unverify first | yes |
 | Edit / delete **someone else's** event | no | no | yes | yes |
 | Verify / unverify | no | **no** | **yes — only** | yes |
-| Accept / reject a suggestion | no | own unverified events only | yes | yes |
+| Accept / reject a suggestion | no | **no** | **yes — only** | yes |
 | **Create tab** — teams, players, rosters, seasons, games | no | no | yes | yes |
 | **Grant / revoke moderator access** | no | no | **no** | **yes — only** |
 | **Manage tab** | no | no | no | yes |
@@ -247,7 +247,7 @@ interface EventSuggestion {
   authorId: string;                    // uid only. Never a name, label, or email.
   createdAt: Timestamp;
 
-  status: 'open' | 'accepted' | 'rejected' | 'superseded' | 'withdrawn';
+  status: 'open' | 'accepted' | 'rejected' | 'superseded';
   resolvedBy?: string;                 // uid
   resolvedAt?: Timestamp;
 
@@ -268,6 +268,11 @@ invalidate a player-name fix because someone nudged a timestamp.
 `kind: 'delete'` is what downvoting should have been. A downvote says "something is wrong"; a
 delete-suggestion says "this did not happen, here is why", and is actionable.
 
+**Withdrawing a suggestion deletes the document** rather than setting a `withdrawn` status —
+nothing else ever points back at a suggestion by id, so there is no state a soft-delete would
+preserve. `status` is therefore `'open' | 'accepted' | 'rejected' | 'superseded'`, four values,
+not five.
+
 `kind: 'add'` covers missing events. **Scope note:** most likely candidate to cut if the UI
 gets busy — the compact view in §11.3 is the primary mitigation.
 
@@ -277,8 +282,13 @@ here?" is a local lookup rather than a query.
 
 ### 8.2 Accept
 
-Moderator, or the event's own author on their own unverified event. Client transaction over
-`gameEvents/{gameId}`:
+**Moderator-only** — resolved from the earlier open question. Two reasons: your final
+permission list only ever granted verify/resolve powers to moderators, and it also is not
+safely expressible in rules — checking "is this uid the author of the array element with this
+id" needs to search the `events` array, which rules cannot loop. Moderator-only sidesteps the
+limitation instead of approximating it.
+
+Client transaction over `gameEvents/{gameId}`:
 
 1. Re-read the doc, locate the target event, verify `baseline` still matches the live values.
    If drifted → `status: 'superseded'`, abort.
@@ -436,21 +446,46 @@ Anonymous auth; `userLabel()` replacing every display name; migration stripping 
 `appConfig/roles` re-keyed to a single uid `moderators` list; `teams.emails` → `memberUids`;
 `trusted` deleted; Create tab gated in both the router and the rules (§5.1); verified-is-a-latch.
 
-**Phase 1 — Suggest.**
-Suggestions subcollection, `edit` + `delete` kinds, suggest-mode editor, inline diff cards,
-moderator accept/reject, revision trail, vote wipe on accept.
+**Phase 1 — Suggest.** **Implemented.**
+Suggestions subcollection, `edit` + `delete` kinds, moderator accept/reject (transaction,
+baseline-drift → `superseded`), revision trail, vote wipe on accept.
 
-**Phase 2 — Review at scale.**
+**Phase 2 — Review at scale.** **Implemented.**
 Per-game review queue, activity board rebuild (§9) including `lastVoteAt`, `add` kind,
 density modes (§11.3).
 
-**Phase 3 — Deferred.** §12.
+**Phase 3 — Deferred.** §12. Not built.
 
-## 14. Open questions
+### 13.1 Where the build diverged from this doc
 
-- **Confirm:** authors may accept suggestions on their own unverified events (§5).
-- Does a rejected suggestion stay visible on the event for transparency, or disappear?
-- Six digits or eight (§4.2) — revisit once anonymous uid churn is observable.
+- **The suggest-mode editor is a new, focused component (`SuggestEditForm`), not the
+  authoring editor in suggest-mode.** The authoring form is ~400 lines of JSX wired directly
+  to `draftEvents` state and dozens of inline handlers inside the tracker view; threading a
+  "suggest mode" flag through all of it was a much larger, riskier change than building a
+  smaller form with the same field vocabulary (type, team, player, position, color, time).
+- **The review queue is a collapsible panel inside the existing Events tab, not a sixth tab
+  on the panel-tab bar.** Same outcome — sorted by score, one-click seek, resolve without
+  leaving — without adding another tab to an already-crowded bar.
+- **Density persists to `localStorage` only, not the URL.** The tracker view doesn't
+  participate in the app's hash-route deep-linking today (unlike the stats view), so bolting
+  one param onto it would have been a one-off rather than "alongside the existing sync".
+- **The suggestions `status == 'open'` query needs an explicit Firestore index** — a
+  `collectionGroup` query with a `where` needs a collection-group-scoped index, unlike an
+  unfiltered `collectionGroup` read. Added via `firestore.indexes.json` (a new file) and
+  wired into `firebase.json`. Deploy with `firebase deploy --only firestore:indexes`. The
+  local emulator does not enforce this requirement the way production does, so this could
+  only be checked against documented Firestore behavior, not verified end-to-end locally.
+
+## 14. Open questions — resolved
+
+- ~~Authors may accept suggestions on their own unverified events~~ — **no.** Moderator-only,
+  per §8.2.
+- ~~Does a rejected suggestion stay visible on the event for transparency, or disappear?~~ —
+  **stays visible, collapsed.** The inline chip and review queue only count `open` suggestions,
+  but a resolved one remains on the event, muted, so "someone flagged this and a moderator
+  looked at it" is not lost. Filtered entirely out of the *default* queue view, one click from
+  visible in it.
+- Six digits or eight (§4.2) — still open, revisit once anonymous uid churn is observable.
 
 ## 15. Phase 0 deploy runbook
 
