@@ -44,7 +44,14 @@ import {
   X,
   Maximize2,
   CornerDownRight,
-  Menu
+  Menu,
+  MessageSquarePlus,
+  Ban,
+  Inbox,
+  Eye,
+  EyeOff,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
 import {
@@ -68,11 +75,25 @@ import {
   limit,
   collectionGroup,
   arrayUnion,
-  arrayRemove
+  arrayRemove,
+  runTransaction
 } from 'firebase/firestore';
 import { auth, db, signIn, logOut, ensureAnonymousSession, handleFirestoreError, OperationType } from './lib/firebase';
 import { userLabel } from './lib/userLabel';
 import { cn } from './lib/utils';
+import {
+  EventSuggestion,
+  EventRevision,
+  SuggestablePatch,
+  SuggestionKind,
+  suggestionId,
+  diffEvent,
+  baselineStillMatches,
+  applyPatch,
+  DeleteReason,
+} from './lib/suggestions';
+import SuggestionCard from './components/SuggestionCard';
+import SuggestEditForm from './components/SuggestEditForm';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import QuadballStatsView from './components/QuadballStatsView';
 import BeaterStatsView from './components/BeaterStatsView';
@@ -96,7 +117,7 @@ import { CREATE_STEPS } from './lib/tutorial/createSteps';
 
 export type EventType = 'goal' | 'assist' | 'shot' | 'attempt' | 'miss_ko' | 'gameStart' | 'gamePause' | 'gameEnd' | 'foul' | 'card' | 'sub_in' | 'sub_out' | 'control_change' | 'turnover' | 'flag_released' | 'flag_catch' | 'control_start' | 'quadball_start';
 
-type PositionType = 'chaser' | 'keeper' | 'beater' | 'seeker';
+export type PositionType = 'chaser' | 'keeper' | 'beater' | 'seeker';
 
 type PlayerGender = 'M' | 'W' | 'NB';
 
@@ -209,7 +230,7 @@ interface RosterPlayer {
 // fall out of the auth state. See docs/suggested-edits-design.md §5.
 type UserRole = 'user' | 'author' | 'moderator' | 'admin';
 
-interface GameEvent {
+export interface GameEvent {
   id: string;
   videoId: string; // Firestore ID of the video
   gameId: string; // Unique ID for the game
@@ -5806,6 +5827,20 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [isAddingGame, setIsAddingGame] = useState(false);
   const [events, setEvents] = useState<GameEvent[]>([]);
+  const [suggestions, setSuggestions] = useState<EventSuggestion[]>([]);
+  // The suggest-fix / suggest-delete / suggest-missing-event modal. Reuses one piece of state
+  // for all three since only one can be open at a time.
+  const [suggestFormState, setSuggestFormState] = useState<{ mode: 'edit' | 'delete' | 'add'; targetEvent?: GameEvent } | null>(null);
+  const [expandedSuggestionEventIds, setExpandedSuggestionEventIds] = useState<Set<string>>(new Set());
+  const [showSuggestionQueue, setShowSuggestionQueue] = useState(false);
+  // How much chrome the events feed shows. Persisted locally only — the tracker view doesn't
+  // participate in the app's URL deep-linking today, so this stays out of that system rather
+  // than bolting a one-off param onto it.
+  const [eventDensity, setEventDensity] = useState<'full' | 'compact'>(() => {
+    const stored = localStorage.getItem('qr_event_density');
+    return stored === 'compact' ? stored : 'full';
+  });
+  useEffect(() => { localStorage.setItem('qr_event_density', eventDensity); }, [eventDensity]);
 
   // Global Data
   const [allPlayers, setAllPlayers] = useState<Player[]>([]);
@@ -6272,6 +6307,26 @@ export default function App() {
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, `gameEvents/${currentVideo.gameId}`);
     });
+
+    return () => unsubscribe();
+  }, [currentVideo]);
+
+  // Suggestions Listener — scoped to the current game, since a suggestion is a proposal
+  // about one of its events. Rejected/superseded suggestions stay in this list (they remain
+  // visible, collapsed, on the event they targeted) — only the review queue and the amber
+  // "N suggested fixes" chip filter down to `status === 'open'`.
+  useEffect(() => {
+    if (!currentVideo) { setSuggestions([]); return; }
+
+    const unsubscribe = onSnapshot(
+      collection(db, 'gameEvents', currentVideo.gameId, 'suggestions'),
+      (snap) => {
+        setSuggestions(snap.docs.map(d => ({ id: d.id, ...d.data() } as EventSuggestion)));
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.LIST, `gameEvents/${currentVideo.gameId}/suggestions`);
+      },
+    );
 
     return () => unsubscribe();
   }, [currentVideo]);
@@ -8033,7 +8088,7 @@ export default function App() {
         if (isAccurate) upvoters.push(voterId);
         else downvoters.push(voterId);
       }
-      return { ...e, upvoterIds: upvoters, downvoterIds: downvoters, upvotes: upvoters.length, downvotes: downvoters.length, votes: upvoters.length - downvoters.length };
+      return { ...e, upvoterIds: upvoters, downvoterIds: downvoters, upvotes: upvoters.length, downvotes: downvoters.length, votes: upvoters.length - downvoters.length, lastVoteAt: new Date().toISOString() };
     }));
 
     try {
@@ -8068,6 +8123,10 @@ export default function App() {
       evt.upvotes = upvoters.length;
       evt.downvotes = downvoters.length;
       evt.votes = evt.upvotes - evt.downvotes;
+      // Lets the activity board surface a game that only got votes, not new events — the
+      // array field itself can't be queried by timestamp, so this is the cheapest signal
+      // available without restructuring events as documents. See RecentEventsView.
+      (evt as any).lastVoteAt = new Date().toISOString();
 
       currentEvents[eventIndex] = evt;
 
@@ -8075,6 +8134,239 @@ export default function App() {
     } catch (error) {
       console.error('Vote failed:', error);
       toast.error('Vote failed — check console');
+    }
+  };
+
+  // ---------------------------------------------------------------------------
+  // Suggested edits (Phase 1/2) — see docs/suggested-edits-design.md §8.
+  // ---------------------------------------------------------------------------
+
+  /** Create an 'edit' or 'delete' suggestion against an existing event. */
+  const handleSuggestEdit = async (targetEvent: GameEvent, patchInput: SuggestablePatch) => {
+    if (!currentVideo || !voterId) { toast.error('Still connecting — try that again in a moment.'); return; }
+    const { patch, baseline } = diffEvent(targetEvent, patchInput);
+    if (Object.keys(patch).length === 0) { toast.error('Nothing changed.'); return; }
+
+    const suggestion: Omit<EventSuggestion, 'id'> = {
+      gameId: currentVideo.gameId,
+      videoId: targetEvent.videoId,
+      kind: 'edit',
+      targetEventId: targetEvent.id,
+      patch,
+      baseline,
+      authorId: voterId,
+      createdAt: new Date().toISOString(),
+      status: 'open',
+      upvoterIds: [],
+      downvoterIds: [],
+      score: 0,
+    };
+
+    const id = suggestionId('edit', targetEvent.id, voterId);
+    try {
+      await setDoc(doc(db, 'gameEvents', currentVideo.gameId, 'suggestions', id), suggestion);
+      toast.success('Suggestion submitted — a moderator will review it.');
+    } catch (error) {
+      console.error('Suggest edit failed:', error);
+      toast.error('Could not submit that suggestion.');
+    }
+  };
+
+  /** Suggest that an event be removed entirely. Always carries a reason — a closed set, never free text. */
+  const handleSuggestDelete = async (targetEvent: GameEvent, reason: DeleteReason) => {
+    if (!currentVideo || !voterId) { toast.error('Still connecting — try that again in a moment.'); return; }
+
+    const suggestion: Omit<EventSuggestion, 'id'> = {
+      gameId: currentVideo.gameId,
+      videoId: targetEvent.videoId,
+      kind: 'delete',
+      targetEventId: targetEvent.id,
+      patch: {},
+      baseline: {},
+      reason,
+      authorId: voterId,
+      createdAt: new Date().toISOString(),
+      status: 'open',
+      upvoterIds: [],
+      downvoterIds: [],
+      score: 0,
+    };
+
+    const id = suggestionId('delete', targetEvent.id, voterId);
+    try {
+      await setDoc(doc(db, 'gameEvents', currentVideo.gameId, 'suggestions', id), suggestion);
+      toast.success('Delete suggestion submitted — a moderator will review it.');
+    } catch (error) {
+      console.error('Suggest delete failed:', error);
+      toast.error('Could not submit that suggestion.');
+    }
+  };
+
+  /** Suggest a missing event entirely — a proposal with no target. */
+  const handleSuggestAdd = async (patch: SuggestablePatch & { videoTime: number }) => {
+    if (!currentVideo || !voterId) { toast.error('Still connecting — try that again in a moment.'); return; }
+    if (!patch.type) { toast.error('Choose an event type.'); return; }
+
+    const suggestion: Omit<EventSuggestion, 'id'> = {
+      gameId: currentVideo.gameId,
+      videoId: currentVideo.id,
+      kind: 'add',
+      targetEventId: null,
+      patch,
+      baseline: {},
+      authorId: voterId,
+      createdAt: new Date().toISOString(),
+      status: 'open',
+      upvoterIds: [],
+      downvoterIds: [],
+      score: 0,
+    };
+
+    const id = suggestionId('add', null, voterId);
+    try {
+      await setDoc(doc(db, 'gameEvents', currentVideo.gameId, 'suggestions', id), suggestion);
+      toast.success('Missing event suggested — a moderator will review it.');
+    } catch (error) {
+      console.error('Suggest add failed:', error);
+      toast.error('Could not submit that suggestion.');
+    }
+  };
+
+  const handleVoteOnSuggestion = async (gameId: string, suggestion: EventSuggestion, isUp: boolean) => {
+    if (!voterId) { toast.error('Still connecting — try that again in a moment.'); return; }
+    const ref = doc(db, 'gameEvents', gameId, 'suggestions', suggestion.id);
+    let upvoters = [...suggestion.upvoterIds];
+    let downvoters = [...suggestion.downvoterIds];
+    const oldVote = upvoters.includes(voterId) ? true : downvoters.includes(voterId) ? false : null;
+    upvoters = upvoters.filter(id => id !== voterId);
+    downvoters = downvoters.filter(id => id !== voterId);
+    if (oldVote !== isUp) {
+      if (isUp) upvoters.push(voterId); else downvoters.push(voterId);
+    }
+    try {
+      await updateDoc(ref, { upvoterIds: upvoters, downvoterIds: downvoters, score: upvoters.length - downvoters.length });
+    } catch (error) {
+      console.error('Suggestion vote failed:', error);
+      toast.error('Vote failed — check console');
+    }
+  };
+
+  const handleWithdrawSuggestion = async (gameId: string, targetSuggestionId: string) => {
+    try {
+      await deleteDoc(doc(db, 'gameEvents', gameId, 'suggestions', targetSuggestionId));
+      toast.success('Suggestion withdrawn.');
+    } catch (error) {
+      console.error('Withdraw failed:', error);
+      toast.error('Could not withdraw that suggestion.');
+    }
+  };
+
+  const handleRejectSuggestion = async (gameId: string, suggestion: EventSuggestion) => {
+    if (!canModerate) { toast.error('Only a moderator can resolve a suggestion.'); return; }
+    try {
+      await updateDoc(doc(db, 'gameEvents', gameId, 'suggestions', suggestion.id), {
+        status: 'rejected', resolvedBy: voterId, resolvedAt: new Date().toISOString(),
+      });
+      toast.success('Suggestion rejected.');
+    } catch (error) {
+      console.error('Reject failed:', error);
+      toast.error('Could not reject that suggestion.');
+    }
+  };
+
+  /**
+   * Accept a suggestion: apply its patch to the live event (or remove/add one), reset the
+   * event's votes since its content just changed, write an audit revision, and mark the
+   * suggestion accepted — all as one transaction over the gameEvents doc, so a concurrent
+   * edit can never be silently clobbered.
+   */
+  const handleAcceptSuggestion = async (gameId: string, suggestion: EventSuggestion) => {
+    if (!canModerate) { toast.error('Only a moderator can resolve a suggestion.'); return; }
+    if (!voterId) return;
+
+    const gameRef = doc(db, 'gameEvents', gameId);
+    const suggestionRef = doc(db, 'gameEvents', gameId, 'suggestions', suggestion.id);
+
+    try {
+      await runTransaction(db, async (tx) => {
+        const gameSnap = await tx.get(gameRef);
+        if (!gameSnap.exists()) throw new Error('Game events doc not found');
+        const currentEvents = (gameSnap.data().events || []) as GameEvent[];
+
+        if (suggestion.kind === 'add') {
+          const newEvent: GameEvent = {
+            id: crypto.randomUUID(),
+            videoId: suggestion.videoId,
+            gameId,
+            userId: suggestion.authorId,
+            createdAt: new Date().toISOString(),
+            votes: 0, upvotes: 0, downvotes: 0, upvoterIds: [], downvoterIds: [],
+            status: 'unverified',
+            ...suggestion.patch,
+          } as GameEvent;
+          tx.update(gameRef, { events: [...currentEvents, newEvent] });
+
+          const revision: Omit<EventRevision, 'id'> = {
+            gameId, targetEventId: newEvent.id, before: null, after: suggestion.patch,
+            suggestionId: suggestion.id, suggestedBy: suggestion.authorId, resolvedBy: voterId,
+            createdAt: new Date().toISOString(),
+          };
+          tx.set(doc(collection(db, 'gameEvents', gameId, 'revisions')), revision);
+          tx.update(suggestionRef, { status: 'accepted', resolvedBy: voterId, resolvedAt: new Date().toISOString() });
+          return;
+        }
+
+        const eventIndex = currentEvents.findIndex(e => e.id === suggestion.targetEventId);
+        if (eventIndex === -1) throw new Error('The event this suggestion targets no longer exists.');
+        const liveEvent = currentEvents[eventIndex];
+
+        if (!baselineStillMatches(liveEvent, suggestion.baseline)) {
+          tx.update(suggestionRef, { status: 'superseded', resolvedBy: voterId, resolvedAt: new Date().toISOString() });
+          throw new Error('SUPERSEDED');
+        }
+        if (liveEvent.status === 'verified') {
+          throw new Error('This event is verified — unverify it before accepting an edit.');
+        }
+
+        const nextEvents = [...currentEvents];
+        let revisionBefore: SuggestablePatch | null;
+        let revisionAfter: SuggestablePatch | null;
+
+        if (suggestion.kind === 'delete') {
+          nextEvents.splice(eventIndex, 1);
+          revisionBefore = suggestion.baseline;
+          revisionAfter = null;
+        } else {
+          const updated = applyPatch(liveEvent, {
+            ...suggestion.patch,
+            // Content changed: prior votes no longer refer to what's on screen.
+            upvoterIds: [], downvoterIds: [], upvotes: 0, downvotes: 0, votes: 0,
+          } as any);
+          (updated as any).votesResetAt = new Date().toISOString();
+          nextEvents[eventIndex] = updated;
+          revisionBefore = suggestion.baseline;
+          revisionAfter = suggestion.patch;
+        }
+
+        tx.update(gameRef, { events: nextEvents });
+
+        const revision: Omit<EventRevision, 'id'> = {
+          gameId, targetEventId: suggestion.targetEventId!, before: revisionBefore, after: revisionAfter,
+          suggestionId: suggestion.id, suggestedBy: suggestion.authorId, resolvedBy: voterId,
+          createdAt: new Date().toISOString(),
+        };
+        tx.set(doc(collection(db, 'gameEvents', gameId, 'revisions')), revision);
+        tx.update(suggestionRef, { status: 'accepted', resolvedBy: voterId, resolvedAt: new Date().toISOString() });
+      });
+
+      toast.success(suggestion.kind === 'delete' ? 'Event removed.' : 'Suggestion accepted.');
+    } catch (error: any) {
+      if (error?.message === 'SUPERSEDED') {
+        toast.error('This event changed since the suggestion was made — marked superseded instead of applied.');
+        return;
+      }
+      console.error('Accept suggestion failed:', error);
+      toast.error(error?.message || 'Could not accept that suggestion.');
     }
   };
 
@@ -8511,6 +8803,30 @@ export default function App() {
   return (
     <div className={cn("bg-white text-gray-900 font-sans selection:bg-red-200/50", (view === 'tracker' && currentVideo) ? "h-screen overflow-hidden flex flex-col" : "min-h-screen")}>
       <Toaster position="top-right" richColors />
+      {suggestFormState && (
+        <SuggestEditForm
+          mode={suggestFormState.mode}
+          targetEvent={suggestFormState.targetEvent}
+          homeTeam={teams.find(t => t.id === currentGame?.homeTeamId) || null}
+          awayTeam={teams.find(t => t.id === currentGame?.awayTeamId) || null}
+          homePlayers={homeRosterPlayers.filter(rp => rp.player).map(rp => ({ id: rp.player.id, firstName: rp.player.firstName, lastName: rp.player.lastName }))}
+          awayPlayers={awayRosterPlayers.filter(rp => rp.player).map(rp => ({ id: rp.player.id, firstName: rp.player.firstName, lastName: rp.player.lastName }))}
+          initialVideoTime={player?.getCurrentTime()}
+          onCancel={() => setSuggestFormState(null)}
+          onSubmitEdit={(patch) => {
+            if (suggestFormState.targetEvent) handleSuggestEdit(suggestFormState.targetEvent, patch);
+            setSuggestFormState(null);
+          }}
+          onSubmitDelete={(reason) => {
+            if (suggestFormState.targetEvent) handleSuggestDelete(suggestFormState.targetEvent, reason);
+            setSuggestFormState(null);
+          }}
+          onSubmitAdd={(patch) => {
+            handleSuggestAdd(patch);
+            setSuggestFormState(null);
+          }}
+        />
+      )}
       {/* Header */}
       <header className={cn("border-b border-gray-200 bg-white/80 backdrop-blur-md z-50", (view === 'tracker' && currentVideo) ? "shrink-0" : "sticky top-0")}>
         <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
@@ -8591,7 +8907,7 @@ export default function App() {
               </button>
             )}
             <div className="flex items-center gap-3">
-              {voterId && (
+              {isSignedIn && voterId && (
                 <button
                   onClick={handleCopyOwnId}
                   title="Your ID. Click to copy — share it with a moderator if you need help with something you recorded."
@@ -8701,7 +9017,7 @@ export default function App() {
 
                 <div className="border-t border-gray-100 mt-2 pt-2 px-4">
                   <div className="flex items-center justify-between gap-2">
-                    {voterId && (
+                    {isSignedIn && voterId && (
                       <button
                         onClick={handleCopyOwnId}
                         className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-full border border-gray-200 min-w-0"
@@ -8773,17 +9089,25 @@ export default function App() {
               <h2 className="text-3xl font-extrabold border-b pb-4 text-gray-900 mb-6">How to Watch a Game</h2>
               <div className="space-y-4 text-gray-700 leading-relaxed text-sm">
                 <p>While watching a video, <strong>Events</strong> show the events that happen during the game. For spectators, that's where they can upvote and downvote events. For signed-in users, they will have a <strong>Record</strong> tab where they can (optionally) record the various game events that happen. Adding events to the proper timestamp of the video will ensure stats are calculated accurately.</p>
-                <p>Anyone can add any amount of events, and they will be accessible globally<span className="text-red-500">*</span>. It isn't important to get everything done, just that any event added is accurate.</p>
+                <p>Anyone can add any amount of events, and they will be accessible globally. It isn't important to get everything done, just that any event added is accurate.</p>
                 <p>The <strong>GameCast</strong> tab shows the various events in a more condensed format. The <strong>Players</strong> tab shows the players on each team. Each player's basic performance is shown under their name.</p>
                 <p>For authors, the Players tab also allows for a different way to add stats. Clicking on a name pops up a quick access to recording an event. Dragging and dropping allows for substitutions as well.</p>
               </div>
-              <p className="italic text-xs text-gray-500 mt-4"><span className="text-red-500">*</span>current season stats are hidden on aggregate tab</p>
+            </div>
+
+            <div className="mb-12">
+              <h2 className="text-3xl font-extrabold border-b pb-4 text-gray-900 mb-6">Suggesting an Edit</h2>
+              <div className="space-y-4 text-gray-700 leading-relaxed text-sm">
+                <p>Every event has two extra icons next to the up/down vote buttons: a speech-bubble icon to <strong>suggest a fix</strong>, and a circle-slash icon to <strong>suggest a removal</strong>. Both are open to everyone, signed in or not.</p>
+                <p>A downvote is a quick "something's off here." A suggestion is the fix itself: what the event should actually say. A removal suggestion asks you to pick the closest reason from a short list.</p>
+                <p>There's also a "+" button near the top of the Events tab to <strong>suggest a missing event</strong>: a goal, assist, or anything else that wasn't tracked. Team and player choices are limited to whoever's actually in the game.</p>
+              </div>
             </div>
 
             <div className="mb-12">
               <h2 className="text-3xl font-extrabold border-b pb-4 text-gray-900 mb-6">Become an Author</h2>
               <div className="space-y-4 text-gray-700 leading-relaxed text-sm">
-                <p>Just... sign in. That's it. Any stat you author becomes public<span className="text-red-500">*</span>. They get aggregated on the "pending" tab, but will move to verified after receiving enough votes.</p>
+                <p>Just... sign in. That's it. Any stat you author becomes public. They get aggregated on the "pending" tab, but will move to verified after receiving enough votes.</p>
               </div>
             </div>
 
@@ -9635,6 +9959,66 @@ export default function App() {
                           <option value="possession_scoring">Possessions & Scoring</option>
                         </select>
                       </div>
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1 flex bg-white border border-gray-200 rounded-md p-0.5 shadow-sm">
+                          {([
+                            { key: 'full' as const, icon: <Eye className="w-3 h-3" />, label: 'Full' },
+                            { key: 'compact' as const, icon: <EyeOff className="w-3 h-3" />, label: 'Compact' },
+                          ]).map(opt => (
+                            <button
+                              key={opt.key}
+                              onClick={() => setEventDensity(opt.key)}
+                              title={`${opt.label} events — ${opt.key === 'full' ? 'everything shown, including the voting/editing footer' : 'same as Full, without the voting/editing footer'}`}
+                              className={cn('flex-1 flex items-center justify-center gap-1 py-1 rounded text-[9px] font-bold uppercase tracking-wider transition-all', eventDensity === opt.key ? 'bg-gray-900 text-white' : 'text-gray-400 hover:text-gray-700')}
+                            >
+                              {opt.icon}
+                            </button>
+                          ))}
+                        </div>
+                        {suggestions.some(s => s.status === 'open') && (
+                          <button
+                            onClick={() => setShowSuggestionQueue(v => !v)}
+                            className={cn('flex items-center gap-1 px-2 py-1.5 rounded-md text-[10px] font-bold transition-all border shrink-0', showSuggestionQueue ? 'bg-amber-500/10 text-amber-600 border-amber-500/30' : 'bg-white text-gray-400 border-gray-200 hover:text-amber-500')}
+                            title="Open suggestions for this game, sorted by score"
+                          >
+                            <Inbox className="w-3 h-3" />
+                            {suggestions.filter(s => s.status === 'open').length}
+                          </button>
+                        )}
+                        <button
+                          onClick={() => setSuggestFormState({ mode: 'add' })}
+                          className="flex items-center gap-1 px-2 py-1.5 rounded-md text-[10px] font-bold transition-all border bg-white text-gray-400 border-gray-200 hover:text-blue-500 hover:border-blue-300 shrink-0"
+                          title="Suggest a missing event"
+                        >
+                          <Plus className="w-3 h-3" />
+                        </button>
+                      </div>
+                      {showSuggestionQueue && (
+                        <div className="space-y-2 max-h-64 overflow-y-auto rounded-lg border border-amber-200 bg-amber-50/30 p-2">
+                          {suggestions.filter(s => s.status === 'open').sort((a, b) => b.score - a.score).map(sugg => (
+                            <SuggestionCard
+                              key={sugg.id}
+                              suggestion={sugg}
+                              voterId={voterId}
+                              canModerate={canModerate}
+                              compact
+                              playerName={(id) => { const p = allPlayers.find(pl => pl.id === id); return p ? `${p.firstName.charAt(0)}. ${p.lastName}` : undefined; }}
+                              teamName={(id) => teams.find(tm => tm.id === id)?.name}
+                              onVote={(isUp) => currentVideo && handleVoteOnSuggestion(currentVideo.gameId, sugg, isUp)}
+                              onAccept={() => currentVideo && handleAcceptSuggestion(currentVideo.gameId, sugg)}
+                              onReject={() => currentVideo && handleRejectSuggestion(currentVideo.gameId, sugg)}
+                              onRemove={() => currentVideo && handleWithdrawSuggestion(currentVideo.gameId, sugg.id)}
+                              onSeek={sugg.targetEventId ? () => {
+                                const target = events.find(e => e.id === sugg.targetEventId);
+                                if (target) player?.seekTo(target.videoTime);
+                              } : undefined}
+                            />
+                          ))}
+                          {suggestions.filter(s => s.status === 'open').length === 0 && (
+                            <p className="text-xs text-gray-400 text-center py-4">No open suggestions.</p>
+                          )}
+                        </div>
+                      )}
                       {canModerate && currentGame && (
                         <div className="flex items-center gap-2">
                           {(() => {
@@ -9737,6 +10121,7 @@ export default function App() {
 
                       const renderTrackingEventBody = (evt: any) => {
                         const cfg = EVENT_CONFIG[evt.type as EventType] || { label: evt.type, icon: <AlertCircle className="w-4 h-4" />, color: 'bg-neutral-500' };
+                        const openSuggestionsForEvent = suggestions.filter(s => s.targetEventId === evt.id && s.status === 'open');
                         const label = (evt.type === 'sub_in' && evt.position) ? `${evt.position} In` : (evt.type === 'sub_out' && evt.position) ? `${evt.position} Out` : (evt.type === 'card' && evt.color) ? `${evt.color} Card` : cfg.label;
                         const cardIconColor = evt.type === 'card' && evt.color
                           ? (evt.color === 'blue' ? 'bg-blue-500' : evt.color === 'yellow' ? 'bg-yellow-400' : evt.color === 'red' ? 'bg-red-500' : cfg.color)
@@ -9789,25 +10174,6 @@ export default function App() {
                                 </div>
                               </div>
                               <div className="flex items-center gap-2">
-                                {(canModerate || (evt.userId === user?.uid && evt.status !== 'verified')) && (
-                                  <>
-                                    <button
-                                      onClick={() => handleEditRecordedEvent(evt.id)}
-                                      className="p-1 text-gray-400 hover:text-blue-500 hover:bg-blue-50 transition-colors rounded flex items-center justify-center border border-transparent hover:border-blue-100"
-                                      title="Edit Event"
-                                    >
-                                      <Edit2 className="w-3.5 h-3.5" />
-                                    </button>
-                                    <button
-                                      onClick={() => { if (window.confirm('Delete this event permanently?')) handleDeleteRecordedEvent(evt.id) }}
-                                      className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors rounded flex items-center justify-center border border-transparent hover:border-red-100"
-                                      title="Delete Event"
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
-                                  </>
-                                )}
-
                                 <button
                                   onClick={() => player?.seekTo(evt.videoTime)}
                                   className="text-[10px] font-mono bg-gray-100 hover:bg-red-600 px-2 py-1 rounded transition-colors"
@@ -9817,84 +10183,153 @@ export default function App() {
                               </div>
                             </div>
 
-                            <div className="flex items-center justify-between pt-2 border-t border-gray-200/50">
-                              <div className="flex items-center gap-3">
-                                {canModerate && (
-                                  <button
-                                    onClick={async () => {
-                                      if (!user || !currentVideo) return;
-                                      const newStatus = evt.status === 'verified' ? 'unverified' : 'verified';
-                                      // Optimistic local update
-                                      setEvents(prev => prev.map(e => e.id === evt.id ? { ...e, status: newStatus } : e));
-                                      try {
-                                        const gameRef = doc(db, 'gameEvents', currentVideo.gameId);
-                                        const gameSnap = await getDoc(gameRef);
-                                        if (!gameSnap.exists()) { toast.error('Game doc not found'); return; }
-                                        const gameData = gameSnap.data();
-                                        const currentEvents = gameData.events as GameEvent[] || [];
-                                        const eventIndex = currentEvents.findIndex(e => e.id === evt.id);
-                                        if (eventIndex !== -1) {
-                                          currentEvents[eventIndex] = { ...currentEvents[eventIndex], status: newStatus };
-                                          await updateDoc(gameRef, { events: currentEvents });
-                                          toast.success(newStatus === 'verified' ? '✓ Event verified' : 'Verification removed');
+                            {eventDensity !== 'compact' && (
+                              <div className="flex items-center justify-between pt-2 border-t border-gray-200/50">
+                                {/* Left to right: verify, net, then the vote counters — now the vote
+                                    buttons themselves, not separate count-only displays paired with a
+                                    duplicate button on the right. */}
+                                <div className="flex items-center gap-3">
+                                  {canModerate && (
+                                    <button
+                                      onClick={async () => {
+                                        if (!user || !currentVideo) return;
+                                        const newStatus = evt.status === 'verified' ? 'unverified' : 'verified';
+                                        // Optimistic local update
+                                        setEvents(prev => prev.map(e => e.id === evt.id ? { ...e, status: newStatus } : e));
+                                        try {
+                                          const gameRef = doc(db, 'gameEvents', currentVideo.gameId);
+                                          const gameSnap = await getDoc(gameRef);
+                                          if (!gameSnap.exists()) { toast.error('Game doc not found'); return; }
+                                          const gameData = gameSnap.data();
+                                          const currentEvents = gameData.events as GameEvent[] || [];
+                                          const eventIndex = currentEvents.findIndex(e => e.id === evt.id);
+                                          if (eventIndex !== -1) {
+                                            currentEvents[eventIndex] = { ...currentEvents[eventIndex], status: newStatus };
+                                            await updateDoc(gameRef, { events: currentEvents });
+                                            toast.success(newStatus === 'verified' ? '✓ Event verified' : 'Verification removed');
+                                          }
+                                        } catch (e) {
+                                          console.error(e);
+                                          toast.error('Failed to update verification');
+                                          // Revert optimistic update
+                                          setEvents(prev => prev.map(ev => ev.id === evt.id ? { ...ev, status: evt.status } : ev));
                                         }
-                                      } catch (e) {
-                                        console.error(e);
-                                        toast.error('Failed to update verification');
-                                        // Revert optimistic update
-                                        setEvents(prev => prev.map(ev => ev.id === evt.id ? { ...ev, status: evt.status } : ev));
-                                      }
-                                    }}
-                                    className={cn("p-1.5 rounded-lg transition-all border", evt.status === 'verified' ? 'bg-amber-500/15 text-amber-500 border-amber-500/30 shadow-sm' : 'bg-gray-50 text-gray-300 border-gray-200 hover:text-amber-500 hover:border-amber-500 hover:bg-amber-50')}
-                                    title={evt.status === 'verified' ? "Remove Verification" : "Verify Event (Trusted Only)"}
+                                      }}
+                                      className={cn("p-1.5 rounded-lg transition-all border", evt.status === 'verified' ? 'bg-amber-500/15 text-amber-500 border-amber-500/30 shadow-sm' : 'bg-gray-50 text-gray-300 border-gray-200 hover:text-amber-500 hover:border-amber-500 hover:bg-amber-50')}
+                                      title={evt.status === 'verified' ? "Remove Verification" : "Verify Event (Trusted Only)"}
+                                    >
+                                      <ShieldCheck className="w-4 h-4" />
+                                    </button>
+                                  )}
+                                  <span className={cn(
+                                    "text-xs font-bold",
+                                    evt.votes > 0 ? "text-green-500" : evt.votes < 0 ? "text-red-500" : "text-gray-400"
+                                  )}>
+                                    {evt.votes > 0 ? `+${evt.votes}` : evt.votes}
+                                  </span>
+                                  <span className="text-[10px] text-gray-300 uppercase font-bold tracking-tighter">Net</span>
+                                  <div className="h-3 w-px bg-gray-100 mx-1" />
+                                  <button
+                                    onClick={() => handleVote(evt.id, true)}
+                                    className={cn(
+                                      'flex items-center gap-1 px-1.5 py-1 rounded transition-all',
+                                      evt.upvoterIds?.includes(voterId)
+                                        ? 'bg-green-500/15 text-green-600 ring-1 ring-green-500/30'
+                                        : 'text-gray-400 hover:bg-green-500/10 hover:text-green-500'
+                                    )}
+                                    title="Mark accurate"
                                   >
-                                    <ShieldCheck className="w-4 h-4" />
+                                    <CheckCircle2 className="w-3.5 h-3.5" />
+                                    <span className="text-xs font-bold">{evt.upvotes || 0}</span>
                                   </button>
+                                  <button
+                                    onClick={() => handleVote(evt.id, false)}
+                                    className={cn(
+                                      'flex items-center gap-1 px-1.5 py-1 rounded transition-all',
+                                      evt.downvoterIds?.includes(voterId)
+                                        ? 'bg-red-500/15 text-red-600 ring-1 ring-red-500/30'
+                                        : 'text-gray-400 hover:bg-red-500/10 hover:text-red-500'
+                                    )}
+                                    title="Mark inaccurate"
+                                  >
+                                    <XCircle className="w-3.5 h-3.5" />
+                                    <span className="text-xs font-bold">{evt.downvotes || 0}</span>
+                                  </button>
+                                </div>
+
+                                {/* Every editing entry point lives here, in this order: edit, delete,
+                                    suggest a fix, suggest a removal. Nothing edit-related sits in the
+                                    header any more, so Compact can hide this one div and be done. */}
+                                <div className="flex items-center gap-1">
+                                  {(canModerate || (evt.userId === user?.uid && evt.status !== 'verified')) && (
+                                    <>
+                                      <button
+                                        onClick={() => handleEditRecordedEvent(evt.id)}
+                                        className="p-1 text-gray-400 hover:text-blue-500 hover:bg-blue-50 transition-colors rounded flex items-center justify-center border border-transparent hover:border-blue-100"
+                                        title="Edit Event"
+                                      >
+                                        <Edit2 className="w-3.5 h-3.5" />
+                                      </button>
+                                      <button
+                                        onClick={() => { if (window.confirm('Delete this event permanently?')) handleDeleteRecordedEvent(evt.id) }}
+                                        className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors rounded flex items-center justify-center border border-transparent hover:border-red-100"
+                                        title="Delete Event"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    </>
+                                  )}
+                                  <button
+                                    onClick={() => setSuggestFormState({ mode: 'edit', targetEvent: evt })}
+                                    className="p-1 text-gray-400 hover:text-amber-600 hover:bg-amber-50 transition-colors rounded flex items-center justify-center border border-transparent hover:border-amber-100"
+                                    title="Suggest a fix"
+                                  >
+                                    <MessageSquarePlus className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={() => setSuggestFormState({ mode: 'delete', targetEvent: evt })}
+                                    className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors rounded flex items-center justify-center border border-transparent hover:border-red-100"
+                                    title="Suggest this be removed"
+                                  >
+                                    <Ban className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+
+                            {openSuggestionsForEvent.length > 0 && (
+                              <div className="mt-2 pt-2 border-t border-amber-200/60">
+                                <button
+                                  onClick={() => setExpandedSuggestionEventIds(prev => {
+                                    const next = new Set(prev);
+                                    if (next.has(evt.id)) next.delete(evt.id); else next.add(evt.id);
+                                    return next;
+                                  })}
+                                  className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-amber-600 hover:text-amber-700"
+                                >
+                                  {expandedSuggestionEventIds.has(evt.id) ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                                  {openSuggestionsForEvent.length} suggested fix{openSuggestionsForEvent.length === 1 ? '' : 'es'}
+                                </button>
+                                {expandedSuggestionEventIds.has(evt.id) && (
+                                  <div className="mt-2 space-y-2">
+                                    {openSuggestionsForEvent.map(sugg => (
+                                      <SuggestionCard
+                                        key={sugg.id}
+                                        suggestion={sugg}
+                                        voterId={voterId}
+                                        canModerate={canModerate}
+                                        playerName={(id) => { const p = allPlayers.find(pl => pl.id === id); return p ? `${p.firstName.charAt(0)}. ${p.lastName}` : undefined; }}
+                                        teamName={(id) => teams.find(tm => tm.id === id)?.name}
+                                        onVote={(isUp) => currentVideo && handleVoteOnSuggestion(currentVideo.gameId, sugg, isUp)}
+                                        onAccept={() => currentVideo && handleAcceptSuggestion(currentVideo.gameId, sugg)}
+                                        onReject={() => currentVideo && handleRejectSuggestion(currentVideo.gameId, sugg)}
+                                        onRemove={() => currentVideo && handleWithdrawSuggestion(currentVideo.gameId, sugg.id)}
+                                      />
+                                    ))}
+                                  </div>
                                 )}
-                                <div className="flex items-center gap-1">
-                                  <span className="text-xs font-bold text-green-500">{evt.upvotes || 0}</span>
-                                  <CheckCircle2 className="w-3 h-3 text-green-500 opacity-50" />
-                                </div>
-                                <div className="flex items-center gap-1">
-                                  <span className="text-xs font-bold text-red-500">{evt.downvotes || 0}</span>
-                                  <XCircle className="w-3 h-3 text-red-500 opacity-50" />
-                                </div>
-                                <div className="h-3 w-px bg-gray-100 mx-1" />
-                                <span className={cn(
-                                  "text-xs font-bold",
-                                  evt.votes > 0 ? "text-green-500" : evt.votes < 0 ? "text-red-500" : "text-gray-400"
-                                )}>
-                                  {evt.votes > 0 ? `+${evt.votes}` : evt.votes}
-                                </span>
-                                <span className="text-[10px] text-gray-300 uppercase font-bold tracking-tighter">Net</span>
                               </div>
-                              <div className="flex items-center gap-1">
-                                <button
-                                  onClick={() => handleVote(evt.id, true)}
-                                  className={cn(
-                                    'p-1.5 rounded transition-all',
-                                    evt.upvoterIds?.includes(voterId)
-                                      ? 'bg-green-500/20 text-green-600 ring-1 ring-green-500/30'
-                                      : 'hover:bg-green-500/20 text-gray-400 hover:text-green-500'
-                                  )}
-                                  title="Accurate"
-                                >
-                                  <CheckCircle2 className="w-4 h-4" />
-                                </button>
-                                <button
-                                  onClick={() => handleVote(evt.id, false)}
-                                  className={cn(
-                                    'p-1.5 rounded transition-all',
-                                    evt.downvoterIds?.includes(voterId)
-                                      ? 'bg-red-500/20 text-red-600 ring-1 ring-red-500/30'
-                                      : 'hover:bg-red-500/20 text-gray-400 hover:text-red-500'
-                                  )}
-                                  title="Inaccurate"
-                                >
-                                  <XCircle className="w-4 h-4" />
-                                </button>
-                              </div>
-                            </div>
+                            )}
                           </>
                         );
                       };
@@ -9945,6 +10380,7 @@ export default function App() {
                           }
 
                           const nestedAssist = event.type === 'goal' ? nestedAssistByGoalId.get(event.id) : undefined;
+                          const hasOpenSuggestions = suggestions.some(s => s.targetEventId === event.id && s.status === 'open');
 
                           return (
                             <div
@@ -9953,13 +10389,19 @@ export default function App() {
                               className={cn(
                                 "group border rounded-xl p-3 transition-all",
                                 !event.teamId && "bg-white border-gray-200 hover:border-gray-300",
-                                event.status === 'rejected' && "opacity-50 grayscale"
+                                event.status === 'rejected' && "opacity-50 grayscale",
+                                hasOpenSuggestions && "border-l-4"
                               )}
-                              style={
-                                event.teamId === currentGame?.homeTeamId ? { backgroundColor: hexToRgba(feedHomeColor, 0.06), borderColor: hexToRgba(feedHomeColor, 0.25) } :
+                              style={{
+                                // A team-colored card sets borderColor (all four sides) via inline style, which
+                                // would silently beat the amber Tailwind class below since inline style always
+                                // wins over a class for the same property — so the amber override has to be
+                                // merged in after, not left to CSS specificity.
+                                ...(event.teamId === currentGame?.homeTeamId ? { backgroundColor: hexToRgba(feedHomeColor, 0.06), borderColor: hexToRgba(feedHomeColor, 0.25) } :
                                   event.teamId === currentGame?.awayTeamId ? { backgroundColor: hexToRgba(feedAwayColor, 0.06), borderColor: hexToRgba(feedAwayColor, 0.25) } :
-                                    undefined
-                              }
+                                    {}),
+                                ...(hasOpenSuggestions ? { borderLeftColor: '#f59e0b', borderLeftWidth: '4px' } : {}),
+                              }}
                             >
                               {renderTrackingEventBody(event)}
                               {nestedAssist && (
