@@ -131,6 +131,43 @@ service cloud.firestore {
       return request.resource.data.keys().hasOnly(fields);
     }
 
+    // Only your own uid may enter or leave a suggestion's vote arrays, and only vote fields
+    // may move — mirrors isVoteOnlyChange() above, but for a plain document instead of an
+    // array element, so no gameEventsAdded()/Removed() bookkeeping is needed.
+    function isSuggestionVoteOnlyChange() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['upvoterIds', 'downvoterIds', 'score']) &&
+             request.resource.data.upvoterIds.toSet().difference(resource.data.upvoterIds.toSet()).hasOnly([request.auth.uid]) &&
+             resource.data.upvoterIds.toSet().difference(request.resource.data.upvoterIds.toSet()).hasOnly([request.auth.uid]) &&
+             request.resource.data.downvoterIds.toSet().difference(resource.data.downvoterIds.toSet()).hasOnly([request.auth.uid]) &&
+             resource.data.downvoterIds.toSet().difference(request.resource.data.downvoterIds.toSet()).hasOnly([request.auth.uid]);
+    }
+
+    function isValidSuggestion(data, gameId) {
+      // Closed field set — deliberately leaves no room for a client to smuggle in something
+      // like a self-asserted weight or score, which is exactly what a future weighted
+      // auto-accept (see docs/suggested-edits-design.md §12) would need to stay honest.
+      //
+      // There is no free-text field anywhere in this document, by design — not a note, not a
+      // comment. `reason` is a closed set of four fixed strings, required only for 'delete'
+      // and forbidden on everything else, so there is no field left that could ever carry
+      // arbitrary user-typed text.
+      return hasOnlyAllowedFields(['gameId', 'videoId', 'kind', 'targetEventId', 'patch', 'baseline',
+                                    'reason', 'authorId', 'createdAt', 'status', 'upvoterIds', 'downvoterIds', 'score']) &&
+             data.gameId == gameId &&
+             data.videoId is string &&
+             data.kind in ['edit', 'delete', 'add'] &&
+             (data.kind == 'add' ? data.targetEventId == null : data.targetEventId is string) &&
+             data.patch is map &&
+             data.baseline is map &&
+             data.authorId == request.auth.uid &&
+             data.status == 'open' &&
+             data.upvoterIds is list && data.upvoterIds.size() == 0 &&
+             data.downvoterIds is list && data.downvoterIds.size() == 0 &&
+             (data.kind == 'delete'
+               ? data.reason in ['did_not_happen', 'duplicate', 'wrong_moment', 'other']
+               : !('reason' in data));
+    }
+
     function isValidGame(data) {
       return data.id is string && data.id.size() > 0 &&
              (data.seasonId == null || data.seasonId is string) &&
@@ -314,6 +351,44 @@ service cloud.firestore {
         // Anyone, including anonymous sessions, may vote.
         (isAuthenticated() && isVoteOnlyChange());
       allow delete: if isAdmin();
+
+      // Suggested edits. A suggestion is a proposal about one event — a sparse patch, never a
+      // full event — so it never touches the events array directly; only accepting one does,
+      // through the ordinary gameEvents update path above (a moderator has unconditional
+      // write access there already).
+      //
+      // Resolving a suggestion (accept/reject/supersede) is moderator-only. Rules cannot loop
+      // the gameEvents array, so "is this uid the author of the target event" cannot be
+      // checked safely here — moderator-only sidesteps that limitation entirely rather than
+      // approximating it.
+      match /suggestions/{suggestionId} {
+        allow read: if true;
+
+        allow create: if isAuthenticated() && isValidSuggestion(request.resource.data, gameId);
+
+        // Voting — anyone, including anonymous sessions.
+        allow update: if isAuthenticated() && isSuggestionVoteOnlyChange();
+
+        // Resolve (accept/reject/supersede), or any other moderator edit.
+        allow update: if isModerator();
+
+        // Withdraw your own still-open suggestion; a moderator may remove any (e.g. an
+        // abusive note) — deleting is also how a suggestion is withdrawn, there being no
+        // real ongoing use for a 'withdrawn' status once nothing points back at the doc.
+        allow delete: if isModerator() || (isOwner(resource.data.authorId) && resource.data.status == 'open');
+      }
+
+      // Append-only audit trail, written when a suggestion is accepted.
+      match /revisions/{revisionId} {
+        allow read: if true;
+        allow create: if isModerator();
+        allow update, delete: if isAdmin();
+      }
+    }
+
+    // Required for the moderator activity board's cross-game query over open suggestions.
+    match /{path=**}/suggestions/{suggestionId} {
+      allow read: if true;
     }
 
     // Votes
