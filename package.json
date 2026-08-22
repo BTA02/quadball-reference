@@ -10,7 +10,9 @@
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
     "extract-stats": "tsx scripts/extract_stats_gemini.ts",
-    "extract-stats-claude": "node scripts/agent-extractor/extract_stats_claude.mjs"
+    "extract-stats-claude": "node scripts/agent-extractor/extract_stats_claude.mjs",
+    "test:rules": "firebase emulators:exec --only firestore --project demo-rules-check 'node scripts/test_firestore_rules.mjs'",
+    "test:migration": "firebase emulators:exec --only firestore,auth --project demo-rules-check 'node scripts/test_privacy_migration.mjs'"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",
@@ -35,6 +37,7 @@
     "youtube-dl-exec": "^3.1.5"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "@types/papaparse": "^5.5.2",
@@ -42,7 +45,9 @@
     "@types/react-dom": "^19.2.3",
     "autoprefixer": "^10.4.21",
     "csv-stringify": "^6.7.0",
+    "firebase-admin": "^14.3.0",
     "firebase-tools": "^15.19.1",
+    "google-auth-library": "^11.0.2",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",

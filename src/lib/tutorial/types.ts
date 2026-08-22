@@ -33,7 +33,7 @@ export interface TutorialContext {
 
   // --- Create (moderator tools) ---
   /** Switch the Create screen's sub-tab before a step is shown. */
-  setCreateTab: (tab: 'rosters' | 'teams' | 'players' | 'games' | 'leaderboard') => void;
+  setCreateTab: (tab: 'rosters' | 'teams' | 'players' | 'games' | 'activity') => void;
   /** True when the user can reach the Create tab (moderator or trusted). */
   canCreate: boolean;
 
