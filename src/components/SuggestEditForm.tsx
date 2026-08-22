@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { X, Pencil, Ban, Plus } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { X, MessageSquarePlus, Ban, Plus } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { EventType, GameEvent, PositionType } from '../App';
 import { SuggestablePatch, TYPE_LABELS, POSITION_LABELS, NOTE_MAX_LENGTH } from '../lib/suggestions';
@@ -10,8 +10,12 @@ interface PlayerLike { id: string; firstName: string; lastName: string; }
 interface SuggestEditFormProps {
   mode: 'edit' | 'delete' | 'add';
   targetEvent?: GameEvent;
-  teams: TeamLike[];
-  players: PlayerLike[];
+  /** Exactly the two teams in this game — a suggestion can't attribute an event to anyone else. */
+  homeTeam: TeamLike | null;
+  awayTeam: TeamLike | null;
+  /** Each team's roster for this game's season/tournament — same scoping the recording panel uses. */
+  homePlayers: PlayerLike[];
+  awayPlayers: PlayerLike[];
   initialVideoTime?: number;
   onSubmitEdit?: (patch: SuggestablePatch, note?: string) => void;
   onSubmitDelete?: (note: string) => void;
@@ -25,19 +29,39 @@ const POSITIONS = Object.keys(POSITION_LABELS) as PositionType[];
 const inputClass = "w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-amber-500";
 const labelClass = "text-[10px] uppercase font-bold text-gray-400";
 
-export default function SuggestEditForm({ mode, targetEvent, teams, players, initialVideoTime, onSubmitEdit, onSubmitDelete, onSubmitAdd, onCancel }: SuggestEditFormProps) {
+export default function SuggestEditForm({ mode, targetEvent, homeTeam, awayTeam, homePlayers, awayPlayers, initialVideoTime, onSubmitEdit, onSubmitDelete, onSubmitAdd, onCancel }: SuggestEditFormProps) {
+  const teams = [homeTeam, awayTeam].filter((t): t is TeamLike => !!t);
+
   const [type, setType] = useState<EventType | ''>(targetEvent?.type || '');
   const [teamId, setTeamId] = useState(targetEvent?.teamId || '');
   const [playerId, setPlayerId] = useState(targetEvent?.playerId || '');
   const [position, setPosition] = useState<PositionType | ''>(targetEvent?.position || '');
   const [color, setColor] = useState(targetEvent?.color || '');
-  const [videoTime, setVideoTime] = useState(String(targetEvent?.videoTime ?? initialVideoTime ?? 0));
+  // Whole seconds only — the video scrubber doesn't offer sub-second precision, so a suggested
+  // time shouldn't imply it either. Non-digit characters are stripped as they're typed rather
+  // than validated after the fact, so a decimal point never becomes enterable.
+  const [videoTime, setVideoTime] = useState(String(Math.round(targetEvent?.videoTime ?? initialVideoTime ?? 0)));
   const [note, setNote] = useState('');
+
+  // Eligible players are scoped to the selected team's roster; with no team chosen yet, both
+  // rosters combined — still limited to people actually in this game, never the full player
+  // database.
+  const eligiblePlayers: PlayerLike[] =
+    teamId === homeTeam?.id ? homePlayers :
+    teamId === awayTeam?.id ? awayPlayers :
+    [...homePlayers, ...awayPlayers];
+
+  // If switching teams leaves the selected player off the new roster, drop the stale pick
+  // instead of silently submitting a player who isn't on the chosen team.
+  useEffect(() => {
+    if (playerId && !eligiblePlayers.some(p => p.id === playerId)) setPlayerId('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teamId]);
 
   const showColor = type === 'card';
   const showPosition = type === 'sub_in' || type === 'sub_out';
   const title = mode === 'delete' ? 'Suggest removal' : mode === 'add' ? 'Suggest a missing event' : 'Suggest a fix';
-  const Icon = mode === 'delete' ? Ban : mode === 'add' ? Plus : Pencil;
+  const Icon = mode === 'delete' ? Ban : mode === 'add' ? Plus : MessageSquarePlus;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -50,7 +74,7 @@ export default function SuggestEditForm({ mode, targetEvent, teams, players, ini
 
     const patch: SuggestablePatch = {};
     if (type) patch.type = type;
-    patch.videoTime = Number(videoTime) || 0;
+    patch.videoTime = Math.round(Number(videoTime)) || 0;
     patch.teamId = teamId || null;
     patch.playerId = playerId || null;
     patch.position = showPosition ? (position || null) : null;
@@ -111,7 +135,15 @@ export default function SuggestEditForm({ mode, targetEvent, teams, players, ini
               </div>
               <div className="space-y-1">
                 <label className={labelClass}>Time (seconds)</label>
-                <input type="number" min={0} value={videoTime} onChange={e => setVideoTime(e.target.value)} className={inputClass} />
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  step={1}
+                  value={videoTime}
+                  onChange={e => setVideoTime(e.target.value.replace(/[^0-9]/g, ''))}
+                  className={inputClass}
+                />
               </div>
             </div>
 
@@ -127,7 +159,7 @@ export default function SuggestEditForm({ mode, targetEvent, teams, players, ini
                 <label className={labelClass}>Player</label>
                 <select value={playerId} onChange={e => setPlayerId(e.target.value)} className={inputClass}>
                   <option value="">—</option>
-                  {players.map(p => <option key={p.id} value={p.id}>{p.firstName} {p.lastName}</option>)}
+                  {eligiblePlayers.map(p => <option key={p.id} value={p.id}>{p.firstName} {p.lastName}</option>)}
                 </select>
               </div>
             </div>

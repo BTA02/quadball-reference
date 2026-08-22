@@ -45,7 +45,7 @@ import {
   Maximize2,
   CornerDownRight,
   Menu,
-  Pencil,
+  MessageSquarePlus,
   Ban,
   Inbox,
   Eye,
@@ -8810,8 +8810,10 @@ export default function App() {
         <SuggestEditForm
           mode={suggestFormState.mode}
           targetEvent={suggestFormState.targetEvent}
-          teams={teams}
-          players={allPlayers}
+          homeTeam={teams.find(t => t.id === currentGame?.homeTeamId) || null}
+          awayTeam={teams.find(t => t.id === currentGame?.awayTeamId) || null}
+          homePlayers={homeRosterPlayers.filter(rp => rp.player).map(rp => ({ id: rp.player.id, firstName: rp.player.firstName, lastName: rp.player.lastName }))}
+          awayPlayers={awayRosterPlayers.filter(rp => rp.player).map(rp => ({ id: rp.player.id, firstName: rp.player.firstName, lastName: rp.player.lastName }))}
           initialVideoTime={player?.getCurrentTime()}
           onCancel={() => setSuggestFormState(null)}
           onSubmitEdit={(patch, note) => {
@@ -10197,7 +10199,7 @@ export default function App() {
                                       className="p-1 text-gray-400 hover:text-amber-600 hover:bg-amber-50 transition-colors rounded flex items-center justify-center border border-transparent hover:border-amber-100"
                                       title="Suggest a fix"
                                     >
-                                      <Pencil className="w-3.5 h-3.5" />
+                                      <MessageSquarePlus className="w-3.5 h-3.5" />
                                     </button>
                                     <button
                                       onClick={() => setSuggestFormState({ mode: 'delete', targetEvent: evt })}
