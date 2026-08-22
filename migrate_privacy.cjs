@@ -87,6 +87,36 @@ const googleAuth = AUTH_EMULATOR ? null : new GoogleAuth({
 const emailToUid = new Map();
 const unresolved = [];
 
+// How many worked examples to print per step. Samples are picked one per *kind* of change
+// rather than the first N found, so a run that only ever shows "display name stripped" is
+// telling you that really is the only transformation your data hits.
+const SAMPLE_LIMIT = Number(
+  (process.argv.find(a => a.startsWith('--samples=')) || '--samples=3').split('=')[1],
+);
+
+const clone = value => JSON.parse(JSON.stringify(value ?? null));
+
+function printSample(index, label, before, after, changedKeys) {
+  console.log(`\n    example ${index} — ${label}`);
+  console.log(`      before: ${JSON.stringify(before)}`);
+  console.log(`      after:  ${JSON.stringify(after)}`);
+  if (changedKeys) console.log(`      keys touched: ${changedKeys}`);
+}
+
+/** Summarise a before/after pair as -removed / ~changed / +added key names. */
+function keyDelta(before, after) {
+  const keys = new Set([...Object.keys(before || {}), ...Object.keys(after || {})]);
+  const parts = [];
+  for (const key of [...keys].sort()) {
+    const inBefore = before && key in before;
+    const inAfter = after && key in after;
+    if (inBefore && !inAfter) parts.push(`-${key}`);
+    else if (!inBefore && inAfter) parts.push(`+${key}`);
+    else if (JSON.stringify(before[key]) !== JSON.stringify(after[key])) parts.push(`~${key}`);
+  }
+  return parts.length ? parts.join(' ') : '(no change)';
+}
+
 const normalise = email => String(email || '').trim().toLowerCase();
 
 /**
@@ -164,17 +194,21 @@ async function migrateGameEvents() {
   let namesStripped = 0;
   let votesNormalised = 0;
   let staleVoterIds = 0;
+  const samples = new Map();
 
   for (const docSnap of snap.docs) {
     const events = docSnap.data().events || [];
     let changed = false;
 
     const cleaned = events.map(ev => {
+      const before = clone(ev);
+      const kinds = [];
       const next = { ...ev };
 
       if ('userName' in next) {
         delete next.userName;
         namesStripped++;
+        kinds.push('display name stripped');
         changed = true;
       }
 
@@ -184,6 +218,7 @@ async function migrateGameEvents() {
         if (!Array.isArray(next[field])) {
           next[field] = [];
           votesNormalised++;
+          if (!kinds.includes('missing vote arrays added')) kinds.push('missing vote arrays added');
           changed = true;
           continue;
         }
@@ -193,6 +228,7 @@ async function migrateGameEvents() {
         if (filtered.length !== next[field].length) {
           staleVoterIds += next[field].length - filtered.length;
           next[field] = filtered;
+          if (!kinds.includes('device-id votes dropped')) kinds.push('device-id votes dropped');
           changed = true;
         }
       }
@@ -203,8 +239,12 @@ async function migrateGameEvents() {
         next.upvotes = up;
         next.downvotes = down;
         next.votes = up - down;
+        kinds.push('vote counters recomputed');
         changed = true;
       }
+
+      const kind = kinds.join(' + ');
+      if (kind && !samples.has(kind)) samples.set(kind, { before, after: clone(next) });
 
       return next;
     });
@@ -218,6 +258,13 @@ async function migrateGameEvents() {
   console.log(`  display names stripped: ${namesStripped}`);
   console.log(`  vote arrays normalised: ${votesNormalised}`);
   console.log(`  stale device-id votes dropped: ${staleVoterIds}`);
+
+  const shown = [...samples.entries()].slice(0, SAMPLE_LIMIT);
+  shown.forEach(([kind, { before, after }], i) =>
+    printSample(i + 1, kind, before, after, keyDelta(before, after)));
+  if (samples.size > shown.length) {
+    console.log(`\n    (${samples.size - shown.length} further kind(s) of change not shown — raise --samples=N)`);
+  }
 }
 
 // ---------------------------------------------------------------- 2. appConfig/roles
@@ -251,8 +298,11 @@ async function migrateRoles() {
   console.log(`  ${promoted.length} previous trusted/moderator entries -> ${uids.length} uids`);
   console.log(`  dropping ${(data.authors || []).length} author entries (no longer a list)`);
 
+  const after = { moderators: uids };
+  printSample(1, 'appConfig/roles', data, after, keyDelta(data, after));
+
   if (COMMIT) {
-    await ref.set({ moderators: uids });
+    await ref.set(after);
   }
 }
 
@@ -263,6 +313,7 @@ async function migrateTeams() {
   const snap = await db.collection('teams').get();
 
   const resolvedByTeam = new Map();
+  const teamSamples = [];
   let teamsTouched = 0;
 
   for (const docSnap of snap.docs) {
@@ -281,12 +332,20 @@ async function migrateTeams() {
     teamsTouched++;
     console.log(`  ${data.name || docSnap.id}: ${emails.length} email(s) -> ${memberUids.length} uid(s)`);
 
+    if (teamSamples.length < SAMPLE_LIMIT) {
+      const after = { ...data, memberUids };
+      delete after.emails;
+      teamSamples.push({ label: `teams/${docSnap.id}`, before: clone(data), after });
+    }
+
     if (COMMIT) {
       await docSnap.ref.update({ memberUids, emails: FieldValue.delete() });
     }
   }
 
   console.log(`  teams to rewrite: ${teamsTouched}`);
+  teamSamples.forEach((sample, i) =>
+    printSample(i + 1, sample.label, sample.before, sample.after, keyDelta(sample.before, sample.after)));
 
   // The aggregated mirror holds a full copy of every team document, emails included, and is
   // what the app actually reads on load — so it leaks just as loudly as the source.
@@ -303,6 +362,12 @@ async function migrateTeams() {
   });
   const leaking = arr.filter(e => Array.isArray(e.emails) && e.emails.length > 0).length;
   console.log(`  aggregated/teams entries carrying emails: ${leaking} (all cleared)`);
+  if (arr.length) {
+    // The mirror is what the app actually loads, so it is worth seeing separately from the
+    // source documents rather than assumed to follow along.
+    const idx = Math.max(0, arr.findIndex(e => Array.isArray(e.emails) && e.emails.length > 0));
+    printSample(1, 'aggregated/teams entry', arr[idx], patched[idx], keyDelta(arr[idx], patched[idx]));
+  }
 
   if (COMMIT) await aggRef.update({ data: patched });
 }
@@ -326,6 +391,8 @@ async function migrateTeams() {
     [...new Set(unresolved)].forEach(e => console.log(`  ${e}`));
   }
 
+  console.log('\nNote: the examples above print the very names and addresses being removed,');
+  console.log('so treat this output as private — do not paste it into an issue or a PR.');
   console.log(COMMIT ? '\nDone.' : '\nDry run complete. Re-run with --commit to apply.');
   process.exit(0);
 })().catch(err => {

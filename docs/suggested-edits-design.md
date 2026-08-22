@@ -470,6 +470,10 @@ works for signed-in users, but nobody else can vote or suggest.
    without a key prints these steps.
 3. **Run the migration:**
    `node migrate_privacy.cjs` (dry run), then `node migrate_privacy.cjs --commit`.
+   The dry run prints a worked before/after for each step, picked one per *kind* of change
+   rather than the first few found — so if only "display name stripped" ever appears, that
+   really is the only transformation your data hits. `--samples=N` widens it. That output
+   contains the very names and addresses being removed, so keep it local.
    It strips `userName` from every event, normalises the vote arrays the new rules read,
    rewrites `appConfig/roles` to uids, and converts `teams.emails` to `memberUids` in both the
    team docs and the `aggregated/teams` mirror. Anyone who had access but never signed in
