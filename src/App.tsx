@@ -5836,9 +5836,9 @@ export default function App() {
   // How much chrome the events feed shows. Persisted locally only — the tracker view doesn't
   // participate in the app's URL deep-linking today, so this stays out of that system rather
   // than bolting a one-off param onto it.
-  const [eventDensity, setEventDensity] = useState<'full' | 'compact' | 'minimal'>(() => {
+  const [eventDensity, setEventDensity] = useState<'full' | 'compact'>(() => {
     const stored = localStorage.getItem('qr_event_density');
-    return stored === 'compact' || stored === 'minimal' ? stored : 'full';
+    return stored === 'compact' ? stored : 'full';
   });
   useEffect(() => { localStorage.setItem('qr_event_density', eventDensity); }, [eventDensity]);
 
@@ -8907,7 +8907,7 @@ export default function App() {
               </button>
             )}
             <div className="flex items-center gap-3">
-              {voterId && (
+              {isSignedIn && voterId && (
                 <button
                   onClick={handleCopyOwnId}
                   title="Your ID. Click to copy — share it with a moderator if you need help with something you recorded."
@@ -9017,7 +9017,7 @@ export default function App() {
 
                 <div className="border-t border-gray-100 mt-2 pt-2 px-4">
                   <div className="flex items-center justify-between gap-2">
-                    {voterId && (
+                    {isSignedIn && voterId && (
                       <button
                         onClick={handleCopyOwnId}
                         className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-full border border-gray-200 min-w-0"
@@ -9966,12 +9966,11 @@ export default function App() {
                           {([
                             { key: 'full' as const, icon: <Eye className="w-3 h-3" />, label: 'Full' },
                             { key: 'compact' as const, icon: <EyeOff className="w-3 h-3" />, label: 'Compact' },
-                            { key: 'minimal' as const, icon: <ChevronDown className="w-3 h-3 rotate-90" />, label: 'Minimal' },
                           ]).map(opt => (
                             <button
                               key={opt.key}
                               onClick={() => setEventDensity(opt.key)}
-                              title={`${opt.label} events — ${opt.key === 'full' ? 'everything shown, including the voting/editing footer' : opt.key === 'compact' ? 'same as Full, without the voting/editing footer' : 'one line per event, no actions'}`}
+                              title={`${opt.label} events — ${opt.key === 'full' ? 'everything shown, including the voting/editing footer' : 'same as Full, without the voting/editing footer'}`}
                               className={cn('flex-1 flex items-center justify-center gap-1 py-1 rounded text-[9px] font-bold uppercase tracking-wider transition-all', eventDensity === opt.key ? 'bg-gray-900 text-white' : 'text-gray-400 hover:text-gray-700')}
                             >
                               {opt.icon}
@@ -10384,27 +10383,6 @@ export default function App() {
 
                           const nestedAssist = event.type === 'goal' ? nestedAssistByGoalId.get(event.id) : undefined;
                           const hasOpenSuggestions = suggestions.some(s => s.targetEventId === event.id && s.status === 'open');
-
-                          if (eventDensity === 'minimal') {
-                            const p = event.playerId ? allPlayers.find(pl => pl.id === event.playerId) : undefined;
-                            const t = event.teamId ? teams.find(tm => tm.id === event.teamId) : undefined;
-                            const cfg = EVENT_CONFIG[event.type as EventType];
-                            return (
-                              <button
-                                key={event.id}
-                                onClick={() => player?.seekTo(event.videoTime)}
-                                className={cn(
-                                  "w-full flex items-center gap-2 py-1 px-2 rounded-lg hover:bg-gray-50 transition-colors text-left text-xs",
-                                  event.status === 'rejected' && "opacity-40",
-                                )}
-                              >
-                                <span className="font-mono text-gray-400 w-10 shrink-0">{formatTime(event.videoTime)}</span>
-                                <span className="font-bold uppercase tracking-tight text-[10px] text-gray-500 w-16 shrink-0 truncate">{cfg?.label || event.type}</span>
-                                <span className="truncate text-gray-700">{p ? `${p.firstName.charAt(0)}. ${p.lastName}` : t ? (t.nickname || t.name) : ''}</span>
-                                {hasOpenSuggestions && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />}
-                              </button>
-                            );
-                          }
 
                           return (
                             <div

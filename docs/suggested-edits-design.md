@@ -427,7 +427,10 @@ A density control so the events feed can shed the voting and suggesting chrome e
 |---|---|
 | **Full** | The whole card, including a footer row: verify, net score, upvote/downvote (clickable, doubling as the count display), and — right-aligned — edit, delete, suggest a fix, suggest a removal. |
 | **Compact** | Identical to Full, minus the footer. One conditional render (`{eventDensity !== 'compact' && <footer/>}`), not a second layout to maintain. |
-| **Minimal** | One line: `12:34 · GOAL · J. Smith`. No indicators, no actions. |
+
+A third "Minimal" mode (one line, no icons, no player/team color) was cut — it collapsed too
+much of the card to earn a place next to just two options, and nothing in it that Compact
+doesn't already cover turned out to matter in practice.
 
 Every editing entry point — verify, vote, edit, delete, suggest, suggest-delete — lives in that
 one footer now. It used to be split: edit/delete sat in the header next to Seek, suggest/
