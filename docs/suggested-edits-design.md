@@ -469,12 +469,15 @@ density modes (§11.3).
 - **Density persists to `localStorage` only, not the URL.** The tracker view doesn't
   participate in the app's hash-route deep-linking today (unlike the stats view), so bolting
   one param onto it would have been a one-off rather than "alongside the existing sync".
-- **The suggestions `status == 'open'` query needs an explicit Firestore index** — a
-  `collectionGroup` query with a `where` needs a collection-group-scoped index, unlike an
-  unfiltered `collectionGroup` read. Added via `firestore.indexes.json` (a new file) and
-  wired into `firebase.json`. Deploy with `firebase deploy --only firestore:indexes`. The
-  local emulator does not enforce this requirement the way production does, so this could
-  only be checked against documented Firestore behavior, not verified end-to-end locally.
+- **The suggestions `status == 'open'` query needed a manual collection-group index in
+  Standard Edition Firestore — this project runs Enterprise Edition, which auto-indexes for
+  collection-group scope and rejects manual field-index overrides entirely** (`Enterprise
+  Edition does not support updating field index configuration`, HTTP 400 on deploy). The
+  `firestore.indexes.json` `fieldOverrides` entry was removed; the file stays present but
+  empty so `firebase deploy --only firestore:indexes` remains a safe no-op rather than a
+  landmine on the next deploy. Confirmed read-only against production, signed in
+  anonymously exactly as the app does: the exact `collectionGroup('suggestions').where('status',
+  '==', 'open')` query the activity board runs returns successfully with no explicit index.
 
 ## 14. Open questions — resolved
 
