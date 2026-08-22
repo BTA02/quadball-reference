@@ -413,14 +413,27 @@ A density control so the events feed can shed the voting and suggesting chrome e
 
 | Mode | Shows |
 |---|---|
-| **Full** | Everything — votes, suggest, verify shield, seek, suggestion cards |
-| **Compact** | A fixed, short row — icon, time, label, player/team, verified shield, an amber dot for open suggestions. Tap to seek. No vote or suggest actions, and nothing expands on hover — this mode is for watching the feed while a video plays, not for moderating from it. |
+| **Full** | The whole card, including a footer row: verify, net score, upvote/downvote (clickable, doubling as the count display), and — right-aligned — edit, delete, suggest a fix, suggest a removal. |
+| **Compact** | Identical to Full, minus the footer. One conditional render (`{eventDensity !== 'compact' && <footer/>}`), not a second layout to maintain. |
 | **Minimal** | One line: `12:34 · GOAL · J. Smith`. No indicators, no actions. |
 
-Compact deliberately does **not** reveal its actions on hover — an earlier pass hid them behind
-`opacity-0 group-hover:opacity-100`, which kept the full card's height reserved underneath
-(opacity doesn't collapse layout) and defeated the point of a shrunk row. Compact is now a
-dedicated, shorter render path, not the Full card with chrome dimmed.
+Every editing entry point — verify, vote, edit, delete, suggest, suggest-delete — lives in that
+one footer now. It used to be split: edit/delete sat in the header next to Seek, suggest/
+suggest-delete sat beside them, and voting was its own row below. Consolidating means Compact
+is exactly one `{eventDensity !== 'compact' && (...)}` around a single div, rather than a
+parallel row-shaped clone of Full that has to be kept in sync by hand.
+
+Two earlier passes at Compact are worth naming so they aren't re-tried: hiding the footer with
+`opacity-0 group-hover:opacity-100` kept its height reserved (opacity doesn't collapse layout)
+and brought everything back on hover, which the second pass fixed by building Compact as an
+entirely separate, shorter row — correct on height, but a second card layout to maintain in
+parallel with Full, and it dropped editing access from Compact rather than the vote/verify
+chrome specifically. The one-conditional version above is what actually matches "same as Full,
+minus the voting footer."
+
+**Vote counters are now the vote buttons.** `▲ 4` / `▼ 1` each toggle your own vote directly —
+no separate button pair, no duplicate count-only display. Selected state (you voted this way)
+is the same amber-family highlight the suggestion vote buttons use, for visual consistency.
 
 - Persist in `localStorage` and mirror into the URL params alongside the existing
   `statsFilter` sync, so a shared link preserves density.
