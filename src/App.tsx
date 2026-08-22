@@ -9089,27 +9089,25 @@ export default function App() {
               <h2 className="text-3xl font-extrabold border-b pb-4 text-gray-900 mb-6">How to Watch a Game</h2>
               <div className="space-y-4 text-gray-700 leading-relaxed text-sm">
                 <p>While watching a video, <strong>Events</strong> show the events that happen during the game. For spectators, that's where they can upvote and downvote events. For signed-in users, they will have a <strong>Record</strong> tab where they can (optionally) record the various game events that happen. Adding events to the proper timestamp of the video will ensure stats are calculated accurately.</p>
-                <p>Anyone can add any amount of events, and they will be accessible globally<span className="text-red-500">*</span>. It isn't important to get everything done, just that any event added is accurate.</p>
+                <p>Anyone can add any amount of events, and they will be accessible globally. It isn't important to get everything done, just that any event added is accurate.</p>
                 <p>The <strong>GameCast</strong> tab shows the various events in a more condensed format. The <strong>Players</strong> tab shows the players on each team. Each player's basic performance is shown under their name.</p>
                 <p>For authors, the Players tab also allows for a different way to add stats. Clicking on a name pops up a quick access to recording an event. Dragging and dropping allows for substitutions as well.</p>
               </div>
-              <p className="italic text-xs text-gray-500 mt-4"><span className="text-red-500">*</span>current season stats are hidden on aggregate tab</p>
             </div>
 
             <div className="mb-12">
               <h2 className="text-3xl font-extrabold border-b pb-4 text-gray-900 mb-6">Suggesting an Edit</h2>
               <div className="space-y-4 text-gray-700 leading-relaxed text-sm">
-                <p>Every event has two extra icons next to the up/down vote buttons: a speech-bubble icon to <strong>suggest a fix</strong>, and a circle-slash icon to <strong>suggest a removal</strong>. Both are open to everyone — signed in or not.</p>
-                <p>A downvote is a quick "something's off here." A suggestion is the fix itself: what the event should actually say. A removal suggestion asks you to pick the closest reason from a short list — there's no open text box anywhere in this feature, on purpose.</p>
-                <p>There's also a "+" button near the top of the Events tab to <strong>suggest a missing event</strong> — a goal, assist, or anything else that wasn't tracked. Team and player choices are limited to whoever's actually in the game.</p>
-                <p>Suggestions show up as an amber-bordered card under the event they target, with a count you can expand to see what's proposed and vote on it. Nothing changes until a moderator accepts it — accepting resets that event's votes, since the content just changed and old votes no longer apply to what's on screen.</p>
+                <p>Every event has two extra icons next to the up/down vote buttons: a speech-bubble icon to <strong>suggest a fix</strong>, and a circle-slash icon to <strong>suggest a removal</strong>. Both are open to everyone, signed in or not.</p>
+                <p>A downvote is a quick "something's off here." A suggestion is the fix itself: what the event should actually say. A removal suggestion asks you to pick the closest reason from a short list.</p>
+                <p>There's also a "+" button near the top of the Events tab to <strong>suggest a missing event</strong>: a goal, assist, or anything else that wasn't tracked. Team and player choices are limited to whoever's actually in the game.</p>
               </div>
             </div>
 
             <div className="mb-12">
               <h2 className="text-3xl font-extrabold border-b pb-4 text-gray-900 mb-6">Become an Author</h2>
               <div className="space-y-4 text-gray-700 leading-relaxed text-sm">
-                <p>Just... sign in. That's it. Any stat you author becomes public<span className="text-red-500">*</span>. They get aggregated on the "pending" tab, but will move to verified after receiving enough votes.</p>
+                <p>Just... sign in. That's it. Any stat you author becomes public. They get aggregated on the "pending" tab, but will move to verified after receiving enough votes.</p>
               </div>
             </div>
 
