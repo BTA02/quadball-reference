@@ -70,7 +70,8 @@ import {
   arrayUnion,
   arrayRemove
 } from 'firebase/firestore';
-import { auth, db, signIn, logOut, handleFirestoreError, OperationType } from './lib/firebase';
+import { auth, db, signIn, logOut, ensureAnonymousSession, handleFirestoreError, OperationType } from './lib/firebase';
+import { userLabel } from './lib/userLabel';
 import { cn } from './lib/utils';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import QuadballStatsView from './components/QuadballStatsView';
@@ -141,7 +142,12 @@ interface Team {
   colorPrimary?: string; // legacy
   colorDark?: string; // legacy
   colorLight?: string; // legacy
+  /**
+   * @deprecated Team access used to be a list of email addresses on a world-readable doc.
+   * Replaced by `memberUids`; the migration clears this.
+   */
   emails?: string[];
+  memberUids?: string[];
   leagueId?: string;
   division?: string;
   [k: string]: any;
@@ -199,12 +205,21 @@ interface RosterPlayer {
   createdAt: any;
 }
 
+// Four tiers, in ascending order of power. Only 'moderator' needs a stored list — the rest
+// fall out of the auth state. See docs/suggested-edits-design.md §5.
+type UserRole = 'user' | 'author' | 'moderator' | 'admin';
+
 interface GameEvent {
   id: string;
   videoId: string; // Firestore ID of the video
   gameId: string; // Unique ID for the game
   userId: string;
-  userName: string;
+  /**
+   * @deprecated Real display names used to be denormalised into every event, in a
+   * world-readable doc. The migration strips them; render `userLabel(userId)` instead.
+   * Kept optional only so pre-migration data still parses.
+   */
+  userName?: string;
   type: EventType;
   videoTime: number; // seconds
   gameTime?: number; // inferred real-world stop time
@@ -832,7 +847,7 @@ interface ManagementViewProps {
   onAddPlayerToRoster: (rosterId: string, playerId: string, number: string) => void;
   onRemovePlayerFromRoster: (rosterId: string, playerId: string) => void;
   onCreateRoster: (teamId: string, seasonId: string) => Promise<string | void | null>;
-  onEditTeamEmails: (id: string, emails: string[]) => void;
+  onEditTeamEmails: (id: string, memberUids: string[]) => void;
   onDeleteTeam: (id: string) => void;
   onDeleteGame: (id: string, tag?: string | null) => void;
   onDeleteVideo: (id: string) => void;
@@ -845,10 +860,10 @@ interface ManagementViewProps {
   onRunMigration: () => Promise<void>;
   onBackfillAuthorId?: () => Promise<number | undefined>;
   isAdmin?: boolean;
-  onAddRole?: (email: string, tier: 'authors' | 'trusted' | 'moderators') => Promise<void>;
-  onRemoveRole?: (email: string, tier: 'authors' | 'trusted' | 'moderators') => Promise<void>;
+  onAddRole?: (uid: string) => Promise<void>;
+  onRemoveRole?: (uid: string) => Promise<void>;
   onRefreshData?: () => void;
-  userRoles?: { authors: string[], trusted: string[], moderators: string[] };
+  moderatorUids?: string[];
   activeTab?: 'leagues' | 'tournaments' | 'search' | 'teams' | 'seasons' | 'players' | 'rosters' | 'games' | 'videos' | 'roles' | 'events' | 'import' | 'merge';
   setActiveTab?: (tab: 'leagues' | 'tournaments' | 'search' | 'teams' | 'seasons' | 'players' | 'rosters' | 'games' | 'videos' | 'roles' | 'events' | 'import' | 'merge') => void;
 }
@@ -1083,7 +1098,7 @@ function TeamEditRow({ team: t, onDeleteTeam, onRefreshData }: {
   const [colorPrimaryDark, setColorPrimaryDark] = useState(t.colorPrimaryDark || t.colorPrimary || '#dc2626');
   const [colorAccent, setColorAccent] = useState(t.colorAccent || t.colorDark || '#000000');
   const [colorPrimaryLight, setColorPrimaryLight] = useState(t.colorPrimaryLight || t.colorLight || '#ffffff');
-  const [emails, setEmails] = useState((t.emails || []).join(', '));
+  const [memberUids, setMemberUids] = useState((t.memberUids || []).join(', '));
   const [saving, setSaving] = useState(false);
 
   const hasChanges =
@@ -1092,13 +1107,13 @@ function TeamEditRow({ team: t, onDeleteTeam, onRefreshData }: {
     colorPrimaryDark !== (t.colorPrimaryDark || t.colorPrimary || '#dc2626') ||
     colorAccent !== (t.colorAccent || t.colorDark || '#000000') ||
     colorPrimaryLight !== (t.colorPrimaryLight || t.colorLight || '#ffffff') ||
-    emails !== (t.emails || []).join(', ');
+    memberUids !== (t.memberUids || []).join(', ');
 
   const handleSave = async () => {
     setSaving(true);
     try {
-      const emailList = emails.split(',').map(e => e.trim()).filter(e => e);
-      const updates: any = { name, nickname: nickname || null, colorPrimaryDark, colorAccent, colorPrimaryLight, emails: emailList };
+      const memberList = memberUids.split(',').map(u => u.trim()).filter(u => u);
+      const updates: any = { name, nickname: nickname || null, colorPrimaryDark, colorAccent, colorPrimaryLight, memberUids: memberList };
 
       await updateDoc(doc(db, 'teams', t.id), updates);
 
@@ -1172,8 +1187,13 @@ function TeamEditRow({ team: t, onDeleteTeam, onRefreshData }: {
         </div>
       </div>
       <div className="flex flex-col gap-1">
-        <label className="text-[10px] uppercase font-bold text-gray-400">Admin Emails <span className="text-gray-300 normal-case font-normal">(comma-separated)</span></label>
-        <input type="text" placeholder="coach@team.com, captain@team.com" value={emails} onChange={(e) => setEmails(e.target.value)} className={cn("bg-white border rounded p-1.5 text-xs outline-none focus:border-red-500 font-medium w-full", emails !== (t.emails || []).join(', ') ? 'border-amber-400 bg-amber-50/30' : 'border-gray-200')} />
+        <label className="text-[10px] uppercase font-bold text-gray-400">Team Managers <span className="text-gray-300 normal-case font-normal">(user IDs, comma-separated)</span></label>
+        {/* User IDs rather than emails: this doc is world-readable, so addresses here would be
+            public. A user copies their own ID from the chip in the site header. */}
+        <input type="text" placeholder="Paste user IDs" value={memberUids} onChange={(e) => setMemberUids(e.target.value)} className={cn("bg-white border rounded p-1.5 text-xs outline-none focus:border-red-500 font-mono w-full", memberUids !== (t.memberUids || []).join(', ') ? 'border-amber-400 bg-amber-50/30' : 'border-gray-200')} />
+        {(t.memberUids || []).length > 0 && (
+          <p className="text-[10px] text-gray-400">{(t.memberUids || []).map((u: string) => userLabel(u)).join(', ')}</p>
+        )}
       </div>
     </div>
   );
@@ -2435,7 +2455,7 @@ function ManagementView({
   onRunMigration,
   onBackfillAuthorId,
   isAdmin,
-  userRoles,
+  moderatorUids,
   onAddRole,
   onRemoveRole,
   activeTab: activeTabProp,
@@ -2998,7 +3018,6 @@ function ManagementView({
                                   position: r.position || undefined,
                                   status: 'active',
                                   userId: 'local_sim',
-                                  userName: 'Simulation',
                                   createdAt: new Date().toISOString(),
                                   votes: 0,
                                 } as unknown as GameEvent;
@@ -3164,7 +3183,7 @@ function ManagementView({
                                     if (!eventsByGameId.has(ev.gameId)) {
                                       eventsByGameId.set(ev.gameId, []);
                                     }
-                                    const clean = JSON.parse(JSON.stringify({ ...ev, userId: 'admin', userName: 'Admin' }));
+                                    const clean = JSON.parse(JSON.stringify({ ...ev, userId: 'admin' }));
                                     eventsByGameId.get(ev.gameId)!.push(clean);
                                   }
 
@@ -3765,7 +3784,7 @@ function ManagementView({
                                   const eventId = `${vId}_${gId}_${normalizedType}_${vTime}_${pId || 'no-player'}`.replace(/[^a-zA-Z0-9]/g, '_');
                                   const eventData = {
                                     id: eventId, videoId: vId, gameId: gId,
-                                    userId: 'system-import', userName: 'System Import',
+                                    userId: 'system-import',
                                     type: normalizedType, videoTime: vTime,
                                     createdAt: new Date().toISOString(),
                                     votes: 0, upvotes: 0, downvotes: 0,
@@ -4162,7 +4181,7 @@ function ManagementView({
                                 const eventId = `${vId}_${gId}_${normalizedType}_${vTime}_${pId || 'no-player'}`.replace(/[^a-zA-Z0-9]/g, '_');
                                 const eventData = {
                                   id: eventId, videoId: vId, gameId: gId,
-                                  userId: 'system-import', userName: 'System Import',
+                                  userId: 'system-import',
                                   type: normalizedType, videoTime: vTime,
                                   createdAt: new Date().toISOString(),
                                   votes: 0, upvotes: 0, downvotes: 0,
@@ -4453,50 +4472,61 @@ function ManagementView({
         ) : activeTab === 'roles' ? (
           <div className="lg:col-span-3 space-y-6">
             <div className="bg-gray-50 border border-gray-200 rounded-2xl p-8">
-              <h3 className="text-xl font-bold mb-4">Role Management</h3>
-              <p className="text-gray-500 mb-8">Add emails to different permission tiers. Trusted users have admin rights. Authors have write access to track events.</p>
+              <h3 className="text-xl font-bold mb-4">Moderators</h3>
+              <p className="text-gray-500 mb-2">
+                Moderators get the Create tab and are the only people who can verify or unverify
+                an event, or accept a suggested edit.
+              </p>
+              <p className="text-gray-500 mb-8">
+                Everyone else falls out of how they signed in: a Google account can record events
+                on a game, and an anonymous visitor can suggest edits and vote. There is no list
+                to maintain for either.
+              </p>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                {([
-                  { title: 'Admins (Full Access)', key: 'trusted' as const, items: userRoles?.trusted || [], color: 'bg-red-600' },
-                  { title: 'Moderators (Create Access)', key: 'moderators' as const, items: userRoles?.moderators || [], color: 'bg-amber-500' },
-                  { title: 'Data Authors', key: 'authors' as const, items: userRoles?.authors || [], color: 'bg-blue-500' }
-                ]).map(block => (
-                  <div key={block.title} className="bg-white p-6 border rounded-xl flex flex-col h-96 shadow-sm">
-                    <div className="flex items-center gap-2 border-b pb-3 mb-1">
-                      <span className={`w-2 h-2 rounded-full ${block.color}`} />
-                      <h4 className="font-bold text-gray-800 text-lg">{block.title}</h4>
+              <div className="bg-white p-6 border rounded-xl flex flex-col max-w-2xl shadow-sm">
+                <div className="flex items-center gap-2 border-b pb-3 mb-1">
+                  <span className="w-2 h-2 rounded-full bg-amber-500" />
+                  <h4 className="font-bold text-gray-800 text-lg">Moderator access</h4>
+                </div>
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const data = new FormData(e.target as HTMLFormElement);
+                    const newUid = data.get('uid')?.toString().trim();
+                    if (newUid && onAddRole) {
+                      onAddRole(newUid);
+                      (e.target as HTMLFormElement).reset();
+                    }
+                  }}
+                  className="flex gap-2 mt-4"
+                >
+                  <input name="uid" type="text" placeholder="Paste a user ID" required className="flex-1 px-3 py-2 border rounded-lg text-sm font-mono" />
+                  <button type="submit" className="px-4 py-2 bg-gray-900 text-white font-bold rounded-lg text-sm hover:bg-black transition-colors">Add</button>
+                </form>
+                {/* Emails are deliberately not accepted here — nothing in this app maps a
+                    person to an address. A user reads their own ID off the header chip, or
+                    you promote them straight from the leaderboard. */}
+                <p className="text-[11px] text-gray-400 mt-2">
+                  A user can copy their own ID from the chip in the header. You can also promote
+                  someone directly from the leaderboard on the Create tab. Granting and revoking
+                  moderator access is admin-only — moderators cannot promote each other.
+                </p>
+                <div className="flex-1 overflow-y-auto mt-4 divide-y divide-gray-100">
+                  {(moderatorUids || []).map(uid => (
+                    <div key={uid} className="py-3 flex justify-between items-center group gap-4">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-gray-800">{userLabel(uid)}</p>
+                        <p className="text-[10px] font-mono text-gray-400 truncate">{uid}</p>
+                      </div>
+                      <button onClick={() => {
+                        if (confirm(`Remove moderator access for ${userLabel(uid)}?`)) onRemoveRole?.(uid);
+                      }} className="p-2 text-red-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     </div>
-                    <form
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        const data = new FormData(e.target as HTMLFormElement);
-                        const newEmail = data.get('email')?.toString().trim();
-                        if (newEmail && onAddRole) {
-                          onAddRole(newEmail, block.key);
-                          (e.target as HTMLFormElement).reset();
-                        }
-                      }}
-                      className="flex gap-2 mt-4"
-                    >
-                      <input name="email" type="email" placeholder="user@gmail.com" required className="flex-1 px-3 py-2 border rounded-lg text-sm" />
-                      <button type="submit" className="px-4 py-2 bg-gray-900 text-white font-bold rounded-lg text-sm hover:bg-black transition-colors">Add</button>
-                    </form>
-                    <div className="flex-1 overflow-y-auto mt-4 divide-y divide-gray-100">
-                      {block.items.map(email => (
-                        <div key={email} className="py-3 flex justify-between items-center group">
-                          <span className="text-sm font-medium text-gray-600">{email}</span>
-                          <button onClick={() => {
-                            if (confirm('Remove this user?')) onRemoveRole?.(email, block.key);
-                          }} className="p-2 text-red-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      ))}
-                      {block.items.length === 0 && <div className="text-gray-400 text-sm italic py-4">No users found.</div>}
-                    </div>
-                  </div>
-                ))}
+                  ))}
+                  {(moderatorUids || []).length === 0 && <div className="text-gray-400 text-sm italic py-4">No moderators yet.</div>}
+                </div>
               </div>
             </div>
           </div>
@@ -5183,12 +5213,18 @@ const getPlayerShortName = (p: Player | undefined | null, rosterPool: { player?:
   return `${p.firstName.charAt(0)}. ${p.lastName}`;
 };
 
-function LeaderboardView({ events }: { events: any[] }) {
+function LeaderboardView({ events, moderatorUids = [], onMakeModerator }: {
+  events: any[];
+  moderatorUids?: string[];
+  // Only ever passed for the admin. Granting moderator access is an admin-only action, and a
+  // moderator viewing this table sees the roles but no way to change them.
+  onMakeModerator?: (uid: string) => void;
+}) {
   const leaderboardStats = useMemo(() => {
-    const statsByUser = new Map<string, { userName: string; totalEvents: number; verifiedEvents: number; rejectedEvents: number; upvotes: number; downvotes: number }>();
+    const statsByUser = new Map<string, { userId: string; totalEvents: number; verifiedEvents: number; rejectedEvents: number; upvotes: number; downvotes: number }>();
     events.forEach(e => {
       if (!e.userId) return;
-      const u = statsByUser.get(e.userId) || { userName: e.userName || 'Anonymous', totalEvents: 0, verifiedEvents: 0, rejectedEvents: 0, upvotes: 0, downvotes: 0 };
+      const u = statsByUser.get(e.userId) || { userId: e.userId, totalEvents: 0, verifiedEvents: 0, rejectedEvents: 0, upvotes: 0, downvotes: 0 };
       u.totalEvents++;
       if (e.status === 'verified') u.verifiedEvents++;
       if (e.status === 'rejected') u.rejectedEvents++;
@@ -5212,34 +5248,64 @@ function LeaderboardView({ events }: { events: any[] }) {
         <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
           <Trophy className="w-5 h-5 text-amber-500" /> Community Leaderboard
         </h3>
-        <p className="text-sm text-gray-500 mt-1">Ranking by verified events contributed</p>
+        <p className="text-sm text-gray-500 mt-1">
+          Ranking by verified events contributed. This is the one place a contributor's ID is
+          visible, so it doubles as the way to hand someone moderator access.
+        </p>
+        <p className="text-xs text-gray-400 mt-1">
+          {onMakeModerator
+            ? 'Only you, as the admin, can grant moderator access.'
+            : 'Only the admin can grant moderator access.'}
+        </p>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-left border-collapse">
           <thead>
             <tr className="bg-gray-50/80 border-b border-gray-200 text-xs uppercase tracking-wider text-gray-500">
               <th className="px-6 py-3 font-bold">Rank</th>
-              <th className="px-6 py-3 font-bold">User Name</th>
+              <th className="px-6 py-3 font-bold">Contributor</th>
               <th className="px-6 py-3 font-bold text-right">Verified</th>
               <th className="px-6 py-3 font-bold text-right">Total Submissions</th>
               <th className="px-6 py-3 font-bold text-right">Accuracy</th>
               <th className="px-6 py-3 font-bold text-right">Net Upvotes</th>
+              <th className="px-6 py-3 font-bold text-right">Role</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
             {leaderboardStats.map((u, i) => (
-              <tr key={u.userName + i} className="hover:bg-gray-50/50 transition-colors">
+              <tr key={u.userId} className="hover:bg-gray-50/50 transition-colors">
                 <td className="px-6 py-4 font-bold text-gray-900">
                   {i === 0 ? <span className="text-amber-500 flex items-center gap-1"><Trophy className="w-4 h-4" /> 1</span> : 
                    i === 1 ? <span className="text-gray-400 flex items-center gap-1"><Trophy className="w-4 h-4" /> 2</span> :
                    i === 2 ? <span className="text-amber-700 flex items-center gap-1"><Trophy className="w-4 h-4" /> 3</span> :
                    <span className="text-gray-500">{i + 1}</span>}
                 </td>
-                <td className="px-6 py-4 font-semibold text-gray-900">{u.userName}</td>
+                <td className="px-6 py-4">
+                  <p className="font-semibold text-gray-900">{userLabel(u.userId)}</p>
+                  <p className="text-[10px] font-mono text-gray-400">{u.userId}</p>
+                </td>
                 <td className="px-6 py-4 text-right font-bold text-emerald-600">{u.verifiedEvents}</td>
                 <td className="px-6 py-4 text-right text-gray-600">{u.totalEvents}</td>
                 <td className="px-6 py-4 text-right text-gray-600">{u.accuracy.toFixed(1)}%</td>
                 <td className="px-6 py-4 text-right font-medium text-amber-600">{u.netUpvotes > 0 ? `+${u.netUpvotes}` : u.netUpvotes}</td>
+                <td className="px-6 py-4 text-right">
+                  {moderatorUids.includes(u.userId) ? (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-amber-600">
+                      <ShieldCheck className="w-3.5 h-3.5" /> Moderator
+                    </span>
+                  ) : onMakeModerator ? (
+                    <button
+                      onClick={() => {
+                        if (confirm(`Give ${userLabel(u.userId)} moderator access?`)) onMakeModerator(u.userId);
+                      }}
+                      className="px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider border border-gray-200 text-gray-500 hover:text-amber-600 hover:border-amber-500 transition-colors"
+                    >
+                      Make moderator
+                    </button>
+                  ) : (
+                    <span className="text-[10px] uppercase tracking-wider text-gray-300">Author</span>
+                  )}
+                </td>
               </tr>
             ))}
             {leaderboardStats.length === 0 && (
@@ -5255,14 +5321,15 @@ function LeaderboardView({ events }: { events: any[] }) {
 }
 
 function CreateView({
-  teams, seasons, players, leagues, tournaments, events,
+  teams, seasons, players, leagues, tournaments, events, games, onOpenGame,
+  moderatorUids, onMakeModerator,
   searchQuery, setSearchQuery, newVideoData, setNewVideoData, isAddingGame, setIsAddingGame, onAddGame,
   onAddTeam, onAddPlayer, onAddPlayerToRoster, onRemovePlayerFromRoster,
   onCreateRoster, onDeleteRoster, onEditPlayer, onDeletePlayer,
   activeTab: activeTabProp,
   setActiveTab: setActiveTabProp
 }: any) {
-  const [localActiveTab, setLocalActiveTab] = useState<'rosters' | 'teams' | 'players' | 'games' | 'leaderboard'>('rosters');
+  const [localActiveTab, setLocalActiveTab] = useState<'rosters' | 'teams' | 'players' | 'games' | 'activity'>('rosters');
   const activeTab = activeTabProp || localActiveTab;
   const setActiveTab = setActiveTabProp || setLocalActiveTab;
   const [selectedRosterId, setSelectedRosterId] = useState('');
@@ -5327,7 +5394,7 @@ function CreateView({
       <div className="flex items-center justify-between">
         <h2 className="text-3xl font-bold">Moderator - Creation Tools</h2>
         <div data-tour="create-tabs" className="flex bg-gray-50 p-1 rounded-xl border border-gray-200">
-          {(['rosters', 'teams', 'players', 'games', 'leaderboard'] as const).map(tab => (
+          {(['rosters', 'teams', 'players', 'games', 'activity'] as const).map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -5342,8 +5409,11 @@ function CreateView({
         </div>
       </div>
 
-      {activeTab === 'leaderboard' ? (
-        <LeaderboardView events={events} />
+      {activeTab === 'activity' ? (
+        <div className="space-y-8">
+          <RecentEventsView games={games} teams={teams} seasons={seasons} onOpenGame={onOpenGame} />
+          <LeaderboardView events={events} moderatorUids={moderatorUids} onMakeModerator={onMakeModerator} />
+        </div>
       ) : activeTab === 'rosters' ? (
         <UnifiedRosterEditor
           teams={teams}
@@ -5769,7 +5839,7 @@ export default function App() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
   const mobileMenuRef = useRef<HTMLDivElement>(null);
   const [managementActiveTab, setManagementActiveTab] = useState<'leagues' | 'tournaments' | 'search' | 'teams' | 'seasons' | 'players' | 'rosters' | 'games' | 'videos' | 'roles' | 'events' | 'import' | 'merge'>('teams');
-  const [createActiveTab, setCreateActiveTab] = useState<'rosters' | 'teams' | 'players' | 'games' | 'leaderboard'>('rosters');
+  const [createActiveTab, setCreateActiveTab] = useState<'rosters' | 'teams' | 'players' | 'games' | 'activity'>('rosters');
   const [beaterStatsTab, setBeaterStatsTab] = useState<'pairs' | 'solo' | 'team'>('pairs');
   const [activePlayerId, setActivePlayerId] = useState<string | null>(initialRoute.playerId);
   const [activeTeamId, setActiveTeamId] = useState<string | null>(initialRoute.teamId);
@@ -5930,32 +6000,43 @@ export default function App() {
   };
   const [allEvents, setAllEvents] = useState<GameEvent[]>([]);
   const ADMIN_EMAIL = 'andrew.axtell@gmail.com';
-  const isAdmin = user?.email === ADMIN_EMAIL;
 
-  // Persistent anonymous device ID for tracking votes without login
-  const [deviceId] = useState(() => {
-    const stored = localStorage.getItem('qr_device_id');
-    if (stored) return stored;
-    const id = 'anon_' + crypto.randomUUID();
-    localStorage.setItem('qr_device_id', id);
-    return id;
-  });
-  const voterId = user?.uid || deviceId;
-  const [simulateRole, setSimulateRole] = useState<'voter' | 'author' | 'moderator' | 'trusted'>('trusted');
-  const [userRoles, setUserRoles] = useState<{ authors: string[]; trusted: string[]; moderators: string[] }>({ authors: [], trusted: [], moderators: [] });
-  // Effective role: admin can simulate any role; otherwise check config assignments
-  const effectiveRole = isAdmin ? simulateRole
-    : userRoles.trusted.includes(user?.email || '') ? 'trusted'
-    : userRoles.moderators.includes(user?.email || '') ? 'moderator'
-    : user ? 'author' : 'voter';
+  // A Google account is the only real identity. Everyone else is on a silent anonymous
+  // session and counts as a plain 'user'.
+  const isSignedIn = !!user && !user.isAnonymous;
+  // The account as it actually is, ignoring any simulated role. Only this may switch roles,
+  // otherwise simulating 'user' would hide the control needed to switch back.
+  const isAdminUser = isSignedIn && user.email === ADMIN_EMAIL;
 
-  // Protect /manage route
+  // Every visitor has a uid now, so votes and suggestions key straight to it. This replaces a
+  // localStorage device id whose writes were always rejected by the gameEvents update rules.
+  const voterId = user?.uid || '';
+
+  const [simulateRole, setSimulateRole] = useState<UserRole>('admin');
+  // uids, not emails: appConfig/roles is world-readable, so it must not hold addresses.
+  const [moderatorUids, setModeratorUids] = useState<string[]>([]);
+
+  const effectiveRole: UserRole = isAdminUser ? simulateRole
+    : moderatorUids.includes(user?.uid || '') ? 'moderator'
+    : isSignedIn ? 'author'
+    : 'user';
+
+  const isAdmin = effectiveRole === 'admin';
+  const canModerate = effectiveRole === 'admin' || effectiveRole === 'moderator';
+
+  // Protect the /manage and /create routes. Hiding the nav buttons was never enough — `view`
+  // is restored straight from the URL, so anyone could land on the moderator tools by typing
+  // the address. The matching half of this lives in firestore.rules; neither is sufficient alone.
   useEffect(() => {
     if (view === 'manage' && !isAdmin) {
       setView('stats');
       toast.error('You must be an admin to access management tools.');
     }
-  }, [view, isAdmin]);
+    if (view === 'create' && !canModerate) {
+      setView('stats');
+      toast.error('You must be a moderator to access the creation tools.');
+    }
+  }, [view, isAdmin, canModerate]);
 
   // Demo data for when Firestore is unavailable
   const [demoData, setDemoData] = useState<{
@@ -6033,7 +6114,7 @@ export default function App() {
     }).map(sea => sea.id));
   }, [demoData, seasons]);
 
-  const currentUserTeamId = useMemo(() => teams.find(t => t.emails?.includes(user?.email || ''))?.id, [teams, user]);
+  const currentUserTeamId = useMemo(() => (isSignedIn ? teams.find(t => t.memberUids?.includes(user!.uid))?.id : undefined), [teams, user, isSignedIn]);
   const currentSeasonId = ''; // All stats public
 
   const statsYears = useMemo(() => {
@@ -6079,7 +6160,7 @@ export default function App() {
     if (currentSeasonId) {
       filtered = filtered.filter(g => {
         if (g.seasonId !== currentSeasonId) return true;
-        if (!user) return false;
+        if (!isSignedIn) return false;
         if (g.authorId === user.uid) return true;
         if (currentUserTeamId && (g.authorTeamId === currentUserTeamId || g.homeTeamId === currentUserTeamId || g.awayTeamId === currentUserTeamId)) return true;
         return false;
@@ -6118,7 +6199,7 @@ export default function App() {
   // True if the user can see at least SOME current-season data (hides the warning banner)
   const hasPrivilegedStatsAccess = useMemo(() => {
     if (!currentSeasonId) return true;
-    if (!user) return false;
+    if (!isSignedIn) return false;
     return statsGames.some(g =>
       g.seasonId === currentSeasonId &&
       (g.authorId === user.uid || (currentUserTeamId && (g.authorTeamId === currentUserTeamId || g.homeTeamId === currentUserTeamId || g.awayTeamId === currentUserTeamId)))
@@ -6169,6 +6250,9 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u);
       setIsAuthReady(true);
+      // Signed out, or a first-time visitor: drop into a silent anonymous session so voting
+      // and suggesting work without a sign-in wall.
+      if (!u) void ensureAnonymousSession();
     });
     return () => unsubscribe();
   }, []);
@@ -6257,9 +6341,9 @@ export default function App() {
 
       if (rolesSnap.exists()) {
         const d = rolesSnap.data() || {};
-        setUserRoles({ authors: d.authors || [], trusted: d.trusted || [], moderators: d.moderators || [] });
+        setModeratorUids(d.moderators || []);
       } else {
-        setUserRoles({ authors: [], trusted: [], moderators: [] });
+        setModeratorUids([]);
       }
 
       setDataLoaded(true);
@@ -6315,8 +6399,8 @@ export default function App() {
 
   // --- Guided tutorials -----------------------------------------------------
   // Steps and copy live in src/lib/tutorial/trackerSteps.tsx and createSteps.tsx.
-  const canRecordEvents = !!user && effectiveRole !== 'voter';
-  const canUseCreateTools = effectiveRole === 'moderator' || effectiveRole === 'trusted';
+  const canRecordEvents = effectiveRole !== 'user';
+  const canUseCreateTools = canModerate;
 
   const tutorialApp = {
     setRightPanelTab,
@@ -6531,7 +6615,6 @@ export default function App() {
         videoId: currentVideo.id,
         gameId: currentVideo.gameId,
         userId: user.uid,
-        userName: user.displayName || 'Anonymous',
         type,
         videoTime,
         gameTime: providedGameTime !== undefined ? providedGameTime : null,
@@ -7004,8 +7087,15 @@ export default function App() {
       return;
     }
 
-    if (!['trusted', 'moderator'].includes(effectiveRole) && exactDbEvent.userId !== user.uid) {
+    if (!canModerate && exactDbEvent.userId !== user.uid) {
       toast.error('You do not have permission to delete an event authored by someone else.');
+      return;
+    }
+
+    // Verified is a latch: once a moderator has signed off on an event, its author can no
+    // longer change or remove it. A moderator has to unverify it first.
+    if (!canModerate && exactDbEvent.status === 'verified') {
+      toast.error('This event has been verified. Ask a moderator to unverify it before deleting.');
       return;
     }
 
@@ -7034,8 +7124,13 @@ export default function App() {
       return;
     }
 
-    if (!['trusted', 'moderator'].includes(effectiveRole) && exactDbEvent.userId !== user.uid) {
+    if (!canModerate && exactDbEvent.userId !== user.uid) {
       toast.error('You do not have permission to edit an event authored by someone else.');
+      return;
+    }
+
+    if (!canModerate && exactDbEvent.status === 'verified') {
+      toast.error('This event has been verified. Ask a moderator to unverify it before editing.');
       return;
     }
 
@@ -7092,7 +7187,7 @@ export default function App() {
       return;
     }
 
-    if (!['trusted', 'moderator'].includes(effectiveRole) && exactDbEvent.userId !== user.uid) {
+    if (!canModerate && exactDbEvent.userId !== user.uid) {
       toast.error('You do not have permission to modify an event authored by someone else.');
       return;
     }
@@ -7113,7 +7208,7 @@ export default function App() {
   };
 
   const handleVerifyGame = async (gameId: string) => {
-    if (!isAdmin && effectiveRole !== 'moderator') {
+    if (!canModerate) {
       toast.error('Only admins or moderators can mark games as complete.');
       return;
     }
@@ -7142,7 +7237,7 @@ export default function App() {
   };
 
   const handleToggleAllEventsVerified = async (gameId: string) => {
-    if (!isAdmin && effectiveRole !== 'moderator') {
+    if (!canModerate) {
       toast.error('Only admins or moderators can verify events.');
       return;
     }
@@ -7584,22 +7679,22 @@ export default function App() {
     }
   };
 
-  const handleEditTeamEmails = async (id: string, emails: string[]) => {
+  const handleEditTeamEmails = async (id: string, memberUids: string[]) => {
     try {
       const teamRef = doc(db, 'teams', id);
-      await updateDoc(teamRef, { emails });
+      await updateDoc(teamRef, { memberUids });
       const t = teams.find(tm => tm.id === id);
       if (t) {
         // Safe read-filter-write pattern for aggregated
         const aggSnap = await getDoc(doc(db, 'aggregated', 'teams'));
         if (aggSnap.exists()) {
           const arr = (aggSnap.data().data || []) as any[];
-          const updated = arr.map(a => a.id === id ? { ...a, emails } : a);
+          const updated = arr.map(a => a.id === id ? { ...a, memberUids } : a);
           await updateDoc(doc(db, 'aggregated', 'teams'), { data: updated });
         }
       }
-      setTeams(prev => prev.map(tm => tm.id === id ? { ...tm, emails } : tm));
-      toast.success(`Team access emails updated.`);
+      setTeams(prev => prev.map(tm => tm.id === id ? { ...tm, memberUids } : tm));
+      toast.success(`Team managers updated.`);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'teams');
     }
@@ -7855,43 +7950,55 @@ export default function App() {
     } catch (error) { handleFirestoreError(error, OperationType.WRITE, 'players'); }
   };
 
-  const handleAddRole = async (email: string, tier: 'authors' | 'trusted' | 'moderators') => {
-    if (!['trusted', 'moderator'].includes(effectiveRole)) {
-      toast.error("You don't have permission to modify roles.");
+  // Moderators are stored as uids, never emails — appConfig/roles is world-readable, so an
+  // email list there would hand every visitor the contributor roster.
+  const handleAddRole = async (uid: string) => {
+    if (!isAdmin) {
+      toast.error("Only an admin can modify roles.");
       return;
     }
-    const currentList = tier === 'authors' ? userRoles.authors : tier === 'trusted' ? userRoles.trusted : userRoles.moderators;
-    if (currentList.includes(email)) return;
+    const trimmed = uid.trim();
+    if (!trimmed || moderatorUids.includes(trimmed)) return;
 
     try {
       const dbRef = doc(db, 'appConfig', 'roles');
       const snap = await getDoc(dbRef);
       if (!snap.exists()) {
-        await setDoc(dbRef, { authors: [], trusted: [], moderators: [] });
+        await setDoc(dbRef, { moderators: [] });
       }
 
-      await updateDoc(dbRef, { [tier]: arrayUnion(email) });
-      setUserRoles(prev => ({ ...prev, [tier]: [...(prev[tier] as string[]), email] }));
-      toast.success(`Role assigned to ${email}`);
+      await updateDoc(dbRef, { moderators: arrayUnion(trimmed) });
+      setModeratorUids(prev => [...prev, trimmed]);
+      toast.success(`${userLabel(trimmed)} is now a moderator`);
     } catch (e) {
       console.error(e);
       toast.error('Failed to assign role');
     }
   };
 
-  const handleRemoveRole = async (email: string, tier: 'authors' | 'trusted' | 'moderators') => {
-    if (!['trusted', 'moderator'].includes(effectiveRole)) {
-      toast.error("You don't have permission to modify roles.");
+  const handleRemoveRole = async (uid: string) => {
+    if (!isAdmin) {
+      toast.error("Only an admin can modify roles.");
       return;
     }
     try {
       const dbRef = doc(db, 'appConfig', 'roles');
-      await updateDoc(dbRef, { [tier]: arrayRemove(email) });
-      setUserRoles(prev => ({ ...prev, [tier]: (prev[tier] as string[]).filter(e => e !== email) }));
-      toast.success(`Role removed for ${email}`);
+      await updateDoc(dbRef, { moderators: arrayRemove(uid) });
+      setModeratorUids(prev => prev.filter(u => u !== uid));
+      toast.success(`Moderator access removed for ${userLabel(uid)}`);
     } catch (e) {
       console.error(e);
       toast.error('Failed to revoke role');
+    }
+  };
+
+  const handleCopyOwnId = async () => {
+    if (!voterId) return;
+    try {
+      await navigator.clipboard.writeText(voterId);
+      toast.success(`Copied the ID behind ${userLabel(voterId)}`);
+    } catch {
+      toast.error('Could not copy — your browser blocked clipboard access.');
     }
   };
 
@@ -7905,6 +8012,12 @@ export default function App() {
 
   const handleVote = async (eventId: string, isAccurate: boolean) => {
     if (!currentVideo) return;
+    // The anonymous session is established on load, but a very fast click can beat it. Without
+    // a uid the write is rejected by the rules anyway, so don't move the UI optimistically.
+    if (!voterId) {
+      toast.error('Still connecting — try that again in a moment.');
+      return;
+    }
 
     // Optimistic local update
     setEvents(prev => prev.map(e => {
@@ -8393,7 +8506,7 @@ export default function App() {
   }, [manualActivePlayerIds, activeTrackingEvents, currentTime]);
 
   if (!isAuthReady) return <div className="min-h-screen bg-white flex items-center justify-center text-gray-900">Loading...</div>;
-  if (!user && !hasSeenLanding) return <LandingHero onProceed={() => { handleBypassLanding(); setView('stats'); }} onSignIn={() => handleBypassLanding()} />;
+  if (!isSignedIn && !hasSeenLanding) return <LandingHero onProceed={() => { handleBypassLanding(); setView('stats'); }} onSignIn={() => handleBypassLanding()} />;
 
   return (
     <div className={cn("bg-white text-gray-900 font-sans selection:bg-red-200/50", (view === 'tracker' && currentVideo) ? "h-screen overflow-hidden flex flex-col" : "min-h-screen")}>
@@ -8439,20 +8552,20 @@ export default function App() {
               Info
             </button>
 
-            {view === 'tracker' && isAdmin && (
+            {view === 'tracker' && isAdminUser && (
               <select
                 value={simulateRole}
                 onChange={e => setSimulateRole(e.target.value as any)}
                 className="bg-gray-50 border border-gray-200 text-gray-600 text-xs rounded-lg px-3 py-2 outline-none focus:border-red-500 font-bold"
               >
-                <option value="voter">View As: Voter</option>
+                <option value="user">View As: User</option>
                 <option value="author">View As: Author</option>
                 <option value="moderator">View As: Moderator</option>
-                <option value="trusted">View As: Trusted (Admin)</option>
+                <option value="admin">View As: Admin</option>
               </select>
             )}
 
-            {(effectiveRole === 'moderator' || effectiveRole === 'trusted') && (
+            {canModerate && (
               <button
                 onClick={() => setView(view === 'create' ? 'stats' : 'create')}
                 className={cn(
@@ -8477,22 +8590,28 @@ export default function App() {
                 Manage
               </button>
             )}
-            {user ? (
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-full border border-gray-200">
-                  <img src={user.photoURL || ''} alt="" className="w-6 h-6 rounded-full bg-gray-100" referrerPolicy="no-referrer" />
-                  <span className="text-sm font-medium">{user.displayName}</span>
-                </div>
-                <button onClick={logOut} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
+            <div className="flex items-center gap-3">
+              {voterId && (
+                <button
+                  onClick={handleCopyOwnId}
+                  title="Your ID. Click to copy — share it with a moderator if you need help with something you recorded."
+                  className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-full border border-gray-200 hover:border-gray-300 transition-colors"
+                >
+                  <User className="w-4 h-4 text-gray-400" />
+                  <span className="text-sm font-medium">{userLabel(voterId)}</span>
+                </button>
+              )}
+              {isSignedIn ? (
+                <button onClick={logOut} title="Sign out" className="p-2 hover:bg-gray-100 rounded-full transition-colors">
                   <LogOut className="w-5 h-5 text-gray-500" />
                 </button>
-              </div>
-            ) : (
-              <button onClick={signIn} className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg font-medium transition-all active:scale-95">
-                <LogIn className="w-4 h-4" />
-                Sign In
-              </button>
-            )}
+              ) : (
+                <button onClick={signIn} className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg font-medium transition-all active:scale-95">
+                  <LogIn className="w-4 h-4" />
+                  Sign In
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Mobile nav: hamburger dropdown */}
@@ -8539,7 +8658,7 @@ export default function App() {
                   Info
                 </button>
 
-                {(effectiveRole === 'moderator' || effectiveRole === 'trusted') && (
+                {canModerate && (
                   <button
                     onClick={() => setView(view === 'create' ? 'stats' : 'create')}
                     className={cn(
@@ -8565,38 +8684,43 @@ export default function App() {
                   </button>
                 )}
 
-                {view === 'tracker' && isAdmin && (
+                {view === 'tracker' && isAdminUser && (
                   <div className="px-4 py-2">
                     <select
                       value={simulateRole}
                       onChange={e => setSimulateRole(e.target.value as any)}
                       className="w-full bg-gray-50 border border-gray-200 text-gray-600 text-xs rounded-lg px-3 py-2 outline-none focus:border-red-500 font-bold"
                     >
-                      <option value="voter">View As: Voter</option>
+                      <option value="user">View As: User</option>
                       <option value="author">View As: Author</option>
                       <option value="moderator">View As: Moderator</option>
-                      <option value="trusted">View As: Trusted (Admin)</option>
+                      <option value="admin">View As: Admin</option>
                     </select>
                   </div>
                 )}
 
                 <div className="border-t border-gray-100 mt-2 pt-2 px-4">
-                  {user ? (
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-full border border-gray-200 min-w-0">
-                        <img src={user.photoURL || ''} alt="" className="w-6 h-6 rounded-full bg-gray-100 shrink-0" referrerPolicy="no-referrer" />
-                        <span className="text-sm font-medium truncate">{user.displayName}</span>
-                      </div>
+                  <div className="flex items-center justify-between gap-2">
+                    {voterId && (
+                      <button
+                        onClick={handleCopyOwnId}
+                        className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-full border border-gray-200 min-w-0"
+                      >
+                        <User className="w-4 h-4 text-gray-400 shrink-0" />
+                        <span className="text-sm font-medium truncate">{userLabel(voterId)}</span>
+                      </button>
+                    )}
+                    {isSignedIn ? (
                       <button onClick={logOut} className="p-2 hover:bg-gray-100 rounded-full transition-colors shrink-0">
                         <LogOut className="w-5 h-5 text-gray-500" />
                       </button>
-                    </div>
-                  ) : (
-                    <button onClick={signIn} className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition-all active:scale-95">
-                      <LogIn className="w-4 h-4" />
-                      Sign In
-                    </button>
-                  )}
+                    ) : (
+                      <button onClick={signIn} className="flex items-center justify-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition-all active:scale-95 shrink-0">
+                        <LogIn className="w-4 h-4" />
+                        Sign In
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             )}
@@ -8607,12 +8731,6 @@ export default function App() {
       <main className={cn("mx-auto transition-all w-full", (view === 'tracker' && currentVideo) ? "max-w-[100vw] px-2 py-2 flex-1 min-h-0 flex flex-col" : view === 'tracker' ? "max-w-[1600px] px-4 py-8" : "max-w-7xl px-4 py-8")}>
         {view === 'info' ? (
           <div className="max-w-4xl mx-auto space-y-8">
-            <RecentEventsView
-              games={games}
-              teams={teams}
-              seasons={seasons}
-              onOpenGame={handleOpenGameForReview}
-            />
             <div className="bg-white rounded-xl shadow-sm border p-8 space-y-10">
             {user && (
               <div className="p-5 bg-red-50/60 border border-red-100 rounded-xl space-y-4">
@@ -8860,7 +8978,7 @@ export default function App() {
             isAdmin={isAdmin}
             onAddRole={handleAddRole}
             onRemoveRole={handleRemoveRole}
-            userRoles={userRoles}
+            moderatorUids={moderatorUids}
             onSetLocalSimulation={(data) => {
               setDemoData(data);
               setView('stats');
@@ -8868,14 +8986,18 @@ export default function App() {
             activeTab={managementActiveTab}
             setActiveTab={setManagementActiveTab}
           />
-        ) : view === 'create' ? (
+        ) : view === 'create' && canUseCreateTools ? (
           <CreateView
             events={statsEventsRaw}
+            moderatorUids={moderatorUids}
+            onMakeModerator={isAdmin ? handleAddRole : undefined}
             teams={teams}
             seasons={seasons}
             players={allPlayers}
             leagues={leagues}
             tournaments={tournaments}
+            games={games}
+            onOpenGame={handleOpenGameForReview}
             searchQuery={searchQuery}
             setSearchQuery={setSearchQuery}
             newVideoData={newVideoData}
@@ -9426,7 +9548,7 @@ export default function App() {
                     >
                       <Clock className="w-4 h-4" /> {statsFilter.startsWith('verified') ? 'Verified' : 'Events'}
                     </button>
-                    {user && effectiveRole !== 'voter' && (
+                    {canRecordEvents && (
                       <button
                         data-tour="tab-record"
                         onClick={() => setRightPanelTab('record')}
@@ -9513,7 +9635,7 @@ export default function App() {
                           <option value="possession_scoring">Possessions & Scoring</option>
                         </select>
                       </div>
-                      {(isAdmin || effectiveRole === 'moderator') && currentGame && (
+                      {canModerate && currentGame && (
                         <div className="flex items-center gap-2">
                           {(() => {
                             const allEvts = activeTrackingEvents.filter(e => e.id && !e.id.includes('_draft'));
@@ -9667,7 +9789,7 @@ export default function App() {
                                 </div>
                               </div>
                               <div className="flex items-center gap-2">
-                                {(isAdmin || (evt.userId === user?.uid && evt.status !== 'verified')) && (
+                                {(canModerate || (evt.userId === user?.uid && evt.status !== 'verified')) && (
                                   <>
                                     <button
                                       onClick={() => handleEditRecordedEvent(evt.id)}
@@ -9697,7 +9819,7 @@ export default function App() {
 
                             <div className="flex items-center justify-between pt-2 border-t border-gray-200/50">
                               <div className="flex items-center gap-3">
-                                {(isAdmin || effectiveRole === 'moderator') && (
+                                {canModerate && (
                                   <button
                                     onClick={async () => {
                                       if (!user || !currentVideo) return;
@@ -10505,7 +10627,7 @@ export default function App() {
                         seekerTime.set(pid, totalSec);
                       }
 
-                      const isAuthToRecord = !!(user && (['trusted', 'moderator'].includes(effectiveRole) || (currentVideo as any)?.authorId === user.uid));
+                      const isAuthToRecord = !!(user && (canModerate || (currentVideo as any)?.authorId === user.uid));
                       return (
                         <div className="flex flex-col gap-6 w-full max-w-full">
                           <div className="grid grid-cols-2 gap-4 border-b border-gray-200 pb-2">
