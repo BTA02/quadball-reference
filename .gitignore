@@ -7,6 +7,12 @@ coverage/
 .env*
 !.env.example
 
+# Firebase Admin private keys. These grant full project access — never commit one.
+service-account.json
+service-account*.json
+*-service-account.json
+firebase-adminsdk-*.json
+
 # Scratch/temp outputs from extraction scripts - not meant to be tracked
 downloaded_game_video.mp4
 ai_extracted_events*.json

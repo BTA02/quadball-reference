@@ -11,7 +11,9 @@ service cloud.firestore {
     // Fields: youtubeId, videoId, gameId, title, createdAt
     //
     // Collection: events
-    // Fields: videoId, gameId, userId, userName, type, videoTime, createdAt, votes, status, playerId, subPlayerId, teamId
+    // Fields: videoId, gameId, userId, type, videoTime, createdAt, votes, status, playerId, subPlayerId, teamId
+    // userId is a Firebase uid and is the ONLY identity stored anywhere. There are no display
+    // names, handles, or profiles — the app renders "User 048293", derived from the uid.
     // Event types: goal, shot, assist, foul, card, substitution, control_change, turnover, takeaway, block, gameStart, gamePause, gameResume, gameEnd, flag_released, seeker_enters, flag_catch
     // teamId: required for team-attributable events; null on control_change means no team has possession
     //
@@ -39,26 +41,39 @@ service cloud.firestore {
 
     function isAdmin() {
       return isAuthenticated() &&
-        (
-          (request.auth.token.email == "andrew.axtell@gmail.com" && request.auth.token.email_verified == true) ||
-          (exists(/databases/$(database)/documents/appConfig/roles) && request.auth.token.email in get(/databases/$(database)/documents/appConfig/roles).data.trusted) ||
-          (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
-        );
+        'email' in request.auth.token &&
+        request.auth.token.email == "andrew.axtell@gmail.com" &&
+        request.auth.token.email_verified == true;
     }
 
     function isOwner(userId) {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
-    // Mirrors the app's "trusted"/"moderator" role tiers (appConfig/roles), which get
-    // elevated permissions over other users' events, distinct from plain "author" (any
-    // signed-in user).
-    function isTrustedOrModerator() {
-      return isAuthenticated() && exists(/databases/$(database)/documents/appConfig/roles) &&
+    // Four tiers, matching the app: user < author < moderator < admin.
+    //
+    // Only moderators are stored, and they are stored as UIDS, never emails — appConfig/roles
+    // is world-readable, so an email list there would publish the contributor roster.
+    function isModerator() {
+      return isAdmin() ||
         (
-          get(/databases/$(database)/documents/appConfig/roles).data.trusted.hasAny([request.auth.token.email]) ||
-          get(/databases/$(database)/documents/appConfig/roles).data.moderators.hasAny([request.auth.token.email])
+          isAuthenticated() &&
+          exists(/databases/$(database)/documents/appConfig/roles) &&
+          get(/databases/$(database)/documents/appConfig/roles).data.moderators.hasAny([request.auth.uid])
         );
+    }
+
+    // A real Google account. Every visitor is signed in — anonymous sessions exist so that
+    // voting and suggesting work without a sign-in wall — so "is authenticated" no longer
+    // means "is a person with an account". Anything that writes real data checks this instead.
+    function isAuthor() {
+      return isAuthenticated() && request.auth.token.firebase.sign_in_provider != 'anonymous';
+    }
+
+    function isTeamManager(teamId) {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/teams/$(teamId)) &&
+        get(/databases/$(database)/documents/teams/$(teamId)).data.memberUids.hasAny([request.auth.uid]);
     }
 
     // Helpers for validating per-event ownership on the array-based gameEvents.events field.
@@ -74,25 +89,42 @@ service cloud.firestore {
       return resource.data.events.removeAll(request.resource.data.events);
     }
 
-    // Removing exactly one event you authored, with nothing else added.
-    function isOwnEventDelete() {
+    // Removing exactly one event you authored, with nothing else added. "Verified" is a latch:
+    // once a moderator signs off on an event, its author can no longer remove it.
+    function isOwnUnverifiedEventDelete() {
       let removed = gameEventsRemoved();
       return gameEventsAdded().size() == 0 && removed.size() == 1 &&
-             removed[0].userId == request.auth.uid;
+             removed[0].userId == request.auth.uid &&
+             removed[0].status != 'verified';
     }
 
-    // Changing exactly one existing event in place: the owner may change anything about
-    // their own event; anyone else may only touch vote-related fields (so voting on other
-    // users' events keeps working), and may never reassign an event's id or authorship.
-    function isOwnEventEditOrVote() {
+    // Changing exactly one event you authored, in place. The author may not move `status`
+    // themselves — verifying is a moderator action — and may not touch a verified event at all.
+    function isOwnUnverifiedEventEdit() {
       let added = gameEventsAdded();
       let removed = gameEventsRemoved();
       return added.size() == 1 && removed.size() == 1 &&
-             added[0].id == removed[0].id && added[0].userId == removed[0].userId &&
-             (
-               removed[0].userId == request.auth.uid ||
-               added[0].diff(removed[0]).affectedKeys().hasOnly(['votes', 'upvotes', 'downvotes', 'upvoterIds', 'downvoterIds'])
-             );
+             added[0].id == removed[0].id &&
+             added[0].userId == removed[0].userId &&
+             removed[0].userId == request.auth.uid &&
+             removed[0].status != 'verified' &&
+             added[0].status == removed[0].status;
+    }
+
+    // Voting, which anyone may do on anyone's event, including anonymous sessions. Only the
+    // vote fields may move, and only the caller's own uid may enter or leave the arrays —
+    // enforceable now that every visitor has a uid instead of a localStorage device id.
+    function isVoteOnlyChange() {
+      let added = gameEventsAdded();
+      let removed = gameEventsRemoved();
+      return added.size() == 1 && removed.size() == 1 &&
+             added[0].id == removed[0].id &&
+             added[0].diff(removed[0]).affectedKeys()
+               .hasOnly(['votes', 'upvotes', 'downvotes', 'upvoterIds', 'downvoterIds', 'lastVoteAt']) &&
+             added[0].upvoterIds.toSet().difference(removed[0].upvoterIds.toSet()).hasOnly([request.auth.uid]) &&
+             removed[0].upvoterIds.toSet().difference(added[0].upvoterIds.toSet()).hasOnly([request.auth.uid]) &&
+             added[0].downvoterIds.toSet().difference(removed[0].downvoterIds.toSet()).hasOnly([request.auth.uid]) &&
+             removed[0].downvoterIds.toSet().difference(added[0].downvoterIds.toSet()).hasOnly([request.auth.uid]);
     }
 
     function hasOnlyAllowedFields(fields) {
@@ -119,7 +151,7 @@ service cloud.firestore {
 
     function isValidEvent(data) {
       return data.videoId is string && data.gameId is string &&
-             data.userId is string && data.userName is string &&
+             data.userId is string &&
              data.type is string &&
              data.videoTime is number &&
              data.votes is number &&
@@ -138,7 +170,7 @@ service cloud.firestore {
     }
 
     function isValidTeam(data) {
-      return hasOnlyAllowedFields(['name', 'nickname', 'colorPrimary', 'colorDark', 'colorLight', 'colorPrimaryDark', 'colorPrimaryLight', 'colorAccent', 'emails', 'leagueId', 'division', 'createdAt']) &&
+      return hasOnlyAllowedFields(['name', 'nickname', 'colorPrimary', 'colorDark', 'colorLight', 'colorPrimaryDark', 'colorPrimaryLight', 'colorAccent', 'memberUids', 'leagueId', 'division', 'createdAt']) &&
              data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
              (!('nickname' in data) || data.nickname == null || data.nickname is string) &&
              (!('colorPrimary' in data) || data.colorPrimary is string) &&
@@ -147,7 +179,7 @@ service cloud.firestore {
              (!('colorPrimaryDark' in data) || data.colorPrimaryDark is string) &&
              (!('colorPrimaryLight' in data) || data.colorPrimaryLight is string) &&
              (!('colorAccent' in data) || data.colorAccent is string) &&
-             (!('emails' in data) || data.emails is list) &&
+             (!('memberUids' in data) || data.memberUids is list) &&
              (!('leagueId' in data) || data.leagueId is string) &&
              (!('division' in data) || data.division is string);
     }
@@ -174,30 +206,30 @@ service cloud.firestore {
     // Aggregated Stats & Lists
     match /aggregated/{docId} {
       allow read: if true;
-      allow write: if isAuthenticated();
+      allow write: if isModerator();
     }
 
     // Games
     match /games/{gameId} {
       allow read: if true;
-      allow create: if (isAuthenticated() && isValidGame(request.resource.data)) || isAdmin();
-      allow update: if (isAuthenticated() && isValidGame(request.resource.data)) || isAdmin();
+      allow create: if isModerator() && isValidGame(request.resource.data);
+      allow update: if isModerator() && isValidGame(request.resource.data);
       allow delete: if isAdmin();
     }
 
     // Videos
     match /videos/{videoId} {
       allow read: if true;
-      allow create: if (isAuthenticated() && isValidVideo(request.resource.data)) || isAdmin();
-      allow update: if (isAuthenticated() && isValidVideo(request.resource.data)) || isAdmin();
+      allow create: if isModerator() && isValidVideo(request.resource.data);
+      allow update: if isModerator() && isValidVideo(request.resource.data);
       allow delete: if isAdmin();
     }
 
     // Players
     match /players/{playerId} {
       allow read: if true;
-      allow create: if (isAuthenticated() && isValidPlayer(request.resource.data)) || isAdmin();
-      allow update: if (isAuthenticated() && isValidPlayer(request.resource.data)) || isAdmin();
+      allow create: if isModerator() && isValidPlayer(request.resource.data);
+      allow update: if isModerator() && isValidPlayer(request.resource.data);
       allow delete: if isAdmin();
     }
 
@@ -210,7 +242,7 @@ service cloud.firestore {
     match /teams/{teamId} {
       allow read: if true;
       allow create: if isAdmin() && isValidTeam(request.resource.data);
-      allow update: if (isAdmin() || (isAuthenticated() && request.auth.token.email in resource.data.emails)) && isValidTeam(request.resource.data);
+      allow update: if (isModerator() || isTeamManager(teamId)) && isValidTeam(request.resource.data);
       allow delete: if isAdmin();
     }
 
@@ -223,30 +255,30 @@ service cloud.firestore {
     // Tournaments
     match /tournaments/{tournamentId} {
       allow read: if true;
-      allow create, update: if isAuthenticated();
+      allow create, update: if isModerator();
       allow delete: if isAdmin();
     }
 
     // Seasons
     match /seasons/{seasonId} {
       allow read: if true;
-      allow create: if isAuthenticated() && isValidSeason(request.resource.data);
-      allow update: if isAuthenticated() && isValidSeason(request.resource.data);
-      allow delete: if isAuthenticated();
+      allow create: if isModerator() && isValidSeason(request.resource.data);
+      allow update: if isModerator() && isValidSeason(request.resource.data);
+      allow delete: if isModerator();
     }
 
     // Rosters
     match /rosters/{rosterId} {
       allow read: if true;
-      allow create: if (isAdmin() || (isAuthenticated() && request.auth.token.email in get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.emails)) && isValidRoster(request.resource.data);
-      allow update: if (isAdmin() || (isAuthenticated() && request.auth.token.email in get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.emails)) && isValidRoster(request.resource.data);
+      allow create: if (isModerator() || isTeamManager(request.resource.data.teamId)) && isValidRoster(request.resource.data);
+      allow update: if (isModerator() || isTeamManager(request.resource.data.teamId)) && isValidRoster(request.resource.data);
       allow delete: if isAdmin();
 
       match /players/{playerId} {
         allow read: if true;
-        allow create: if isAuthenticated() && isValidRosterPlayer(request.resource.data);
-        allow update: if isAuthenticated() && isValidRosterPlayer(request.resource.data);
-        allow delete: if isAuthenticated();
+        allow create: if isModerator() && isValidRosterPlayer(request.resource.data);
+        allow update: if isModerator() && isValidRosterPlayer(request.resource.data);
+        allow delete: if isModerator();
       }
     }
 
@@ -261,25 +293,26 @@ service cloud.firestore {
     // Role Assignments & System Config
     match /appConfig/{docId} {
       allow read: if true;
-      allow create, update, delete: if isAdmin() || (isAuthenticated() && get(/databases/$(database)/documents/appConfig/roles).data.trusted.hasAny([request.auth.token.email]));
+      // Public read is fine now that this holds uids and no addresses. Only the admin may
+      // grant moderator access — a moderator promoting other moderators is not in the model.
+      allow create, update, delete: if isAdmin();
     }
 
     // GameEvents (Modern Array-Based Schema)
     // Read is public — current-season privacy is enforced in the app layer via dashboardGames/dashboardEvents.
     // Deleting/editing an individual event (a rewrite of the events array) is restricted to
-    // the event's own author or an admin/trusted/moderator — see issue #16.
+    // the event's own author or a moderator — see issue #16. Verified events are frozen to
+    // their author until a moderator unverifies them.
     match /gameEvents/{gameId} {
       allow read: if true;
-      allow create: if isAuthenticated() || isAdmin();
-      allow update: if isAdmin() || isTrustedOrModerator() ||
-        (
-          isAuthenticated() &&
-          (
-            gameEventsRemoved().size() == 0 ||
-            isOwnEventDelete() ||
-            isOwnEventEditOrVote()
-          )
-        );
+      allow create: if isAuthor();
+      allow update: if isModerator() ||
+        // Authors record and maintain their own events. Pure appends stay unrestricted so
+        // bulk saves keep working; the guard that matters is that anonymous sessions cannot
+        // reach this branch at all.
+        (isAuthor() && (gameEventsRemoved().size() == 0 || isOwnUnverifiedEventDelete() || isOwnUnverifiedEventEdit())) ||
+        // Anyone, including anonymous sessions, may vote.
+        (isAuthenticated() && isVoteOnlyChange());
       allow delete: if isAdmin();
     }
 

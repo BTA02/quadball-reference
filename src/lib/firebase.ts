@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, signOut } from 'firebase/auth';
+import { getAuth, GoogleAuthProvider, signInAnonymously, signInWithPopup, signInWithRedirect, signOut, linkWithPopup } from 'firebase/auth';
 import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { toast } from 'sonner';
@@ -11,15 +11,66 @@ export const db = initializeFirestore(app, {
 }, firebaseConfig.firestoreDatabaseId ? firebaseConfig.firestoreDatabaseId : undefined);
 export const googleProvider = new GoogleAuthProvider();
 
+/**
+ * Every visitor gets a real Firebase uid, silently, on first load. Nothing is shown to them.
+ *
+ * This exists so that suggesting an edit and voting work for people who aren't signed in,
+ * while still giving the rules layer a `request.auth.uid` to validate against and a handle to
+ * block a bad actor with. It also repairs voting, which previously wrote a localStorage
+ * device id into gameEvents — a doc whose update rules require auth, so those writes always
+ * failed.
+ */
+let anonymousSignIn: Promise<unknown> | null = null;
+
+export const ensureAnonymousSession = async () => {
+  if (auth.currentUser) return;
+  if (anonymousSignIn) return anonymousSignIn;
+  try {
+    anonymousSignIn = signInAnonymously(auth);
+    await anonymousSignIn;
+  } catch (error: any) {
+    // Anonymous sign-in has to be enabled in Firebase console > Authentication > Sign-in
+    // method. Without it the app still works for signed-in users, but nobody else can vote
+    // or suggest, so make the cause obvious rather than failing silently at every write.
+    if (error?.code === 'auth/operation-not-allowed') {
+      console.error('Anonymous auth is disabled for this Firebase project. Enable it under Authentication > Sign-in method.');
+      return;
+    }
+    console.error('Anonymous sign-in failed:', error);
+  } finally {
+    anonymousSignIn = null;
+  }
+};
+
 export const signIn = async () => {
   try {
+    const current = auth.currentUser;
+    // Upgrade the anonymous session in place so the user keeps everything they already
+    // suggested and voted on, rather than silently starting over under a new uid.
+    if (current?.isAnonymous) {
+      try {
+        await linkWithPopup(current, googleProvider);
+        return;
+      } catch (error: any) {
+        // The Google account is already a user here. Nothing to merge onto — sign in to the
+        // existing account instead and leave the anonymous contributions where they are.
+        const recoverable = ['auth/credential-already-in-use', 'auth/email-already-in-use', 'auth/provider-already-linked'];
+        if (!recoverable.includes(error?.code)) throw error;
+      }
+    }
     await signInWithPopup(auth, googleProvider);
   } catch (error) {
     console.error("Login failed:", error);
     toast.error("Sign in failed. Please try again or check your browser settings.");
   }
 };
-export const logOut = () => signOut(auth);
+
+// Signing out drops back to a fresh anonymous session rather than to no session at all, so
+// voting and suggesting keep working.
+export const logOut = async () => {
+  await signOut(auth);
+  await ensureAnonymousSession();
+};
 
 export enum OperationType {
   CREATE = 'create',
