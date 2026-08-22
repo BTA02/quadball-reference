@@ -414,8 +414,13 @@ A density control so the events feed can shed the voting and suggesting chrome e
 | Mode | Shows |
 |---|---|
 | **Full** | Everything — votes, suggest, verify shield, seek, suggestion cards |
-| **Compact** | Time, label, player/team, seek. Voting and suggesting hidden; open-suggestion count collapses to a small amber dot. Actions appear on row hover. |
+| **Compact** | A fixed, short row — icon, time, label, player/team, verified shield, an amber dot for open suggestions. Tap to seek. No vote or suggest actions, and nothing expands on hover — this mode is for watching the feed while a video plays, not for moderating from it. |
 | **Minimal** | One line: `12:34 · GOAL · J. Smith`. No indicators, no actions. |
+
+Compact deliberately does **not** reveal its actions on hover — an earlier pass hid them behind
+`opacity-0 group-hover:opacity-100`, which kept the full card's height reserved underneath
+(opacity doesn't collapse layout) and defeated the point of a shrunk row. Compact is now a
+dedicated, shorter render path, not the Full card with chrome dimmed.
 
 - Persist in `localStorage` and mirror into the URL params alongside the existing
   `statsFilter` sync, so a shared link preserves density.

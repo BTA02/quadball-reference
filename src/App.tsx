@@ -9100,6 +9100,16 @@ export default function App() {
             </div>
 
             <div className="mb-12">
+              <h2 className="text-3xl font-extrabold border-b pb-4 text-gray-900 mb-6">Suggesting an Edit</h2>
+              <div className="space-y-4 text-gray-700 leading-relaxed text-sm">
+                <p>Every event has two extra icons next to the up/down vote buttons: a speech-bubble icon to <strong>suggest a fix</strong>, and a circle-slash icon to <strong>suggest a removal</strong>. Both are open to everyone — signed in or not.</p>
+                <p>A downvote is a quick "something's off here." A suggestion is the fix itself: what the event should actually say, or why it shouldn't exist at all. A removal suggestion always needs a short reason, since it proposes deleting the event outright.</p>
+                <p>There's also a "+" button near the top of the Events tab to <strong>suggest a missing event</strong> — a goal, assist, or anything else that wasn't tracked. Team and player choices are limited to whoever's actually in the game.</p>
+                <p>Suggestions show up as an amber-bordered card under the event they target, with a count you can expand to see what's proposed and vote on it. Nothing changes until a moderator accepts it — accepting resets that event's votes, since the content just changed and old votes no longer apply to what's on screen.</p>
+              </div>
+            </div>
+
+            <div className="mb-12">
               <h2 className="text-3xl font-extrabold border-b pb-4 text-gray-900 mb-6">Become an Author</h2>
               <div className="space-y-4 text-gray-700 leading-relaxed text-sm">
                 <p>Just... sign in. That's it. Any stat you author becomes public<span className="text-red-500">*</span>. They get aggregated on the "pending" tab, but will move to verified after receiving enough votes.</p>
@@ -9964,7 +9974,7 @@ export default function App() {
                             <button
                               key={opt.key}
                               onClick={() => setEventDensity(opt.key)}
-                              title={`${opt.label} events — ${opt.key === 'full' ? 'everything shown' : opt.key === 'compact' ? 'voting & suggesting hidden until hover' : 'one line per event, no actions'}`}
+                              title={`${opt.label} events — ${opt.key === 'full' ? 'everything shown, voting and suggesting included' : opt.key === 'compact' ? 'shorter rows for watching — tap to seek, no vote or suggest actions here' : 'one line per event, no actions'}`}
                               className={cn('flex-1 flex items-center justify-center gap-1 py-1 rounded text-[9px] font-bold uppercase tracking-wider transition-all', eventDensity === opt.key ? 'bg-gray-900 text-white' : 'text-gray-400 hover:text-gray-700')}
                             >
                               {opt.icon}
@@ -10141,9 +10151,6 @@ export default function App() {
                                     {evt.status === 'verified' && (
                                       <ShieldCheck className="w-3.5 h-3.5 text-amber-500" />
                                     )}
-                                    {eventDensity === 'compact' && openSuggestionsForEvent.length > 0 && (
-                                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500" title={`${openSuggestionsForEvent.length} suggested fix${openSuggestionsForEvent.length === 1 ? '' : 'es'}`} />
-                                    )}
                                   </div>
                                   {(evt.playerId || evt.teamId) && (
                                     <div className="text-xs">
@@ -10192,24 +10199,22 @@ export default function App() {
                                   </>
                                 )}
 
-                                {eventDensity !== 'minimal' && (
-                                  <div className={cn('flex items-center gap-1', eventDensity === 'compact' && 'opacity-0 group-hover:opacity-100 transition-opacity')}>
-                                    <button
-                                      onClick={() => setSuggestFormState({ mode: 'edit', targetEvent: evt })}
-                                      className="p-1 text-gray-400 hover:text-amber-600 hover:bg-amber-50 transition-colors rounded flex items-center justify-center border border-transparent hover:border-amber-100"
-                                      title="Suggest a fix"
-                                    >
-                                      <MessageSquarePlus className="w-3.5 h-3.5" />
-                                    </button>
-                                    <button
-                                      onClick={() => setSuggestFormState({ mode: 'delete', targetEvent: evt })}
-                                      className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors rounded flex items-center justify-center border border-transparent hover:border-red-100"
-                                      title="Suggest this be removed"
-                                    >
-                                      <Ban className="w-3.5 h-3.5" />
-                                    </button>
-                                  </div>
-                                )}
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    onClick={() => setSuggestFormState({ mode: 'edit', targetEvent: evt })}
+                                    className="p-1 text-gray-400 hover:text-amber-600 hover:bg-amber-50 transition-colors rounded flex items-center justify-center border border-transparent hover:border-amber-100"
+                                    title="Suggest a fix"
+                                  >
+                                    <MessageSquarePlus className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={() => setSuggestFormState({ mode: 'delete', targetEvent: evt })}
+                                    className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors rounded flex items-center justify-center border border-transparent hover:border-red-100"
+                                    title="Suggest this be removed"
+                                  >
+                                    <Ban className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
                                 <button
                                   onClick={() => player?.seekTo(evt.videoTime)}
                                   className="text-[10px] font-mono bg-gray-100 hover:bg-red-600 px-2 py-1 rounded transition-colors"
@@ -10219,7 +10224,7 @@ export default function App() {
                               </div>
                             </div>
 
-                            <div className={cn('flex items-center justify-between pt-2 border-t border-gray-200/50', eventDensity === 'compact' && 'opacity-0 group-hover:opacity-100 transition-opacity')}>
+                            <div className="flex items-center justify-between pt-2 border-t border-gray-200/50">
                               <div className="flex items-center gap-3">
                                 {canModerate && (
                                   <button
@@ -10298,7 +10303,7 @@ export default function App() {
                               </div>
                             </div>
 
-                            {eventDensity !== 'minimal' && openSuggestionsForEvent.length > 0 && (
+                            {openSuggestionsForEvent.length > 0 && (
                               <div className="mt-2 pt-2 border-t border-amber-200/60">
                                 <button
                                   onClick={() => setExpandedSuggestionEventIds(prev => {
@@ -10400,6 +10405,48 @@ export default function App() {
                                 <span className="font-bold uppercase tracking-tight text-[10px] text-gray-500 w-16 shrink-0 truncate">{cfg?.label || event.type}</span>
                                 <span className="truncate text-gray-700">{p ? `${p.firstName.charAt(0)}. ${p.lastName}` : t ? (t.nickname || t.name) : ''}</span>
                                 {hasOpenSuggestions && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />}
+                              </button>
+                            );
+                          }
+
+                          // Compact is a fixed, non-interactive row — shorter than Full, and unlike it,
+                          // never expands on hover. It's for watching the feed while a video plays, not
+                          // for voting or suggesting from here; those stay reachable in Full or Minimal.
+                          if (eventDensity === 'compact') {
+                            const cfg = EVENT_CONFIG[event.type as EventType] || { label: event.type, icon: <AlertCircle className="w-3 h-3" />, color: 'bg-neutral-500' };
+                            const label = (event.type === 'sub_in' && (event as any).position) ? `${(event as any).position} In` : (event.type === 'sub_out' && (event as any).position) ? `${(event as any).position} Out` : (event.type === 'card' && (event as any).color) ? `${(event as any).color} Card` : cfg.label;
+                            const p = event.playerId ? allPlayers.find(pl => pl.id === event.playerId) : undefined;
+                            const t = event.teamId ? teams.find(tm => tm.id === event.teamId) : undefined;
+                            return (
+                              <button
+                                key={event.id}
+                                onClick={() => player?.seekTo(event.videoTime)}
+                                className={cn(
+                                  "w-full flex items-center gap-2 py-1 px-2 rounded-lg hover:bg-gray-100 transition-colors text-left",
+                                  event.status === 'rejected' && "opacity-40",
+                                )}
+                                style={
+                                  event.teamId === currentGame?.homeTeamId ? { backgroundColor: hexToRgba(feedHomeColor, 0.06) } :
+                                    event.teamId === currentGame?.awayTeamId ? { backgroundColor: hexToRgba(feedAwayColor, 0.06) } : undefined
+                                }
+                              >
+                                <div className={cn("p-1 rounded shrink-0", cfg.color)}>
+                                  {React.cloneElement(cfg.icon as React.ReactElement<any>, { className: 'w-2.5 h-2.5' })}
+                                </div>
+                                <span className="font-mono text-[10px] text-gray-400 w-9 shrink-0">{formatTime(event.videoTime)}</span>
+                                <span className="text-xs font-bold capitalize truncate shrink-0 max-w-[100px]">{label}</span>
+                                {(p || t) && (
+                                  <span
+                                    className="text-xs font-bold truncate"
+                                    style={event.teamId === currentGame?.homeTeamId ? { color: feedHomeColor } : event.teamId === currentGame?.awayTeamId ? { color: feedAwayColor } : { color: '#374151' }}
+                                  >
+                                    {p ? `${p.firstName.charAt(0)}. ${p.lastName}` : (t?.nickname || t?.name)}
+                                  </span>
+                                )}
+                                <div className="ml-auto flex items-center gap-1.5 shrink-0">
+                                  {event.status === 'verified' && <ShieldCheck className="w-3 h-3 text-amber-500" />}
+                                  {hasOpenSuggestions && <span className="w-1.5 h-1.5 rounded-full bg-amber-500" title="Has open suggestions" />}
+                                </div>
                               </button>
                             );
                           }
