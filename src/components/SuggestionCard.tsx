@@ -2,7 +2,7 @@ import React from 'react';
 import { CheckCircle2, XCircle, ShieldCheck, ShieldX, Trash2, X, PlayCircle } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { userLabel } from '../lib/userLabel';
-import { EventSuggestion, SuggestablePatch, describeFieldValue, fieldLabel } from '../lib/suggestions';
+import { EventSuggestion, SuggestablePatch, describeFieldValue, fieldLabel, DELETE_REASON_LABELS } from '../lib/suggestions';
 
 interface SuggestionCardProps {
   suggestion: EventSuggestion;
@@ -81,8 +81,10 @@ export default function SuggestionCard({
         </div>
       )}
 
-      {suggestion.note && (
-        <p className="text-xs text-gray-600 italic bg-white/60 rounded px-2 py-1.5 border border-gray-100">"{suggestion.note}"</p>
+      {suggestion.reason && (
+        <p className="text-xs text-gray-600 bg-white/60 rounded px-2 py-1.5 border border-gray-100">
+          Reason: <span className="font-bold">{DELETE_REASON_LABELS[suggestion.reason]}</span>
+        </p>
       )}
 
       <div className="flex items-center justify-between pt-1">

@@ -12,9 +12,11 @@ anyone watching — signed in or not — can propose a correction that moderator
 
 ## 2. Governing principles
 
-1. **No identity, anywhere.** No display names, no handles, no profiles, no user-supplied
-   text in any identity field. Sign-in exists solely so a bad actor can be traced and
-   blocked. See §4.
+1. **No identity, anywhere — and no free text, anywhere.** No display names, no handles, no
+   profiles, no user-supplied text in any identity field, and no open text box anywhere in
+   the suggest-edit feature either (§8.1). Every field a user fills in is either a closed
+   choice or a value drawn from the game itself (team, roster player, event type). Sign-in
+   exists solely so a bad actor can be traced and blocked. See §4.
 2. **No automation on trust decisions.** Nothing is auto-verified or auto-accepted. Every
    state change affecting the dataset is made by a human moderator. See §7.
 3. **Permissions are enforced in rules, not in the UI.** Hiding a button is not a permission.
@@ -243,7 +245,8 @@ interface EventSuggestion {
     'teamId' | 'position' | 'color' | 'relatedEventId'>>;
   baseline: Partial<GameEvent>;        // values of exactly the patched keys, at suggest time
 
-  note?: string;                       // required for 'delete', optional otherwise, max 280
+  reason?: DeleteReason;                // required for 'delete', forbidden otherwise — a closed
+                                        // set, never free text. See §2.4.
   authorId: string;                    // uid only. Never a name, label, or email.
   createdAt: Timestamp;
 
@@ -257,8 +260,14 @@ interface EventSuggestion {
 }
 ```
 
-`note` is the one free-text field in the feature. It attaches to a *suggestion*, never to an
-identity, caps at 280 chars, and needs a moderator delete path (§10).
+**There is no free-text field anywhere in this feature — reversed from an earlier draft.**
+`note` was designed as one optional/required string, capped at 280 chars, attached to a
+suggestion rather than an identity. That was still a text box anyone could type into, and the
+explicit call was: don't. `reason` replaces it — a closed set of four fixed values
+(`did_not_happen | duplicate | wrong_moment | other`), required only for `kind: 'delete'` and
+structurally forbidden on `edit`/`add` (`isValidSuggestion` rejects the field outright if it's
+present on anything but a delete). An edit's diff is self-explanatory; a delete needs *some*
+signal but not an open text box. See §2 principle 1.
 
 `baseline` does the heavy lifting. On accept, compare the live event's values for the patched
 keys against `baseline`; if they have drifted, mark `superseded` and warn the reviewer rather
@@ -346,7 +355,9 @@ match /gameEvents/{gameId}/suggestions/{suggestionId} {
     && request.resource.data.status == 'open'
     && request.resource.data.upvoterIds.size() == 0
     && request.resource.data.downvoterIds.size() == 0
-    && (!('note' in request.resource.data) || request.resource.data.note.size() <= 280);
+    && (request.resource.data.kind == 'delete'
+      ? request.resource.data.reason in ['did_not_happen', 'duplicate', 'wrong_moment', 'other']
+      : !('reason' in request.resource.data));
 
   // vote: only your own id may enter or leave the arrays
   allow update: if isAuthenticated() && isSelfVoteOnly();
@@ -401,7 +412,8 @@ proposals, which is the thesis of the feature.
 
 - Events with open suggestions get an amber left border and a `2 suggested fixes` chip.
 - Expanding shows suggestion cards: strikethrough-old → bold-new pairs (`goal → shot`,
-  `J. Smith → K. Lee`), `User 048293`, note, vote buttons, Accept/Reject for moderators.
+  `J. Smith → K. Lee`), `User 048293`, the delete reason if any, vote buttons, Accept/Reject
+  for moderators.
 - **Per-game review queue** tab beside the event feed: open suggestions sorted by score, each
   with seek-to-timestamp so a moderator checks the video in one click and resolves without
   leaving the queue. Inline cards are for discovery; the queue is for throughput.

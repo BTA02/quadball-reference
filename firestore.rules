@@ -146,8 +146,13 @@ service cloud.firestore {
       // Closed field set — deliberately leaves no room for a client to smuggle in something
       // like a self-asserted weight or score, which is exactly what a future weighted
       // auto-accept (see docs/suggested-edits-design.md §12) would need to stay honest.
+      //
+      // There is no free-text field anywhere in this document, by design — not a note, not a
+      // comment. `reason` is a closed set of four fixed strings, required only for 'delete'
+      // and forbidden on everything else, so there is no field left that could ever carry
+      // arbitrary user-typed text.
       return hasOnlyAllowedFields(['gameId', 'videoId', 'kind', 'targetEventId', 'patch', 'baseline',
-                                    'note', 'authorId', 'createdAt', 'status', 'upvoterIds', 'downvoterIds', 'score']) &&
+                                    'reason', 'authorId', 'createdAt', 'status', 'upvoterIds', 'downvoterIds', 'score']) &&
              data.gameId == gameId &&
              data.videoId is string &&
              data.kind in ['edit', 'delete', 'add'] &&
@@ -158,10 +163,9 @@ service cloud.firestore {
              data.status == 'open' &&
              data.upvoterIds is list && data.upvoterIds.size() == 0 &&
              data.downvoterIds is list && data.downvoterIds.size() == 0 &&
-             // A delete needs a reason; anything else may optionally carry one. Either way it
-             // is the one free-text field in the whole feature, so it is capped hard.
-             (data.kind == 'delete' ? (data.note is string && data.note.size() > 0 && data.note.size() <= 280)
-                                     : (!('note' in data) || data.note == null || (data.note is string && data.note.size() <= 280)));
+             (data.kind == 'delete'
+               ? data.reason in ['did_not_happen', 'duplicate', 'wrong_moment', 'other']
+               : !('reason' in data));
     }
 
     function isValidGame(data) {

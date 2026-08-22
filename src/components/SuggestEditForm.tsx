@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { X, MessageSquarePlus, Ban, Plus } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { EventType, GameEvent, PositionType } from '../App';
-import { SuggestablePatch, TYPE_LABELS, POSITION_LABELS, NOTE_MAX_LENGTH } from '../lib/suggestions';
+import { SuggestablePatch, TYPE_LABELS, POSITION_LABELS, DeleteReason, DELETE_REASON_LABELS } from '../lib/suggestions';
 
 interface TeamLike { id: string; name: string; nickname?: string; }
 interface PlayerLike { id: string; firstName: string; lastName: string; }
@@ -17,14 +17,15 @@ interface SuggestEditFormProps {
   homePlayers: PlayerLike[];
   awayPlayers: PlayerLike[];
   initialVideoTime?: number;
-  onSubmitEdit?: (patch: SuggestablePatch, note?: string) => void;
-  onSubmitDelete?: (note: string) => void;
-  onSubmitAdd?: (patch: SuggestablePatch & { videoTime: number }, note?: string) => void;
+  onSubmitEdit?: (patch: SuggestablePatch) => void;
+  onSubmitDelete?: (reason: DeleteReason) => void;
+  onSubmitAdd?: (patch: SuggestablePatch & { videoTime: number }) => void;
   onCancel: () => void;
 }
 
 const EVENT_TYPES = Object.keys(TYPE_LABELS) as EventType[];
 const POSITIONS = Object.keys(POSITION_LABELS) as PositionType[];
+const DELETE_REASONS = Object.keys(DELETE_REASON_LABELS) as DeleteReason[];
 
 const inputClass = "w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-amber-500";
 const labelClass = "text-[10px] uppercase font-bold text-gray-400";
@@ -41,7 +42,9 @@ export default function SuggestEditForm({ mode, targetEvent, homeTeam, awayTeam,
   // time shouldn't imply it either. Non-digit characters are stripped as they're typed rather
   // than validated after the fact, so a decimal point never becomes enterable.
   const [videoTime, setVideoTime] = useState(String(Math.round(targetEvent?.videoTime ?? initialVideoTime ?? 0)));
-  const [note, setNote] = useState('');
+  // No free text anywhere in this form. A delete picks one of a fixed set of reasons; an edit
+  // or an add needs no reason field at all — the patch itself is the explanation.
+  const [deleteReason, setDeleteReason] = useState<DeleteReason | ''>('');
 
   // Eligible players are scoped to the selected team's roster; with no team chosen yet, both
   // rosters combined — still limited to people actually in this game, never the full player
@@ -67,8 +70,8 @@ export default function SuggestEditForm({ mode, targetEvent, homeTeam, awayTeam,
     e.preventDefault();
 
     if (mode === 'delete') {
-      if (!note.trim()) return;
-      onSubmitDelete?.(note.trim());
+      if (!deleteReason) return;
+      onSubmitDelete?.(deleteReason);
       return;
     }
 
@@ -82,9 +85,9 @@ export default function SuggestEditForm({ mode, targetEvent, homeTeam, awayTeam,
 
     if (mode === 'add') {
       if (!type) return;
-      onSubmitAdd?.(patch as SuggestablePatch & { videoTime: number }, note.trim() || undefined);
+      onSubmitAdd?.(patch as SuggestablePatch & { videoTime: number });
     } else {
-      onSubmitEdit?.(patch, note.trim() || undefined);
+      onSubmitEdit?.(patch);
     }
   };
 
@@ -108,19 +111,23 @@ export default function SuggestEditForm({ mode, targetEvent, homeTeam, awayTeam,
         {mode === 'delete' ? (
           <>
             <p className="text-sm text-gray-500">
-              This removes the event entirely if a moderator accepts it. Say why it's wrong.
+              This removes the event entirely if a moderator accepts it. Pick the closest reason.
             </p>
-            <div className="space-y-1">
+            <div className="space-y-1.5">
               <label className={labelClass}>Reason (required)</label>
-              <textarea
-                value={note}
-                onChange={e => setNote(e.target.value.slice(0, NOTE_MAX_LENGTH))}
-                required
-                rows={3}
-                className={inputClass}
-                placeholder="e.g. Wrong player was credited — this was actually a different chaser."
-              />
-              <p className="text-[10px] text-gray-300 text-right">{note.length}/{NOTE_MAX_LENGTH}</p>
+              {DELETE_REASONS.map(r => (
+                <button
+                  key={r}
+                  type="button"
+                  onClick={() => setDeleteReason(r)}
+                  className={cn(
+                    'w-full text-left px-3 py-2 rounded-lg text-sm font-medium border transition-all',
+                    deleteReason === r ? 'border-red-500 bg-red-50 text-red-700' : 'border-gray-200 text-gray-600 hover:border-gray-400',
+                  )}
+                >
+                  {DELETE_REASON_LABELS[r]}
+                </button>
+              ))}
             </div>
           </>
         ) : (
@@ -194,17 +201,6 @@ export default function SuggestEditForm({ mode, targetEvent, homeTeam, awayTeam,
                 </div>
               </div>
             )}
-
-            <div className="space-y-1">
-              <label className={labelClass}>Note {mode === 'edit' ? '(optional)' : ''}</label>
-              <textarea
-                value={note}
-                onChange={e => setNote(e.target.value.slice(0, NOTE_MAX_LENGTH))}
-                rows={2}
-                className={inputClass}
-                placeholder={mode === 'add' ? "What happened, and roughly when?" : "Why is the current version wrong?"}
-              />
-            </div>
           </>
         )}
 

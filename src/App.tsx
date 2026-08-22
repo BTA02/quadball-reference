@@ -90,7 +90,7 @@ import {
   diffEvent,
   baselineStillMatches,
   applyPatch,
-  NOTE_MAX_LENGTH,
+  DeleteReason,
 } from './lib/suggestions';
 import SuggestionCard from './components/SuggestionCard';
 import SuggestEditForm from './components/SuggestEditForm';
@@ -8142,7 +8142,7 @@ export default function App() {
   // ---------------------------------------------------------------------------
 
   /** Create an 'edit' or 'delete' suggestion against an existing event. */
-  const handleSuggestEdit = async (targetEvent: GameEvent, patchInput: SuggestablePatch, note?: string) => {
+  const handleSuggestEdit = async (targetEvent: GameEvent, patchInput: SuggestablePatch) => {
     if (!currentVideo || !voterId) { toast.error('Still connecting — try that again in a moment.'); return; }
     const { patch, baseline } = diffEvent(targetEvent, patchInput);
     if (Object.keys(patch).length === 0) { toast.error('Nothing changed.'); return; }
@@ -8154,7 +8154,6 @@ export default function App() {
       targetEventId: targetEvent.id,
       patch,
       baseline,
-      ...(note ? { note: note.slice(0, NOTE_MAX_LENGTH) } : {}),
       authorId: voterId,
       createdAt: new Date().toISOString(),
       status: 'open',
@@ -8173,10 +8172,9 @@ export default function App() {
     }
   };
 
-  /** Suggest that an event be removed entirely. Always carries a reason. */
-  const handleSuggestDelete = async (targetEvent: GameEvent, note: string) => {
+  /** Suggest that an event be removed entirely. Always carries a reason — a closed set, never free text. */
+  const handleSuggestDelete = async (targetEvent: GameEvent, reason: DeleteReason) => {
     if (!currentVideo || !voterId) { toast.error('Still connecting — try that again in a moment.'); return; }
-    if (!note.trim()) { toast.error('A reason is required to suggest a delete.'); return; }
 
     const suggestion: Omit<EventSuggestion, 'id'> = {
       gameId: currentVideo.gameId,
@@ -8185,7 +8183,7 @@ export default function App() {
       targetEventId: targetEvent.id,
       patch: {},
       baseline: {},
-      note: note.trim().slice(0, NOTE_MAX_LENGTH),
+      reason,
       authorId: voterId,
       createdAt: new Date().toISOString(),
       status: 'open',
@@ -8205,7 +8203,7 @@ export default function App() {
   };
 
   /** Suggest a missing event entirely — a proposal with no target. */
-  const handleSuggestAdd = async (patch: SuggestablePatch & { videoTime: number }, note?: string) => {
+  const handleSuggestAdd = async (patch: SuggestablePatch & { videoTime: number }) => {
     if (!currentVideo || !voterId) { toast.error('Still connecting — try that again in a moment.'); return; }
     if (!patch.type) { toast.error('Choose an event type.'); return; }
 
@@ -8216,7 +8214,6 @@ export default function App() {
       targetEventId: null,
       patch,
       baseline: {},
-      ...(note ? { note: note.slice(0, NOTE_MAX_LENGTH) } : {}),
       authorId: voterId,
       createdAt: new Date().toISOString(),
       status: 'open',
@@ -8816,16 +8813,16 @@ export default function App() {
           awayPlayers={awayRosterPlayers.filter(rp => rp.player).map(rp => ({ id: rp.player.id, firstName: rp.player.firstName, lastName: rp.player.lastName }))}
           initialVideoTime={player?.getCurrentTime()}
           onCancel={() => setSuggestFormState(null)}
-          onSubmitEdit={(patch, note) => {
-            if (suggestFormState.targetEvent) handleSuggestEdit(suggestFormState.targetEvent, patch, note);
+          onSubmitEdit={(patch) => {
+            if (suggestFormState.targetEvent) handleSuggestEdit(suggestFormState.targetEvent, patch);
             setSuggestFormState(null);
           }}
-          onSubmitDelete={(note) => {
-            if (suggestFormState.targetEvent) handleSuggestDelete(suggestFormState.targetEvent, note);
+          onSubmitDelete={(reason) => {
+            if (suggestFormState.targetEvent) handleSuggestDelete(suggestFormState.targetEvent, reason);
             setSuggestFormState(null);
           }}
-          onSubmitAdd={(patch, note) => {
-            handleSuggestAdd(patch, note);
+          onSubmitAdd={(patch) => {
+            handleSuggestAdd(patch);
             setSuggestFormState(null);
           }}
         />
@@ -9103,7 +9100,7 @@ export default function App() {
               <h2 className="text-3xl font-extrabold border-b pb-4 text-gray-900 mb-6">Suggesting an Edit</h2>
               <div className="space-y-4 text-gray-700 leading-relaxed text-sm">
                 <p>Every event has two extra icons next to the up/down vote buttons: a speech-bubble icon to <strong>suggest a fix</strong>, and a circle-slash icon to <strong>suggest a removal</strong>. Both are open to everyone — signed in or not.</p>
-                <p>A downvote is a quick "something's off here." A suggestion is the fix itself: what the event should actually say, or why it shouldn't exist at all. A removal suggestion always needs a short reason, since it proposes deleting the event outright.</p>
+                <p>A downvote is a quick "something's off here." A suggestion is the fix itself: what the event should actually say. A removal suggestion asks you to pick the closest reason from a short list — there's no open text box anywhere in this feature, on purpose.</p>
                 <p>There's also a "+" button near the top of the Events tab to <strong>suggest a missing event</strong> — a goal, assist, or anything else that wasn't tracked. Team and player choices are limited to whoever's actually in the game.</p>
                 <p>Suggestions show up as an amber-bordered card under the event they target, with a count you can expand to see what's proposed and vote on it. Nothing changes until a moderator accepts it — accepting resets that event's votes, since the content just changed and old votes no longer apply to what's on screen.</p>
               </div>

@@ -18,6 +18,15 @@ export const SUGGESTABLE_KEYS: (keyof SuggestablePatch)[] = [
 export type SuggestionKind = 'edit' | 'delete' | 'add';
 export type SuggestionStatus = 'open' | 'accepted' | 'rejected' | 'superseded';
 
+export type DeleteReason = 'did_not_happen' | 'duplicate' | 'wrong_moment' | 'other';
+
+export const DELETE_REASON_LABELS: Record<DeleteReason, string> = {
+  did_not_happen: "This didn't happen",
+  duplicate: 'Duplicate of another event',
+  wrong_moment: "Doesn't match this moment in the video",
+  other: 'Other',
+};
+
 export interface EventSuggestion {
   id: string;
   gameId: string;
@@ -29,7 +38,12 @@ export interface EventSuggestion {
   patch: SuggestablePatch;
   baseline: SuggestablePatch; // values of exactly the patched keys, at suggest time
 
-  note?: string; // required for 'delete', optional otherwise, max 280 chars
+  /**
+   * Required for kind === 'delete', absent otherwise. A closed set, never free text — see
+   * governing principle in docs/suggested-edits-design.md §2. The diff itself is the
+   * explanation for an edit; a delete needs *some* reason but not an open text box.
+   */
+  reason?: DeleteReason;
   authorId: string; // uid only — never a name, label, or email
   createdAt: any;
 
@@ -53,8 +67,6 @@ export interface EventRevision {
   resolvedBy: string;
   createdAt: any;
 }
-
-export const NOTE_MAX_LENGTH = 280;
 
 /**
  * Deterministic id for edit/delete suggestions: one open suggestion of a given kind per

@@ -286,16 +286,22 @@ await it('a suggestion may NOT arrive pre-voted', async () => {
   await assertFails(setDoc(suggDoc(asAuthor(), 'sugg-prevoted'), makeSuggestion({ upvoterIds: [AUTHOR_UID] })));
 });
 
-await it('a "delete" suggestion needs a non-empty note', async () => {
-  await assertFails(setDoc(suggDoc(asAuthor(), 'sugg-del'), makeSuggestion({ kind: 'delete', targetEventId: 'e1', patch: {}, baseline: {} })));
+// No free text anywhere in this document — `reason` is a closed set of four fixed strings,
+// required only for 'delete' and forbidden everywhere else.
+await it('a "delete" suggestion needs a reason', async () => {
+  await assertFails(setDoc(suggDoc(asAuthor(), 'sugg-del-noreason'), makeSuggestion({ kind: 'delete', targetEventId: 'e1', patch: {}, baseline: {} })));
 });
 
-await it('a "delete" suggestion with a note succeeds', async () => {
-  await assertSucceeds(setDoc(suggDoc(asAuthor(), 'sugg-del'), makeSuggestion({ kind: 'delete', targetEventId: 'e1', patch: {}, baseline: {}, note: 'This never happened, wrong clip.' })));
+await it('a "delete" suggestion with an arbitrary reason string is rejected', async () => {
+  await assertFails(setDoc(suggDoc(asAuthor(), 'sugg-del-freetext'), makeSuggestion({ kind: 'delete', targetEventId: 'e1', patch: {}, baseline: {}, reason: 'wrong player was credited here' })));
 });
 
-await it('a note over 280 characters is rejected', async () => {
-  await assertFails(setDoc(suggDoc(asAuthor(), 'sugg-long'), makeSuggestion({ note: 'x'.repeat(281) })));
+await it('a "delete" suggestion with a reason from the closed set succeeds', async () => {
+  await assertSucceeds(setDoc(suggDoc(asAuthor(), 'sugg-del-ok'), makeSuggestion({ kind: 'delete', targetEventId: 'e1', patch: {}, baseline: {}, reason: 'did_not_happen' })));
+});
+
+await it('an "edit" suggestion may NOT carry a reason field at all', async () => {
+  await assertFails(setDoc(suggDoc(asAuthor(), 'sugg-edit-reason'), makeSuggestion({ reason: 'did_not_happen' })));
 });
 
 await it('an unrecognised extra field is rejected', async () => {
