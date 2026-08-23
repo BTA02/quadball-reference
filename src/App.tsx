@@ -10720,9 +10720,11 @@ export default function App() {
                                         setDraftEvents(prev => prev.map(d => {
                                           if (d.id !== draft.id) return d;
                                           let updatedDraft = { ...d, teamId: currentGame?.homeTeamId || null, playerId: newPlr };
-                                          if (d.type === 'sub_in') {
-                                            const past = [...activeTrackingEvents].sort((a, b) => b.videoTime - a.videoTime).find(ev => ev.playerId === newPlr && ev.type === 'sub_in');
-                                            updatedDraft.position = (past?.position as PositionType) || 'chaser';
+                                          // Position is whatever it was already set to (defaulting to chaser the
+                                          // first time), never guessed from the newly-picked player's history —
+                                          // changing who's subbing in shouldn't silently change the position too.
+                                          if (d.type === 'sub_in' && !updatedDraft.position) {
+                                            updatedDraft.position = 'chaser';
                                           }
                                           return updatedDraft;
                                         }));
@@ -10789,9 +10791,11 @@ export default function App() {
                                         setDraftEvents(prev => prev.map(d => {
                                           if (d.id !== draft.id) return d;
                                           let updatedDraft = { ...d, teamId: currentGame?.awayTeamId || null, playerId: newPlr };
-                                          if (d.type === 'sub_in') {
-                                            const past = [...activeTrackingEvents].sort((a, b) => b.videoTime - a.videoTime).find(ev => ev.playerId === newPlr && ev.type === 'sub_in');
-                                            updatedDraft.position = (past?.position as PositionType) || 'chaser';
+                                          // Position is whatever it was already set to (defaulting to chaser the
+                                          // first time), never guessed from the newly-picked player's history —
+                                          // changing who's subbing in shouldn't silently change the position too.
+                                          if (d.type === 'sub_in' && !updatedDraft.position) {
+                                            updatedDraft.position = 'chaser';
                                           }
                                           return updatedDraft;
                                         }));
