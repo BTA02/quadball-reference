@@ -6104,6 +6104,20 @@ export default function App() {
     localStorage.setItem('qr_stats_filters_expanded', String(next));
   };
 
+  // Same idea for the floating header above the Watch tab's event feed: density toggle,
+  // suggestion queue, and per-team completion controls all live under it, and a plain viewer
+  // never touches any of that — so it starts collapsed to just the scrub/filter row for them.
+  const [eventsHeaderExpandedOverride, setEventsHeaderExpandedOverride] = useState<boolean | null>(() => {
+    const stored = localStorage.getItem('qr_events_header_expanded');
+    return stored === 'true' ? true : stored === 'false' ? false : null;
+  });
+  const eventsHeaderExpanded = eventsHeaderExpandedOverride ?? (effectiveRole !== 'user');
+  const toggleEventsHeaderExpanded = () => {
+    const next = !eventsHeaderExpanded;
+    setEventsHeaderExpandedOverride(next);
+    localStorage.setItem('qr_events_header_expanded', String(next));
+  };
+
   // Protect the /manage and /create routes. Hiding the nav buttons was never enough — `view`
   // is restored straight from the URL, so anyone could land on the moderator tools by typing
   // the address. The matching half of this lives in firestore.rules; neither is sufficient alone.
@@ -9972,157 +9986,163 @@ export default function App() {
 
 <div className={cn(isExpandedLayout ? "flex flex-col h-full relative" : "absolute inset-0", (rightPanelTab === 'live_events' || isExpandedLayout) ? "block" : "hidden", "overflow-y-auto p-4 custom-scrollbar bg-gray-50")} id="events-scroll-container" data-tour="events-feed">
                     <div className="sticky top-0 z-10 bg-gray-50/95 backdrop-blur-md pb-3 pt-1 mb-4 border-b border-gray-200/60 flex flex-col gap-2.5">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-1">
-                          <button
-                            onClick={() => {
-                              const container = document.getElementById('events-scroll-container');
-                              if (!container) return;
-                              const allCards = container.querySelectorAll('[data-event-time]');
-                              let nearest: Element | null = null;
-                              let bestDiff = Infinity;
-                              allCards.forEach(card => {
-                                const t = parseFloat(card.getAttribute('data-event-time') || '0');
-                                const diff = Math.abs(t - currentTime);
-                                if (diff < bestDiff) { bestDiff = diff; nearest = card; }
-                              });
-                              if (nearest) (nearest as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
-                            }}
-                            className="flex items-center gap-1 px-3 py-1 rounded text-[10px] font-bold transition-all border bg-white text-gray-500 border-gray-200 hover:text-red-500 hover:border-red-300 shadow-sm"
-                            title="Scroll to event nearest current time"
-                          >
-                            <SkipForward className="w-3 h-3" />
-                            Now
-                          </button>
-                          <button
-                            onClick={handleRegeneratePossessionPins}
-                            className="flex items-center gap-1 px-2 py-1 rounded transition-all border bg-white text-purple-500 border-purple-200 hover:text-purple-700 hover:border-purple-400 shadow-sm"
-                            title="Regenerate auto-pins (possession & control) for the current video"
-                          >
-                            <RefreshCcw className="w-3 h-3" />
-                          </button>
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mr-1">
-                            {activeTrackingEvents.length} events
-                          </span>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <select value={eventsFilterSet} onChange={e => setEventsFilterSet(e.target.value)} className="flex-1 text-[10px] font-bold text-gray-600 bg-white border border-gray-200 rounded-md py-1.5 px-2 outline-none focus:border-red-300 focus:ring-1 focus:ring-red-200 shadow-sm appearance-none">
+                      {/* This row is the only thing a collapsed header shows, so the scrub/filter
+                          controls that matter for just watching along live here, with the
+                          collapse toggle at the end. Everything past it — density, suggestions,
+                          per-team completion — is moderator/author territory and folds away. */}
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => {
+                            const container = document.getElementById('events-scroll-container');
+                            if (!container) return;
+                            const allCards = container.querySelectorAll('[data-event-time]');
+                            let nearest: Element | null = null;
+                            let bestDiff = Infinity;
+                            allCards.forEach(card => {
+                              const t = parseFloat(card.getAttribute('data-event-time') || '0');
+                              const diff = Math.abs(t - currentTime);
+                              if (diff < bestDiff) { bestDiff = diff; nearest = card; }
+                            });
+                            if (nearest) (nearest as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
+                          }}
+                          className="flex items-center gap-1 px-3 py-1 rounded text-[10px] font-bold transition-all border bg-white text-gray-500 border-gray-200 hover:text-red-500 hover:border-red-300 shadow-sm shrink-0"
+                          title="Scroll to event nearest current time"
+                        >
+                          <SkipForward className="w-3 h-3" />
+                          Now
+                        </button>
+                        <button
+                          onClick={handleRegeneratePossessionPins}
+                          className="flex items-center gap-1 px-2 py-1 rounded transition-all border bg-white text-purple-500 border-purple-200 hover:text-purple-700 hover:border-purple-400 shadow-sm shrink-0"
+                          title="Regenerate auto-pins (possession & control) for the current video"
+                        >
+                          <RefreshCcw className="w-3 h-3" />
+                        </button>
+                        <select value={eventsFilterSet} onChange={e => setEventsFilterSet(e.target.value)} className="flex-1 min-w-0 text-[10px] font-bold text-gray-600 bg-white border border-gray-200 rounded-md py-1.5 px-2 outline-none focus:border-red-300 focus:ring-1 focus:ring-red-200 shadow-sm appearance-none">
                           <option value="all">All Events</option>
                           <option value="all_no_subs">All (No Subs)</option>
                           {currentGame?.homeTeamId && <option value="home_focused">Home Focused</option>}
                           {currentGame?.awayTeamId && <option value="away_focused">Away Focused</option>}
                           <option value="possession_scoring">Possessions & Scoring</option>
                         </select>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <div className="flex-1 flex bg-white border border-gray-200 rounded-md p-0.5 shadow-sm">
-                          {([
-                            { key: 'full' as const, icon: <Eye className="w-3 h-3" />, label: 'Full' },
-                            { key: 'compact' as const, icon: <EyeOff className="w-3 h-3" />, label: 'Compact' },
-                          ]).map(opt => (
-                            <button
-                              key={opt.key}
-                              onClick={() => setEventDensity(opt.key)}
-                              title={`${opt.label} events — ${opt.key === 'full' ? 'everything shown, including the voting/editing footer' : 'same as Full, without the voting/editing footer'}`}
-                              className={cn('flex-1 flex items-center justify-center gap-1 py-1 rounded text-[9px] font-bold uppercase tracking-wider transition-all', eventDensity === opt.key ? 'bg-gray-900 text-white' : 'text-gray-400 hover:text-gray-700')}
-                            >
-                              {opt.icon}
-                            </button>
-                          ))}
-                        </div>
-                        {suggestions.some(s => s.status === 'open') && (
-                          <button
-                            onClick={() => setShowSuggestionQueue(v => !v)}
-                            className={cn('flex items-center gap-1 px-2 py-1.5 rounded-md text-[10px] font-bold transition-all border shrink-0', showSuggestionQueue ? 'bg-amber-500/10 text-amber-600 border-amber-500/30' : 'bg-white text-gray-400 border-gray-200 hover:text-amber-500')}
-                            title="Open suggestions for this game, sorted by score"
-                          >
-                            <Inbox className="w-3 h-3" />
-                            {suggestions.filter(s => s.status === 'open').length}
-                          </button>
-                        )}
                         <button
-                          onClick={() => setSuggestFormState({ mode: 'add' })}
-                          className="flex items-center gap-1 px-2 py-1.5 rounded-md text-[10px] font-bold transition-all border bg-white text-gray-400 border-gray-200 hover:text-blue-500 hover:border-blue-300 shrink-0"
-                          title="Suggest a missing event"
+                          onClick={toggleEventsHeaderExpanded}
+                          className="flex items-center justify-center p-1.5 rounded-md transition-all border bg-white text-gray-400 border-gray-200 hover:text-gray-700 shrink-0"
+                          title={eventsHeaderExpanded ? 'Collapse' : 'Expand'}
                         >
-                          <Plus className="w-3 h-3" />
+                          {eventsHeaderExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                         </button>
                       </div>
-                      {showSuggestionQueue && (
-                        <div className="space-y-2 max-h-64 overflow-y-auto rounded-lg border border-amber-200 bg-amber-50/30 p-2">
-                          {suggestions.filter(s => s.status === 'open').sort((a, b) => b.score - a.score).map(sugg => (
-                            <SuggestionCard
-                              key={sugg.id}
-                              suggestion={sugg}
-                              voterId={voterId}
-                              canModerate={canModerate}
-                              compact
-                              playerName={(id) => { const p = allPlayers.find(pl => pl.id === id); return p ? `${p.firstName.charAt(0)}. ${p.lastName}` : undefined; }}
-                              teamName={(id) => teams.find(tm => tm.id === id)?.name}
-                              onVote={(isUp) => currentVideo && handleVoteOnSuggestion(currentVideo.gameId, sugg, isUp)}
-                              onAccept={() => currentVideo && handleAcceptSuggestion(currentVideo.gameId, sugg)}
-                              onReject={() => currentVideo && handleRejectSuggestion(currentVideo.gameId, sugg)}
-                              onRemove={() => currentVideo && handleWithdrawSuggestion(currentVideo.gameId, sugg.id)}
-                              onSeek={sugg.targetEventId ? () => {
-                                const target = events.find(e => e.id === sugg.targetEventId);
-                                if (target) player?.seekTo(target.videoTime);
-                              } : undefined}
-                            />
-                          ))}
-                          {suggestions.filter(s => s.status === 'open').length === 0 && (
-                            <p className="text-xs text-gray-400 text-center py-4">No open suggestions.</p>
-                          )}
-                        </div>
-                      )}
-                      {canModerate && currentGame && (
-                        <div className="flex flex-col gap-1.5">
-                          <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400">Tracking Complete</p>
-                          {/* Completion is per team, so whoever tracked one side can publish that
-                              side's stats without waiting for anyone to cover the other. Both rows
-                              read the same left-to-right — team, then status — rather than
-                              mirroring home/away, which just made the two harder to compare. */}
-                          <div className="flex flex-col gap-1">
-                            {(['home', 'away'] as const).map(side => {
-                              const teamId = side === 'home' ? currentGame.homeTeamId : currentGame.awayTeamId;
-                              const teamObj = teams.find(t => t.id === teamId);
-                              const teamColor = side === 'home'
-                                ? avoidWhite(teamObj?.colorPrimaryDark || teamObj?.colorPrimary || '#dc2626')
-                                : avoidWhite(teamObj?.colorPrimaryLight || teamObj?.colorLight || '#2563eb');
-                              const current = sideCompletion(currentGame, side);
-                              return (
-                                <div key={side} className="flex items-center gap-2 rounded-md border border-gray-200 bg-white pl-2.5 pr-1.5 py-1">
-                                  <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: teamColor }} />
-                                  <span
-                                    className="text-[10px] font-bold uppercase tracking-wider truncate"
-                                    style={{ color: teamColor }}
-                                    title={teamObj?.name || (side === 'home' ? 'Home' : 'Away')}
-                                  >
-                                    {teamObj?.nickname || teamObj?.name || (side === 'home' ? 'Home' : 'Away')}
-                                  </span>
-                                  <div className="ml-auto flex items-center gap-1">
-                                    {current !== 'none' && <ShieldCheck className="w-3 h-3 text-emerald-500 shrink-0" />}
-                                    <select
-                                      value={current}
-                                      onChange={e => handleSetTeamCompletion(currentGame.id, side, e.target.value as TeamCompletion)}
-                                      className={cn(
-                                        'text-[10px] font-bold bg-transparent outline-none cursor-pointer py-1 pl-1 pr-0.5 rounded',
-                                        current === 'none' ? 'text-gray-400' : 'text-emerald-600'
-                                      )}
-                                      title={`${teamObj?.name || side}: ${TEAM_COMPLETION_LABELS[current]}`}
-                                    >
-                                      {TEAM_COMPLETION_VALUES.map(value => (
-                                        <option key={value} value={value}>{TEAM_COMPLETION_LABELS[value]}</option>
-                                      ))}
-                                    </select>
-                                  </div>
-                                </div>
-                              );
-                            })}
+                      {eventsHeaderExpanded && (
+                        <>
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1 flex bg-white border border-gray-200 rounded-md p-0.5 shadow-sm">
+                              {([
+                                { key: 'full' as const, icon: <Eye className="w-3 h-3" />, label: 'Full' },
+                                { key: 'compact' as const, icon: <EyeOff className="w-3 h-3" />, label: 'Compact' },
+                              ]).map(opt => (
+                                <button
+                                  key={opt.key}
+                                  onClick={() => setEventDensity(opt.key)}
+                                  title={`${opt.label} events — ${opt.key === 'full' ? 'everything shown, including the voting/editing footer' : 'same as Full, without the voting/editing footer'}`}
+                                  className={cn('flex-1 flex items-center justify-center gap-1 py-1 rounded text-[9px] font-bold uppercase tracking-wider transition-all', eventDensity === opt.key ? 'bg-gray-900 text-white' : 'text-gray-400 hover:text-gray-700')}
+                                >
+                                  {opt.icon}
+                                </button>
+                              ))}
+                            </div>
+                            {suggestions.some(s => s.status === 'open') && (
+                              <button
+                                onClick={() => setShowSuggestionQueue(v => !v)}
+                                className={cn('flex items-center gap-1 px-2 py-1.5 rounded-md text-[10px] font-bold transition-all border shrink-0', showSuggestionQueue ? 'bg-amber-500/10 text-amber-600 border-amber-500/30' : 'bg-white text-gray-400 border-gray-200 hover:text-amber-500')}
+                                title="Open suggestions for this game, sorted by score"
+                              >
+                                <Inbox className="w-3 h-3" />
+                                {suggestions.filter(s => s.status === 'open').length}
+                              </button>
+                            )}
+                            <button
+                              onClick={() => setSuggestFormState({ mode: 'add' })}
+                              className="flex items-center gap-1 px-2 py-1.5 rounded-md text-[10px] font-bold transition-all border bg-white text-gray-400 border-gray-200 hover:text-blue-500 hover:border-blue-300 shrink-0"
+                              title="Suggest a missing event"
+                            >
+                              <Plus className="w-3 h-3" />
+                            </button>
                           </div>
-                        </div>
+                          {showSuggestionQueue && (
+                            <div className="space-y-2 max-h-64 overflow-y-auto rounded-lg border border-amber-200 bg-amber-50/30 p-2">
+                              {suggestions.filter(s => s.status === 'open').sort((a, b) => b.score - a.score).map(sugg => (
+                                <SuggestionCard
+                                  key={sugg.id}
+                                  suggestion={sugg}
+                                  voterId={voterId}
+                                  canModerate={canModerate}
+                                  compact
+                                  playerName={(id) => { const p = allPlayers.find(pl => pl.id === id); return p ? `${p.firstName.charAt(0)}. ${p.lastName}` : undefined; }}
+                                  teamName={(id) => teams.find(tm => tm.id === id)?.name}
+                                  onVote={(isUp) => currentVideo && handleVoteOnSuggestion(currentVideo.gameId, sugg, isUp)}
+                                  onAccept={() => currentVideo && handleAcceptSuggestion(currentVideo.gameId, sugg)}
+                                  onReject={() => currentVideo && handleRejectSuggestion(currentVideo.gameId, sugg)}
+                                  onRemove={() => currentVideo && handleWithdrawSuggestion(currentVideo.gameId, sugg.id)}
+                                  onSeek={sugg.targetEventId ? () => {
+                                    const target = events.find(e => e.id === sugg.targetEventId);
+                                    if (target) player?.seekTo(target.videoTime);
+                                  } : undefined}
+                                />
+                              ))}
+                              {suggestions.filter(s => s.status === 'open').length === 0 && (
+                                <p className="text-xs text-gray-400 text-center py-4">No open suggestions.</p>
+                              )}
+                            </div>
+                          )}
+                          {canModerate && currentGame && (
+                            <div className="flex flex-col gap-1.5">
+                              <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400">Tracking Complete</p>
+                              {/* Completion is per team, so whoever tracked one side can publish that
+                                  side's stats without waiting for anyone to cover the other. Both rows
+                                  read the same left-to-right — team, then status — rather than
+                                  mirroring home/away, which just made the two harder to compare. */}
+                              <div className="flex flex-col gap-1">
+                                {(['home', 'away'] as const).map(side => {
+                                  const teamId = side === 'home' ? currentGame.homeTeamId : currentGame.awayTeamId;
+                                  const teamObj = teams.find(t => t.id === teamId);
+                                  const teamColor = side === 'home'
+                                    ? avoidWhite(teamObj?.colorPrimaryDark || teamObj?.colorPrimary || '#dc2626')
+                                    : avoidWhite(teamObj?.colorPrimaryLight || teamObj?.colorLight || '#2563eb');
+                                  const current = sideCompletion(currentGame, side);
+                                  return (
+                                    <div key={side} className="flex items-center gap-2 rounded-md border border-gray-200 bg-white pl-2.5 pr-1.5 py-1">
+                                      <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: teamColor }} />
+                                      <span
+                                        className="text-[10px] font-bold uppercase tracking-wider truncate"
+                                        style={{ color: teamColor }}
+                                        title={teamObj?.name || (side === 'home' ? 'Home' : 'Away')}
+                                      >
+                                        {teamObj?.nickname || teamObj?.name || (side === 'home' ? 'Home' : 'Away')}
+                                      </span>
+                                      <div className="ml-auto flex items-center gap-1">
+                                        {current !== 'none' && <ShieldCheck className="w-3 h-3 text-emerald-500 shrink-0" />}
+                                        <select
+                                          value={current}
+                                          onChange={e => handleSetTeamCompletion(currentGame.id, side, e.target.value as TeamCompletion)}
+                                          className={cn(
+                                            'text-[10px] font-bold bg-transparent outline-none cursor-pointer py-1 pl-1 pr-0.5 rounded',
+                                            current === 'none' ? 'text-gray-400' : 'text-emerald-600'
+                                          )}
+                                          title={`${teamObj?.name || side}: ${TEAM_COMPLETION_LABELS[current]}`}
+                                        >
+                                          {TEAM_COMPLETION_VALUES.map(value => (
+                                            <option key={value} value={value}>{TEAM_COMPLETION_LABELS[value]}</option>
+                                          ))}
+                                        </select>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </>
                       )}
                     </div>
                     <div className="space-y-4">
