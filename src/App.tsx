@@ -51,7 +51,8 @@ import {
   Eye,
   EyeOff,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  SlidersHorizontal
 } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
 import {
@@ -83,7 +84,6 @@ import { userLabel } from './lib/userLabel';
 import { cn } from './lib/utils';
 import {
   TEAM_COMPLETION_LABELS,
-  TEAM_COMPLETION_SHORT_LABELS,
   TEAM_COMPLETION_VALUES,
   gameMatchesScope,
   isFullyComplete,
@@ -6088,6 +6088,22 @@ export default function App() {
   const isAdmin = effectiveRole === 'admin';
   const canModerate = effectiveRole === 'admin' || effectiveRole === 'moderator';
 
+  // The Stats filter bar (league/year/team chips, position/control/flag selects, search) is
+  // tall enough to push the actual table below the fold, especially for a signed-out viewer
+  // who's just browsing. It defaults open for anyone who signs in — they're the ones actually
+  // narrowing things down — and closed for a plain viewer, but a manual toggle always wins
+  // over that default and sticks across sessions.
+  const [statsFiltersExpandedOverride, setStatsFiltersExpandedOverride] = useState<boolean | null>(() => {
+    const stored = localStorage.getItem('qr_stats_filters_expanded');
+    return stored === 'true' ? true : stored === 'false' ? false : null;
+  });
+  const statsFiltersExpanded = statsFiltersExpandedOverride ?? (effectiveRole !== 'user');
+  const toggleStatsFiltersExpanded = () => {
+    const next = !statsFiltersExpanded;
+    setStatsFiltersExpandedOverride(next);
+    localStorage.setItem('qr_stats_filters_expanded', String(next));
+  };
+
   // Protect the /manage and /create routes. Hiding the nav buttons was never enough — `view`
   // is restored straight from the URL, so anyone could land on the moderator tools by typing
   // the address. The matching half of this lives in firestore.rules; neither is sufficient alone.
@@ -9397,26 +9413,52 @@ export default function App() {
                   </button>
                 ))}
               </div>
+              {(() => {
+                const activeFilterCount = statsLeagueDivs.length + statsSelectedYears.length + statsTournamentIds.length + statsTeamIds.length
+                  + (statsPositionFilter !== 'all' ? 1 : 0) + (bludgerControlMode !== 'all' ? 1 : 0) + (statsFlagFilter !== 'all' ? 1 : 0)
+                  + (statsMinGames > 1 ? 1 : 0) + (statsSearch ? 1 : 0);
+                return (
+                  <button
+                    onClick={toggleStatsFiltersExpanded}
+                    className={cn(
+                      'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-all',
+                      statsFiltersExpanded ? 'bg-white border-gray-200 text-gray-700 shadow-sm' : 'bg-gray-50 border-transparent text-gray-500 hover:bg-white hover:border-gray-200'
+                    )}
+                  >
+                    <SlidersHorizontal className="w-3.5 h-3.5" />
+                    Filters
+                    {activeFilterCount > 0 && (
+                      <span className="flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold">
+                        {activeFilterCount}
+                      </span>
+                    )}
+                    {statsFiltersExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                  </button>
+                );
+              })()}
             </div>
 
-            {/* Shared Filters component */}
-            <StatsFilters
-              viewType={statsSubView as 'quadball' | 'beaters' | 'seekers'}
-              leagueDivisions={statsLeagueDivs} onLeagueDivisionChange={setStatsLeagueDivs}
-              leagues={leagues}
-              years={statsSelectedYears} onYearChange={setStatsSelectedYears}
-              availableYears={statsYears}
-              tournamentIds={statsTournamentIds} onTournamentChange={setStatsTournamentIds}
-              tournaments={tournaments}
-              teamIds={statsTeamIds} onTeamChange={setStatsTeamIds}
-              teams={filteredDropdownTeams}
-              search={statsSearch} onSearchChange={setStatsSearch}
-              minGames={statsMinGames} onMinGamesChange={setStatsMinGames}
-              bludgerControlMode={bludgerControlMode} onBludgerControlModeChange={setBludgerControlMode}
-              flagFilter={statsFlagFilter} onFlagFilterChange={setStatsFlagFilter}
-              positionFilter={statsSubView === 'quadball' ? statsPositionFilter : undefined}
-              onPositionFilterChange={statsSubView === 'quadball' ? setStatsPositionFilter : undefined}
-            />
+            {/* Shared Filters component — collapsed by default for a plain viewer, since it's
+                tall enough to bury the table below the fold before they've even used it. */}
+            {statsFiltersExpanded && (
+              <StatsFilters
+                viewType={statsSubView as 'quadball' | 'beaters' | 'seekers'}
+                leagueDivisions={statsLeagueDivs} onLeagueDivisionChange={setStatsLeagueDivs}
+                leagues={leagues}
+                years={statsSelectedYears} onYearChange={setStatsSelectedYears}
+                availableYears={statsYears}
+                tournamentIds={statsTournamentIds} onTournamentChange={setStatsTournamentIds}
+                tournaments={tournaments}
+                teamIds={statsTeamIds} onTeamChange={setStatsTeamIds}
+                teams={filteredDropdownTeams}
+                search={statsSearch} onSearchChange={setStatsSearch}
+                minGames={statsMinGames} onMinGamesChange={setStatsMinGames}
+                bludgerControlMode={bludgerControlMode} onBludgerControlModeChange={setBludgerControlMode}
+                flagFilter={statsFlagFilter} onFlagFilterChange={setStatsFlagFilter}
+                positionFilter={statsSubView === 'quadball' ? statsPositionFilter : undefined}
+                onPositionFilterChange={statsSubView === 'quadball' ? setStatsPositionFilter : undefined}
+              />
+            )}
 
             {!hasPrivilegedStatsAccess && currentSeasonId && (
               <div className="bg-amber-50/80 border border-amber-200/60 rounded-xl p-3 text-xs text-amber-800 flex items-start sm:items-center shadow-sm mb-4">
@@ -10039,46 +10081,47 @@ export default function App() {
                         <div className="flex flex-col gap-1.5">
                           <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400">Tracking Complete</p>
                           {/* Completion is per team, so whoever tracked one side can publish that
-                              side's stats without waiting for anyone to cover the other. Each row
-                              sits on its team's side of the panel, matching the event feed. */}
-                          {(['home', 'away'] as const).map(side => {
-                            const teamId = side === 'home' ? currentGame.homeTeamId : currentGame.awayTeamId;
-                            const teamObj = teams.find(t => t.id === teamId);
-                            const teamColor = side === 'home'
-                              ? avoidWhite(teamObj?.colorPrimaryDark || teamObj?.colorPrimary || '#dc2626')
-                              : avoidWhite(teamObj?.colorPrimaryLight || teamObj?.colorLight || '#2563eb');
-                            const current = sideCompletion(currentGame, side);
-                            return (
-                              <div key={side} className={cn('flex items-center gap-2', side === 'away' && 'flex-row-reverse')}>
-                                <span
-                                  className="text-[10px] font-bold uppercase tracking-wider truncate max-w-[30%]"
-                                  style={{ color: teamColor }}
-                                  title={teamObj?.name || (side === 'home' ? 'Home' : 'Away')}
-                                >
-                                  {teamObj?.nickname || teamObj?.name || (side === 'home' ? 'Home' : 'Away')}
-                                </span>
-                                <div className="flex flex-1 items-stretch rounded-md border border-gray-200 overflow-hidden">
-                                  {TEAM_COMPLETION_VALUES.map((value, i) => (
-                                    <button
-                                      key={value}
-                                      onClick={() => handleSetTeamCompletion(currentGame.id, side, value)}
+                              side's stats without waiting for anyone to cover the other. Both rows
+                              read the same left-to-right — team, then status — rather than
+                              mirroring home/away, which just made the two harder to compare. */}
+                          <div className="flex flex-col gap-1">
+                            {(['home', 'away'] as const).map(side => {
+                              const teamId = side === 'home' ? currentGame.homeTeamId : currentGame.awayTeamId;
+                              const teamObj = teams.find(t => t.id === teamId);
+                              const teamColor = side === 'home'
+                                ? avoidWhite(teamObj?.colorPrimaryDark || teamObj?.colorPrimary || '#dc2626')
+                                : avoidWhite(teamObj?.colorPrimaryLight || teamObj?.colorLight || '#2563eb');
+                              const current = sideCompletion(currentGame, side);
+                              return (
+                                <div key={side} className="flex items-center gap-2 rounded-md border border-gray-200 bg-white pl-2.5 pr-1.5 py-1">
+                                  <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: teamColor }} />
+                                  <span
+                                    className="text-[10px] font-bold uppercase tracking-wider truncate"
+                                    style={{ color: teamColor }}
+                                    title={teamObj?.name || (side === 'home' ? 'Home' : 'Away')}
+                                  >
+                                    {teamObj?.nickname || teamObj?.name || (side === 'home' ? 'Home' : 'Away')}
+                                  </span>
+                                  <div className="ml-auto flex items-center gap-1">
+                                    {current !== 'none' && <ShieldCheck className="w-3 h-3 text-emerald-500 shrink-0" />}
+                                    <select
+                                      value={current}
+                                      onChange={e => handleSetTeamCompletion(currentGame.id, side, e.target.value as TeamCompletion)}
                                       className={cn(
-                                        'flex-1 flex items-center justify-center gap-1 px-1.5 py-1.5 text-[10px] font-bold transition-all whitespace-nowrap',
-                                        i > 0 && 'border-l border-gray-200',
-                                        current === value
-                                          ? (value === 'none' ? 'bg-gray-100 text-gray-600' : 'bg-emerald-50 text-emerald-600')
-                                          : 'bg-white text-gray-400 hover:text-emerald-500'
+                                        'text-[10px] font-bold bg-transparent outline-none cursor-pointer py-1 pl-1 pr-0.5 rounded',
+                                        current === 'none' ? 'text-gray-400' : 'text-emerald-600'
                                       )}
-                                      title={`${teamObj?.name || side}: ${TEAM_COMPLETION_LABELS[value]}`}
+                                      title={`${teamObj?.name || side}: ${TEAM_COMPLETION_LABELS[current]}`}
                                     >
-                                      {current === value && value !== 'none' && <ShieldCheck className="w-3 h-3" />}
-                                      {TEAM_COMPLETION_SHORT_LABELS[value]}
-                                    </button>
-                                  ))}
+                                      {TEAM_COMPLETION_VALUES.map(value => (
+                                        <option key={value} value={value}>{TEAM_COMPLETION_LABELS[value]}</option>
+                                      ))}
+                                    </select>
+                                  </div>
                                 </div>
-                              </div>
-                            );
-                          })}
+                              );
+                            })}
+                          </div>
                         </div>
                       )}
                     </div>
