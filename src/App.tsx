@@ -82,6 +82,19 @@ import { auth, db, signIn, logOut, ensureAnonymousSession, handleFirestoreError,
 import { userLabel } from './lib/userLabel';
 import { cn } from './lib/utils';
 import {
+  TEAM_COMPLETION_LABELS,
+  TEAM_COMPLETION_SHORT_LABELS,
+  TEAM_COMPLETION_VALUES,
+  gameMatchesScope,
+  isFullyComplete,
+  isPartiallyComplete,
+  isTeamComplete,
+  scopeEventsToCompleteTeams,
+  sideCompletion,
+  type CompletionScope,
+  type TeamCompletion,
+} from './lib/gameCompletion';
+import {
   EventSuggestion,
   EventRevision,
   SuggestablePatch,
@@ -284,7 +297,14 @@ export interface Pin {
 
 interface Game {
   id: string; // Unique Game ID
+  /**
+   * Legacy whole-game completion flag. Superseded by the per-team fields below, but still
+   * written as a mirror of "both sides complete" and read as a fallback for older games.
+   * See lib/gameCompletion.ts.
+   */
   isVerified?: boolean;
+  homeCompletion?: TeamCompletion | null;
+  awayCompletion?: TeamCompletion | null;
   seasonId: string;
   leagueId?: string;
   division?: string;
@@ -4495,8 +4515,8 @@ function ManagementView({
             <div className="bg-gray-50 border border-gray-200 rounded-2xl p-8">
               <h3 className="text-xl font-bold mb-4">Moderators</h3>
               <p className="text-gray-500 mb-2">
-                Moderators get the Create tab and are the only people who can verify or unverify
-                an event, or accept a suggested edit.
+                Moderators get the Create tab and are the only people who can mark a team's
+                tracking complete, or accept a suggested edit.
               </p>
               <p className="text-gray-500 mb-8">
                 Everyone else falls out of how they signed in: a Google account can record events
@@ -5242,25 +5262,26 @@ function LeaderboardView({ events, moderatorUids = [], onMakeModerator }: {
   onMakeModerator?: (uid: string) => void;
 }) {
   const leaderboardStats = useMemo(() => {
-    const statsByUser = new Map<string, { userId: string; totalEvents: number; verifiedEvents: number; rejectedEvents: number; upvotes: number; downvotes: number }>();
+    const statsByUser = new Map<string, { userId: string; totalEvents: number; rejectedEvents: number; upvotes: number; downvotes: number }>();
     events.forEach(e => {
       if (!e.userId) return;
-      const u = statsByUser.get(e.userId) || { userId: e.userId, totalEvents: 0, verifiedEvents: 0, rejectedEvents: 0, upvotes: 0, downvotes: 0 };
+      const u = statsByUser.get(e.userId) || { userId: e.userId, totalEvents: 0, rejectedEvents: 0, upvotes: 0, downvotes: 0 };
       u.totalEvents++;
-      if (e.status === 'verified') u.verifiedEvents++;
       if (e.status === 'rejected') u.rejectedEvents++;
       u.upvotes += (e.upvotes || 0);
       u.downvotes += (e.downvotes || 0);
       statsByUser.set(e.userId, u);
     });
-    
+
+    // Accuracy is a voting measure now that events aren't verified: the share of a
+    // contributor's votes that came back positive.
     return Array.from(statsByUser.values())
       .map(s => ({
         ...s,
         netUpvotes: s.upvotes - s.downvotes,
-        accuracy: s.totalEvents > 0 ? (s.verifiedEvents / s.totalEvents) * 100 : 0
+        accuracy: (s.upvotes + s.downvotes) > 0 ? (s.upvotes / (s.upvotes + s.downvotes)) * 100 : 0
       }))
-      .sort((a, b) => b.verifiedEvents - a.verifiedEvents || b.totalEvents - a.totalEvents);
+      .sort((a, b) => b.totalEvents - a.totalEvents || b.netUpvotes - a.netUpvotes);
   }, [events]);
 
   return (
@@ -5270,7 +5291,7 @@ function LeaderboardView({ events, moderatorUids = [], onMakeModerator }: {
           <Trophy className="w-5 h-5 text-amber-500" /> Community Leaderboard
         </h3>
         <p className="text-sm text-gray-500 mt-1">
-          Ranking by verified events contributed. This is the one place a contributor's ID is
+          Ranking by events contributed. This is the one place a contributor's ID is
           visible, so it doubles as the way to hand someone moderator access.
         </p>
         <p className="text-xs text-gray-400 mt-1">
@@ -5285,9 +5306,8 @@ function LeaderboardView({ events, moderatorUids = [], onMakeModerator }: {
             <tr className="bg-gray-50/80 border-b border-gray-200 text-xs uppercase tracking-wider text-gray-500">
               <th className="px-6 py-3 font-bold">Rank</th>
               <th className="px-6 py-3 font-bold">Contributor</th>
-              <th className="px-6 py-3 font-bold text-right">Verified</th>
               <th className="px-6 py-3 font-bold text-right">Total Submissions</th>
-              <th className="px-6 py-3 font-bold text-right">Accuracy</th>
+              <th className="px-6 py-3 font-bold text-right">Upvote Rate</th>
               <th className="px-6 py-3 font-bold text-right">Net Upvotes</th>
               <th className="px-6 py-3 font-bold text-right">Role</th>
             </tr>
@@ -5305,8 +5325,7 @@ function LeaderboardView({ events, moderatorUids = [], onMakeModerator }: {
                   <p className="font-semibold text-gray-900">{userLabel(u.userId)}</p>
                   <p className="text-[10px] font-mono text-gray-400">{u.userId}</p>
                 </td>
-                <td className="px-6 py-4 text-right font-bold text-emerald-600">{u.verifiedEvents}</td>
-                <td className="px-6 py-4 text-right text-gray-600">{u.totalEvents}</td>
+                <td className="px-6 py-4 text-right font-bold text-emerald-600">{u.totalEvents}</td>
                 <td className="px-6 py-4 text-right text-gray-600">{u.accuracy.toFixed(1)}%</td>
                 <td className="px-6 py-4 text-right font-medium text-amber-600">{u.netUpvotes > 0 ? `+${u.netUpvotes}` : u.netUpvotes}</td>
                 <td className="px-6 py-4 text-right">
@@ -5775,6 +5794,16 @@ function splitParam(params: URLSearchParams, key: string): string[] {
   return params.has(key) ? params.get(key)!.split(',').filter(Boolean) : [];
 }
 
+/**
+ * Reads the Stats page's data scope out of the URL. Old links carry `verify=verified` /
+ * `verified_events` / `all` from the retired verification model; anything that asked for
+ * the strictest slice lands on 'full', everything else on 'public'.
+ */
+function parseScopeParam(raw: string | null | undefined): CompletionScope {
+  if (raw === 'full' || raw === 'verified') return 'full';
+  return 'public';
+}
+
 function parseHashRoute(hashFull: string): {
   view: RouteView | null;
   playerId: string | null;
@@ -5833,7 +5862,6 @@ export default function App() {
   const [suggestFormState, setSuggestFormState] = useState<{ mode: 'edit' | 'delete' | 'add'; targetEvent?: GameEvent } | null>(null);
   const [expandedSuggestionEventIds, setExpandedSuggestionEventIds] = useState<Set<string>>(new Set());
   const [showSuggestionQueue, setShowSuggestionQueue] = useState(false);
-  const [showVerifyMenu, setShowVerifyMenu] = useState(false);
   // How much chrome the events feed shows. Persisted locally only — the tracker view doesn't
   // participate in the app's URL deep-linking today, so this stays out of that system rather
   // than bolting a one-off param onto it.
@@ -5938,7 +5966,7 @@ export default function App() {
 
   // Stats Filter State
   const [statsSubView, setStatsSubView] = useState<'quadball' | 'beaters' | 'seekers' | 'gamecast'>((initialParams.get('sport') as any) || 'quadball');
-  const [statsFilter, setStatsFilter] = useState<'all' | 'verified' | 'verified_events'>((initialParams.get('verify') as any) || 'all');
+  const [statsFilter, setStatsFilter] = useState<CompletionScope>(parseScopeParam(initialParams.get('scope') || initialParams.get('verify')));
   const [statsTeamIds, setStatsTeamIds] = useState<string[]>(splitParam(initialParams, 'teams'));
   const [statsSearch, setStatsSearch] = useState<string>(initialParams.get('q') || '');
   const [statsMinGames, setStatsMinGames] = useState<number>(parseInt(initialParams.get('minGP') || '1') || 1);
@@ -5965,7 +5993,7 @@ export default function App() {
         setStatsSelectedYears(splitParam(params, 'years'));
         setStatsTournamentIds(splitParam(params, 'events'));
         setStatsTeamIds(splitParam(params, 'teams'));
-        setStatsFilter((params.get('verify') as any) || 'all');
+        setStatsFilter(parseScopeParam(params.get('scope') || params.get('verify')));
         setStatsPositionFilter((params.get('pos') as any) || 'all');
         setBludgerControlMode((params.get('bc') as any) || 'all');
         setStatsFlagFilter((params.get('flag') as any) || 'all');
@@ -5995,7 +6023,7 @@ export default function App() {
       if (statsSelectedYears.length > 0) params.set('years', statsSelectedYears.join(','));
       if (statsTournamentIds.length > 0) params.set('events', statsTournamentIds.join(','));
       if (statsTeamIds.length > 0) params.set('teams', statsTeamIds.join(','));
-      if (statsFilter !== 'all') params.set('verify', statsFilter);
+      if (statsFilter !== 'public') params.set('scope', statsFilter);
       if (statsPositionFilter !== 'all') params.set('pos', statsPositionFilter);
       if (bludgerControlMode !== 'all') params.set('bc', bludgerControlMode);
       if (statsFlagFilter !== 'all') params.set('flag', statsFlagFilter);
@@ -6171,27 +6199,20 @@ export default function App() {
     return statsGamesRaw.filter(g => !legacySeasonIds.has(g.seasonId));
   }, [statsGamesRaw, legacySeasonIds]);
 
+  // Every authored event is valid — there is no verification gate any more. Accuracy is
+  // settled by voting, and a downvoted event gets corrected rather than hidden. What data
+  // is fit to *aggregate* is decided by team completion, further down in dashboardEvents.
   const statsEvents = useMemo(() => {
-    let evs = [...statsEventsRaw];
     const validGameIds = new Set(statsGames.map(g => g.id));
-    evs = evs.filter(e => validGameIds.has(e.gameId));
-
-    if (statsFilter === 'verified') {
-      // Both the event must be verified AND the game must be complete
-      const verifiedGameIds = new Set(statsGames.filter(g => g.isVerified).map(g => g.id));
-      evs = evs.filter(e => e.status === 'verified' && verifiedGameIds.has(e.gameId));
-    } else if (statsFilter === 'verified_events') {
-      // The event must be verified, regardless of game completeness
-      evs = evs.filter(e => e.status === 'verified');
-    }
-
-    return evs;
-  }, [statsEventsRaw, statsFilter, statsGames]);
+    return statsEventsRaw.filter(e => validGameIds.has(e.gameId));
+  }, [statsEventsRaw, statsGames]);
 
   // Per-game access: current-season games visible on Stats page only to author, author's team, or players on either team
   const dashboardGames = useMemo(() => {
-    let filtered = statsGames;
-    
+    // Only games with at least one complete side reach the Stats page at all; 'full'
+    // narrows that to games where both sides are done.
+    let filtered = statsGames.filter(g => gameMatchesScope(g, statsFilter));
+
     // Privacy filtering
     if (currentSeasonId) {
       filtered = filtered.filter(g => {
@@ -6230,7 +6251,7 @@ export default function App() {
     }
 
     return filtered;
-  }, [statsGames, currentSeasonId, user, currentUserTeamId, statsLeagueDivs, statsSelectedYears, statsTournamentIds, statsSeasons]);
+  }, [statsGames, statsFilter, currentSeasonId, user, currentUserTeamId, statsLeagueDivs, statsSelectedYears, statsTournamentIds, statsSeasons]);
 
   // True if the user can see at least SOME current-season data (hides the warning banner)
   const hasPrivilegedStatsAccess = useMemo(() => {
@@ -6242,20 +6263,22 @@ export default function App() {
     );
   }, [statsGames, currentSeasonId, user, currentUserTeamId]);
 
-  const dashboardEvents = useMemo(() => {
-    const validGameIds = new Set(dashboardGames.map(g => g.id));
-    return statsEvents.filter(e => validGameIds.has(e.gameId));
-  }, [statsEvents, dashboardGames]);
+  // Everything the aggregates run on. In a half-tracked game the incomplete side survives
+  // only as context (its goals still count against the complete side) with no player
+  // attribution, so it never earns a stat line of its own.
+  const dashboardEvents = useMemo(
+    () => scopeEventsToCompleteTeams(statsEvents, dashboardGames, statsFilter),
+    [statsEvents, dashboardGames, statsFilter]
+  );
 
-  // Lists page (archetype stats) is hard-locked to verified + complete data
-  // only, independent of whatever statsFilter the user has set on the main
-  // Stats page — there isn't enough verified data yet for archetype
-  // comparisons to hold up against pending/unverified events.
-  const listsGames = useMemo(() => dashboardGames.filter(g => g.isVerified), [dashboardGames]);
-  const listsEvents = useMemo(() => {
-    const verifiedGameIds = new Set(listsGames.map(g => g.id));
-    return dashboardEvents.filter(e => e.status === 'verified' && verifiedGameIds.has(e.gameId));
-  }, [dashboardEvents, listsGames]);
+  // Lists page (archetype stats) is hard-locked to fully complete games, independent of
+  // whatever scope the user has set on the main Stats page — archetype comparisons don't
+  // hold up on games where only one side was tracked.
+  const listsGames = useMemo(() => dashboardGames.filter(g => isFullyComplete(g)), [dashboardGames]);
+  const listsEvents = useMemo(
+    () => scopeEventsToCompleteTeams(statsEvents, listsGames, 'full'),
+    [statsEvents, listsGames]
+  );
 
   // Contextually filter dropdowns to only show options that contain data
   const filteredDropdownSeasons = useMemo(() => {
@@ -7148,13 +7171,6 @@ export default function App() {
       return;
     }
 
-    // Verified is a latch: once a moderator has signed off on an event, its author can no
-    // longer change or remove it. A moderator has to unverify it first.
-    if (!canModerate && exactDbEvent.status === 'verified') {
-      toast.error('This event has been verified. Ask a moderator to unverify it before deleting.');
-      return;
-    }
-
     try {
       const gameEventsRef = doc(db, 'gameEvents', currentVideo.gameId);
       const snap = await getDoc(gameEventsRef);
@@ -7182,11 +7198,6 @@ export default function App() {
 
     if (!canModerate && exactDbEvent.userId !== user.uid) {
       toast.error('You do not have permission to edit an event authored by someone else.');
-      return;
-    }
-
-    if (!canModerate && exactDbEvent.status === 'verified') {
-      toast.error('This event has been verified. Ask a moderator to unverify it before editing.');
       return;
     }
 
@@ -7263,59 +7274,48 @@ export default function App() {
     }
   };
 
-  const handleVerifyGame = async (gameId: string) => {
+  /**
+   * Marks one side of a game complete (or not). Completion is per team so a single author
+   * can finish the half they tracked and have those stats publish without waiting on
+   * anyone to cover the other side.
+   *
+   * `isVerified` is kept in sync as "both sides complete" purely so anything still reading
+   * the old whole-game flag stays correct.
+   */
+  const handleSetTeamCompletion = async (gameId: string, side: 'home' | 'away', value: TeamCompletion) => {
     if (!canModerate) {
-      toast.error('Only admins or moderators can mark games as complete.');
+      toast.error('Only admins or moderators can mark a team complete.');
       return;
     }
     if (!gameId) return;
-    const currentGame = games.find(g => g.id === gameId);
-    const newVerified = !(currentGame?.isVerified);
+    const game = games.find(g => g.id === gameId);
+    if (!game) return;
+
+    const field = side === 'home' ? 'homeCompletion' : 'awayCompletion';
+    const next = { ...game, [field]: value };
+    const patch = { [field]: value, isVerified: isFullyComplete(next) };
+
     try {
       const batch = writeBatch(db);
-      const gameRef = doc(db, 'games', gameId);
-      batch.update(gameRef, { isVerified: newVerified });
+      batch.update(doc(db, 'games', gameId), patch);
 
       const aggGameRef = doc(db, 'aggregated', 'games');
       const aggSnap = await getDoc(aggGameRef);
       if (aggSnap.exists()) {
         const gamesList = aggSnap.data()?.data || [];
-        const updatedList = gamesList.map((g: any) => g.id === gameId ? { ...g, isVerified: newVerified } : g);
+        const updatedList = gamesList.map((g: any) => g.id === gameId ? { ...g, ...patch } : g);
         batch.update(aggGameRef, { data: updatedList });
       }
 
       await batch.commit();
-      setGames(prev => prev.map(g => g.id === gameId ? { ...g, isVerified: newVerified } : g));
-      toast.success(newVerified ? 'Game marked complete!' : 'Game marked incomplete.');
+      setGames(prev => prev.map(g => g.id === gameId ? { ...g, ...patch } : g));
+      const teamName = teams.find(t => t.id === (side === 'home' ? game.homeTeamId : game.awayTeamId))?.name
+        || (side === 'home' ? 'Home' : 'Away');
+      toast.success(value === 'none'
+        ? `${teamName} marked incomplete.`
+        : `${teamName} marked ${TEAM_COMPLETION_LABELS[value].toLowerCase()}.`);
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, `games/${gameId}`);
-    }
-  };
-
-  const handleToggleAllEventsVerified = async (gameId: string, scope: 'all' | 'home' | 'away' = 'all') => {
-    if (!canModerate) {
-      toast.error('Only admins or moderators can verify events.');
-      return;
-    }
-    if (!gameId) return;
-    try {
-      const game = games.find(g => g.id === gameId);
-      const scopeTeamId = scope === 'home' ? game?.homeTeamId : scope === 'away' ? game?.awayTeamId : undefined;
-      const gameEventsRef = doc(db, 'gameEvents', gameId);
-      const snap = await getDoc(gameEventsRef);
-      if (!snap.exists()) return;
-      const currentEvents = (snap.data()?.events || []) as GameEvent[];
-      // If all non-draft events in scope are verified, unverify them; otherwise verify them
-      const inScope = (e: GameEvent) => !!e.id && !e.id.includes('_draft') && (!scopeTeamId || e.teamId === scopeTeamId);
-      const scopedEvents = currentEvents.filter(inScope);
-      const allVerified = scopedEvents.length > 0 && scopedEvents.every(e => e.status === 'verified');
-      const newStatus = allVerified ? 'recorded' : 'verified';
-      const updatedEvents = currentEvents.map(e => inScope(e) ? { ...e, status: newStatus } : e);
-      await updateDoc(gameEventsRef, { events: updatedEvents });
-      const scopeLabel = scope === 'home' ? 'Home' : scope === 'away' ? 'Away' : 'All';
-      toast.success(allVerified ? `${scopeLabel} events unverified.` : `${scopeLabel} events verified!`);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `gameEvents/${gameId}`);
     }
   };
 
@@ -7543,7 +7543,7 @@ export default function App() {
       const pData = pSnap.docs.map(doc => ({ id: doc.id, firstName: doc.data().firstName || '', lastName: doc.data().lastName || '', preferredName: doc.data().preferredName || '', nickname: doc.data().nickname || '' }));
       const tData = updatedTeams.map(doc => ({ id: doc.id, name: doc.name || '', leagueId: doc.leagueId || '', division: doc.division || '' }));
       const sData = updatedSeasons.map(doc => ({ id: doc.id, name: doc.name || '', leagueId: doc.leagueId || '', year: doc.year || '', description: doc.description || '' }));
-      const gData = gSnap.docs.map(doc => ({ id: doc.id, seasonId: doc.data().seasonId || '', homeTeamId: doc.data().homeTeamId || '', awayTeamId: doc.data().awayTeamId || '', isVerified: doc.data().isVerified || false, authorId: doc.data().authorId || '', authorTeamId: doc.data().authorTeamId || '', tag: doc.data().tag || null, date: doc.data().date || null, leagueId: doc.data().leagueId || null, division: doc.data().division || null, createdAt: serializeTimestamp(doc.data().createdAt) }));
+      const gData = gSnap.docs.map(doc => ({ id: doc.id, seasonId: doc.data().seasonId || '', homeTeamId: doc.data().homeTeamId || '', awayTeamId: doc.data().awayTeamId || '', isVerified: doc.data().isVerified || false, homeCompletion: doc.data().homeCompletion || null, awayCompletion: doc.data().awayCompletion || null, authorId: doc.data().authorId || '', authorTeamId: doc.data().authorTeamId || '', tag: doc.data().tag || null, date: doc.data().date || null, leagueId: doc.data().leagueId || null, division: doc.data().division || null, createdAt: serializeTimestamp(doc.data().createdAt) }));
       const vData = vSnap.docs.map(doc => ({ id: doc.id, videoId: doc.data().videoId || '', youtubeId: doc.data().youtubeId || '', gameId: doc.data().gameId || '', title: doc.data().title || '', createdAt: serializeTimestamp(doc.data().createdAt) }));
 
       batch.set(doc(db, 'aggregated', 'players'), { data: pData });
@@ -7845,7 +7845,7 @@ export default function App() {
 
       // Cascade Delete Games
       for (const g of relatedGames) {
-        const oldAgg = { id: g.id, seasonId: g.seasonId || '', homeTeamId: g.homeTeamId || '', awayTeamId: g.awayTeamId || '', isVerified: g.isVerified || false, createdAt: serializeTimestamp(g.createdAt) };
+        const oldAgg = { id: g.id, seasonId: g.seasonId || '', homeTeamId: g.homeTeamId || '', awayTeamId: g.awayTeamId || '', isVerified: g.isVerified || false, homeCompletion: g.homeCompletion || null, awayCompletion: g.awayCompletion || null, createdAt: serializeTimestamp(g.createdAt) };
         await deleteDoc(doc(db, 'games', g.id));
         await updateDoc(doc(db, 'aggregated', 'games'), { data: arrayRemove(oldAgg) }).catch(() => { });
         await deleteDoc(doc(db, 'gameEvents', g.id)); // Destroys all events tied to the game
@@ -8324,10 +8324,6 @@ export default function App() {
           tx.update(suggestionRef, { status: 'superseded', resolvedBy: voterId, resolvedAt: new Date().toISOString() });
           throw new Error('SUPERSEDED');
         }
-        if (liveEvent.status === 'verified') {
-          throw new Error('This event is verified — unverify it before accepting an edit.');
-        }
-
         const nextEvents = [...currentEvents];
         let revisionBefore: SuggestablePatch | null;
         let revisionAfter: SuggestablePatch | null;
@@ -8447,7 +8443,7 @@ export default function App() {
 
       if (!gameSnap.exists()) {
         await setDoc(gameRef, {
-          id: gId, homeTeamId: homeId, awayTeamId: awayId, isVerified: false, createdAt: serverTimestamp(), tag: newVideoData.tag || null, date: gameDate, 
+          id: gId, homeTeamId: homeId, awayTeamId: awayId, isVerified: false, homeCompletion: 'none', awayCompletion: 'none', createdAt: serverTimestamp(), tag: newVideoData.tag || null, date: gameDate, 
           tournamentId: tournamentId || null, 
           seasonId: normalizedSeasonId, 
           leagueId: normalizedLeagueId, 
@@ -8461,7 +8457,7 @@ export default function App() {
 
       // Auto-heal the Games cache safely without string duplication
       await updateDoc(doc(db, 'aggregated', 'games'), {
-        data: arrayUnion({ id: gId, homeTeamId: homeId, awayTeamId: awayId, isVerified: false, createdAt: gCreatedAt, tag: newVideoData.tag || null, date: gameDate, 
+        data: arrayUnion({ id: gId, homeTeamId: homeId, awayTeamId: awayId, isVerified: false, homeCompletion: 'none', awayCompletion: 'none', createdAt: gCreatedAt, tag: newVideoData.tag || null, date: gameDate, 
           tournamentId: tournamentId || null, 
           seasonId: normalizedSeasonId, 
           leagueId: normalizedLeagueId, 
@@ -8620,7 +8616,8 @@ export default function App() {
 
   const trackingFilteredGames = useMemo(() => {
     return statsGames.filter(g => {
-      if (g.isVerified) return false;
+      // Anything with a side still untracked belongs in the "needs tracking" list.
+      if (isFullyComplete(g)) return false;
       const s = statsSeasons.find(sea => sea.id === g.seasonId);
       if (trackerYearId !== 'all') {
         const yearStr = (s && s.name) ? s.name : g.seasonId;
@@ -8670,7 +8667,7 @@ export default function App() {
   const verifiedTeams = useMemo(() => {
     const tSet = new Set<string>();
     statsGames.forEach(g => {
-      if (!g.isVerified) return;
+      if (!isPartiallyComplete(g)) return;
       if (verifiedYearId !== 'all') {
         const s = statsSeasons.find(sea => sea.id === g.seasonId);
         const yearStr = (s && s.name) ? s.name : g.seasonId;
@@ -8687,7 +8684,7 @@ export default function App() {
 
   const verifiedFilteredGames = useMemo(() => {
     return statsGames.filter(g => {
-      if (!g.isVerified) return false;
+      if (!isPartiallyComplete(g)) return false;
       if (verifiedYearId !== 'all') {
         const s = statsSeasons.find(sea => sea.id === g.seasonId);
         const yearStr = (s && s.name) ? s.name : g.seasonId;
@@ -9107,7 +9104,8 @@ export default function App() {
             <div className="mb-12">
               <h2 className="text-3xl font-extrabold border-b pb-4 text-gray-900 mb-6">Become an Author</h2>
               <div className="space-y-4 text-gray-700 leading-relaxed text-sm">
-                <p>Just... sign in. That's it. Any stat you author becomes public. They get aggregated on the "pending" tab, but will move to verified after receiving enough votes.</p>
+                <p>Just... sign in. That's it. Any event you author counts immediately — nothing waits on approval. If an event is wrong, votes and suggested edits are how it gets corrected, not hidden.</p>
+                <p>Where those events show up on the Stats page depends on tracking being finished. Completeness is tracked per team, so once one team's events are all in, that team's stats publish on the <strong>Public</strong> tab even if nobody has covered the other side yet. Games with both teams finished also appear under <strong>Fully Complete</strong>.</p>
               </div>
             </div>
 
@@ -9123,7 +9121,7 @@ export default function App() {
             <div className="mb-12">
               <h2 className="text-3xl font-extrabold border-b pb-4 text-gray-900 mb-6">Add A Game</h2>
               <div className="space-y-4 text-gray-700 leading-relaxed text-sm">
-                <p>After signing in, authors can add videos from the Watch tab. Adding a new video is the first step in tracking stats for a game. Once added, any author can add events for verification.</p>
+                <p>After signing in, authors can add videos from the Watch tab. Adding a new video is the first step in tracking stats for a game. Once added, any author can start recording events — and you only have to do one team's worth: a moderator marks that team complete and its stats go live on their own.</p>
               </div>
             </div>
 
@@ -9349,7 +9347,7 @@ export default function App() {
             {/* Data source indicator */}
             <div className="flex items-center gap-3 mb-2 text-[10px] font-mono text-gray-400">
               <span className={demoData ? 'text-amber-500' : 'text-green-500'}>● {demoData ? 'Demo CSV' : 'Firestore'}</span>
-              <span>{statsEvents.length.toLocaleString()} events{statsFilter.startsWith('verified') ? ' (verified)' : ''}</span>
+              <span>{dashboardEvents.length.toLocaleString()} events</span>
               <span>{statsPlayers.length} players</span>
               <span>{statsGames.length} games</span>
               <span>{statsTeams.length} teams</span>
@@ -9376,18 +9374,26 @@ export default function App() {
                 <StatsTabButton active={statsSubView === 'beaters'} onClick={() => setStatsSubView('beaters')} label="Dodgeball" activeClass="bg-neutral-900 text-white" />
                 <StatsTabButton active={statsSubView === 'seekers'} onClick={() => setStatsSubView('seekers')} label="Flag" activeClass="bg-yellow-400 text-black" />
               </StatsTabSelector>
+              {/* Public = every game with at least one side complete, counting only the
+                  complete side. Fully Complete = both sides done. */}
               <div className="flex border rounded-lg bg-gray-50 overflow-hidden text-xs font-bold shadow-sm">
-                {(['verified', 'verified_events', 'all'] as const).map(option => (
+                {([
+                  { value: 'public' as const, label: 'Public', title: 'Every game with at least one team complete. Only the complete team\u2019s stats are counted.' },
+                  { value: 'full' as const, label: 'Fully Complete', title: 'Only games where both teams are marked complete.' },
+                ]).map(option => (
                   <button
-                    key={option}
-                    onClick={() => setStatsFilter(option)}
+                    key={option.value}
+                    onClick={() => setStatsFilter(option.value)}
+                    title={option.title}
                     className={cn(
                       'flex items-center gap-1.5 px-3 py-1.5 transition-all outline-none',
-                      statsFilter === option ? (option.startsWith('verified') ? 'bg-amber-500/10 text-amber-600 shadow-sm border border-amber-500/30' : 'bg-white shadow-sm border border-gray-200 text-gray-800') : 'text-gray-400 hover:text-gray-600 border border-transparent hover:bg-white/50'
+                      statsFilter === option.value
+                        ? (option.value === 'full' ? 'bg-amber-500/10 text-amber-600 shadow-sm border border-amber-500/30' : 'bg-white shadow-sm border border-gray-200 text-gray-800')
+                        : 'text-gray-400 hover:text-gray-600 border border-transparent hover:bg-white/50'
                     )}
                   >
-                    {option.startsWith('verified') && <ShieldCheck className="w-3.5 h-3.5" />}
-                    {option === 'all' ? 'Pending' : option === 'verified_events' ? 'Verified' : 'Verified & Complete'}
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    {option.label}
                   </button>
                 ))}
               </div>
@@ -9515,7 +9521,7 @@ export default function App() {
             teams={statsTeams}
             games={listsGames}
             seasons={statsSeasons}
-            statsFilter="verified"
+            statsFilter="full"
             onPlayerSelect={handlePlayerProfileClick}
             onBack={() => setView('stats')}
           />
@@ -9659,7 +9665,17 @@ export default function App() {
                     const acts = statsVideos.filter(v => v.gameId === g.id);
                     if (acts.length === 0) return null;
 
-                    const isVerified = g.isVerified;
+                    // "Complete" here means at least one side is finished; the badge says whether
+                    // that's the whole game or just half of it.
+                    const someComplete = isPartiallyComplete(g);
+                    const bothComplete = isFullyComplete(g);
+                    const completeSides = (['home', 'away'] as const)
+                      .filter(side => sideCompletion(g, side) !== 'none')
+                      .map(side => {
+                        const t = statsTeams.find(tm => tm.id === (side === 'home' ? g.homeTeamId : g.awayTeamId));
+                        return t?.nickname || t?.name || side;
+                      });
+                    const isVerified = someComplete;
                     return acts.map((vid, idx) => (
                       <button
                         key={`${g.id}_${vid.id}_${idx}`}
@@ -9687,10 +9703,16 @@ export default function App() {
                           </div>
 
                           <div className="flex items-center gap-3 shrink-0">
-                            {isVerified && (
-                              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-700 uppercase tracking-wider">
+                            {someComplete && (
+                              <span
+                                className={cn(
+                                  'inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider',
+                                  bothComplete ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'
+                                )}
+                                title={bothComplete ? 'Both teams complete' : `Complete: ${completeSides.join(', ')}`}
+                              >
                                 <ShieldCheck className="w-3 h-3" />
-                                Complete
+                                {bothComplete ? 'Complete' : 'Half'}
                               </span>
                             )}
                             <ChevronRight className={cn("w-4 h-4", isVerified ? "text-amber-300" : "text-gray-300")} />
@@ -9870,7 +9892,7 @@ export default function App() {
                       onClick={() => setRightPanelTab('live_events')}
                       className={cn("flex-1 px-4 py-3 text-sm font-bold flex items-center justify-center gap-2 transition-colors", rightPanelTab === 'live_events' ? "bg-white text-red-600 border-b-2 border-red-600" : "text-gray-500 hover:text-gray-700 hover:bg-gray-100")}
                     >
-                      <Clock className="w-4 h-4" /> {statsFilter.startsWith('verified') ? 'Verified' : 'Events'}
+                      <Clock className="w-4 h-4" /> Events
                     </button>
                     {canRecordEvents && (
                       <button
@@ -9940,14 +9962,8 @@ export default function App() {
                         </div>
                         <div className="flex items-center gap-1.5">
                           <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mr-1">
-                            {statsFilter.startsWith('verified') ? `${activeTrackingEvents.filter(e => e.status === 'verified').length} verified` : `${activeTrackingEvents.length} events`}
+                            {activeTrackingEvents.length} events
                           </span>
-                          <button
-                            onClick={() => setStatsFilter(statsFilter.startsWith('verified') ? 'all' : 'verified')}
-                            className={cn('flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold transition-all border', statsFilter.startsWith('verified') ? 'bg-amber-500/10 text-amber-600 border-amber-500/30' : 'bg-white text-gray-400 border-gray-200 hover:text-amber-500')}
-                          >
-                            <ShieldCheck className="w-3 h-3" /> {statsFilter.startsWith('verified') ? 'Verified' : 'All'}
-                          </button>
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
@@ -10020,88 +10036,49 @@ export default function App() {
                         </div>
                       )}
                       {canModerate && currentGame && (
-                        <div className="flex items-center gap-2">
-                          {(() => {
-                            const homeTeamId = currentGame.homeTeamId;
-                            const awayTeamId = currentGame.awayTeamId;
-                            const nonDraft = activeTrackingEvents.filter(e => e.id && !e.id.includes('_draft'));
-                            const scopedEvts = (teamId?: string) => teamId ? nonDraft.filter(e => e.teamId === teamId) : nonDraft;
-                            const isAllVerified = (teamId?: string) => {
-                              const evts = scopedEvts(teamId);
-                              return evts.length > 0 && evts.every(e => e.status === 'verified');
-                            };
-                            const allVerified = isAllVerified();
-                            const homeVerified = isAllVerified(homeTeamId);
-                            const awayVerified = isAllVerified(awayTeamId);
-                            const homeTeamObj = teams.find(t => t.id === homeTeamId);
-                            const awayTeamObj = teams.find(t => t.id === awayTeamId);
+                        <div className="flex flex-col gap-1.5">
+                          <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400">Tracking Complete</p>
+                          {/* Completion is per team, so whoever tracked one side can publish that
+                              side's stats without waiting for anyone to cover the other. Each row
+                              sits on its team's side of the panel, matching the event feed. */}
+                          {(['home', 'away'] as const).map(side => {
+                            const teamId = side === 'home' ? currentGame.homeTeamId : currentGame.awayTeamId;
+                            const teamObj = teams.find(t => t.id === teamId);
+                            const teamColor = side === 'home'
+                              ? avoidWhite(teamObj?.colorPrimaryDark || teamObj?.colorPrimary || '#dc2626')
+                              : avoidWhite(teamObj?.colorPrimaryLight || teamObj?.colorLight || '#2563eb');
+                            const current = sideCompletion(currentGame, side);
                             return (
-                              <div className="relative flex-1">
-                                <div className="flex items-stretch rounded-md border border-gray-200 overflow-hidden">
-                                  <button
-                                    onClick={() => handleToggleAllEventsVerified(currentGame.id, 'all')}
-                                    className={cn(
-                                      'flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-[10px] font-bold transition-all',
-                                      allVerified
-                                        ? 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'
-                                        : 'bg-white text-gray-400 hover:text-emerald-500'
-                                    )}
-                                    title={allVerified ? 'Unverify all events' : 'Verify all events'}
-                                  >
-                                    <ShieldCheck className="w-3 h-3" />
-                                    {allVerified ? 'Events Verified ✓' : 'Verify All Events'}
-                                  </button>
-                                  <button
-                                    onClick={() => setShowVerifyMenu(v => !v)}
-                                    className={cn(
-                                      'flex items-center justify-center px-1.5 border-l transition-all',
-                                      allVerified ? 'bg-emerald-50 text-emerald-600 border-emerald-200 hover:bg-emerald-100' : 'bg-white text-gray-400 border-gray-200 hover:text-emerald-500'
-                                    )}
-                                    title="Verify by team"
-                                  >
-                                    <ChevronDown className={cn('w-3 h-3 transition-transform', showVerifyMenu && 'rotate-180')} />
-                                  </button>
+                              <div key={side} className={cn('flex items-center gap-2', side === 'away' && 'flex-row-reverse')}>
+                                <span
+                                  className="text-[10px] font-bold uppercase tracking-wider truncate max-w-[30%]"
+                                  style={{ color: teamColor }}
+                                  title={teamObj?.name || (side === 'home' ? 'Home' : 'Away')}
+                                >
+                                  {teamObj?.nickname || teamObj?.name || (side === 'home' ? 'Home' : 'Away')}
+                                </span>
+                                <div className="flex flex-1 items-stretch rounded-md border border-gray-200 overflow-hidden">
+                                  {TEAM_COMPLETION_VALUES.map((value, i) => (
+                                    <button
+                                      key={value}
+                                      onClick={() => handleSetTeamCompletion(currentGame.id, side, value)}
+                                      className={cn(
+                                        'flex-1 flex items-center justify-center gap-1 px-1.5 py-1.5 text-[10px] font-bold transition-all whitespace-nowrap',
+                                        i > 0 && 'border-l border-gray-200',
+                                        current === value
+                                          ? (value === 'none' ? 'bg-gray-100 text-gray-600' : 'bg-emerald-50 text-emerald-600')
+                                          : 'bg-white text-gray-400 hover:text-emerald-500'
+                                      )}
+                                      title={`${teamObj?.name || side}: ${TEAM_COMPLETION_LABELS[value]}`}
+                                    >
+                                      {current === value && value !== 'none' && <ShieldCheck className="w-3 h-3" />}
+                                      {TEAM_COMPLETION_SHORT_LABELS[value]}
+                                    </button>
+                                  ))}
                                 </div>
-                                {showVerifyMenu && (
-                                  <>
-                                    <div className="fixed inset-0 z-0" onClick={() => setShowVerifyMenu(false)} />
-                                    <div className="absolute z-10 mt-1 left-0 right-0 rounded-md border border-gray-200 bg-white shadow-lg overflow-hidden">
-                                      {[
-                                        { scope: 'home' as const, label: `${homeTeamObj?.name || 'Home'} Events`, verified: homeVerified },
-                                        { scope: 'away' as const, label: `${awayTeamObj?.name || 'Away'} Events`, verified: awayVerified },
-                                        { scope: 'all' as const, label: 'All Events', verified: allVerified },
-                                      ].map(({ scope, label, verified }, i) => (
-                                        <button
-                                          key={scope}
-                                          onClick={() => { handleToggleAllEventsVerified(currentGame.id, scope); setShowVerifyMenu(false); }}
-                                          className={cn(
-                                            'w-full flex items-center justify-between gap-2 px-2 py-1.5 text-[10px] font-bold text-left hover:bg-gray-50',
-                                            i > 0 && 'border-t border-gray-100'
-                                          )}
-                                        >
-                                          <span>{label}</span>
-                                          {verified && <ShieldCheck className="w-3 h-3 text-emerald-500" />}
-                                        </button>
-                                      ))}
-                                    </div>
-                                  </>
-                                )}
                               </div>
                             );
-                          })()}
-                          <button
-                            onClick={() => handleVerifyGame(currentGame.id)}
-                            className={cn(
-                              'flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md text-[10px] font-bold transition-all border',
-                              currentGame.isVerified
-                                ? 'bg-amber-50 text-amber-600 border-amber-200 hover:bg-amber-100'
-                                : 'bg-white text-gray-400 border-gray-200 hover:text-amber-500 hover:border-amber-300'
-                            )}
-                            title={currentGame.isVerified ? 'Mark game incomplete' : 'Mark game complete'}
-                          >
-                            <ShieldCheck className="w-3 h-3" />
-                            {currentGame.isVerified ? 'Game Complete ✓' : 'Mark Game Complete'}
-                          </button>
+                          })}
                         </div>
                       )}
                     </div>
@@ -10122,10 +10099,6 @@ export default function App() {
                       } as any));
                       let displayEvents = [...activeTrackingEvents, ...pinEvents].sort((a,b) => a.videoTime - b.videoTime);
                       
-                      if (statsFilter.startsWith('verified')) {
-                        displayEvents = displayEvents.filter(e => e.status === 'verified' || e.type.startsWith('pin_'));
-                      }
-
                       switch (eventsFilterSet) {
                         case 'all_no_subs':
                           displayEvents = displayEvents.filter(e => (e.type !== 'sub_in' && e.type !== 'sub_out') || e.type.startsWith('pin_'));
@@ -10191,9 +10164,6 @@ export default function App() {
                                     <p className="text-sm font-bold capitalize">
                                       {label}
                                     </p>
-                                    {evt.status === 'verified' && (
-                                      <ShieldCheck className="w-3.5 h-3.5 text-amber-500" />
-                                    )}
                                   </div>
                                   {(evt.playerId || evt.teamId) && (
                                     <div className="text-xs">
@@ -10234,42 +10204,10 @@ export default function App() {
 
                             {eventDensity !== 'compact' && (
                               <div className="flex items-center justify-between pt-2 border-t border-gray-200/50">
-                                {/* Left to right: verify, net, then the vote counters — now the vote
-                                    buttons themselves, not separate count-only displays paired with a
-                                    duplicate button on the right. */}
+                                {/* Net, then the vote counters. Events are valid as soon as they're
+                                    authored — there is no verification step here any more, so voting
+                                    is the whole accuracy story. */}
                                 <div className="flex items-center gap-3">
-                                  {canModerate && (
-                                    <button
-                                      onClick={async () => {
-                                        if (!user || !currentVideo) return;
-                                        const newStatus = evt.status === 'verified' ? 'unverified' : 'verified';
-                                        // Optimistic local update
-                                        setEvents(prev => prev.map(e => e.id === evt.id ? { ...e, status: newStatus } : e));
-                                        try {
-                                          const gameRef = doc(db, 'gameEvents', currentVideo.gameId);
-                                          const gameSnap = await getDoc(gameRef);
-                                          if (!gameSnap.exists()) { toast.error('Game doc not found'); return; }
-                                          const gameData = gameSnap.data();
-                                          const currentEvents = gameData.events as GameEvent[] || [];
-                                          const eventIndex = currentEvents.findIndex(e => e.id === evt.id);
-                                          if (eventIndex !== -1) {
-                                            currentEvents[eventIndex] = { ...currentEvents[eventIndex], status: newStatus };
-                                            await updateDoc(gameRef, { events: currentEvents });
-                                            toast.success(newStatus === 'verified' ? '✓ Event verified' : 'Verification removed');
-                                          }
-                                        } catch (e) {
-                                          console.error(e);
-                                          toast.error('Failed to update verification');
-                                          // Revert optimistic update
-                                          setEvents(prev => prev.map(ev => ev.id === evt.id ? { ...ev, status: evt.status } : ev));
-                                        }
-                                      }}
-                                      className={cn("p-1.5 rounded-lg transition-all border", evt.status === 'verified' ? 'bg-amber-500/15 text-amber-500 border-amber-500/30 shadow-sm' : 'bg-gray-50 text-gray-300 border-gray-200 hover:text-amber-500 hover:border-amber-500 hover:bg-amber-50')}
-                                      title={evt.status === 'verified' ? "Remove Verification" : "Verify Event (Trusted Only)"}
-                                    >
-                                      <ShieldCheck className="w-4 h-4" />
-                                    </button>
-                                  )}
                                   <span className={cn(
                                     "text-xs font-bold",
                                     evt.votes > 0 ? "text-green-500" : evt.votes < 0 ? "text-red-500" : "text-gray-400"
@@ -10386,8 +10324,8 @@ export default function App() {
                       return displayEvents.length === 0 ? (
                         <div className="h-full flex flex-col items-center justify-center text-gray-400 text-center p-8">
                           <Clock className="w-12 h-12 mb-4 opacity-20" />
-                          <p>{statsFilter.startsWith('verified') ? 'No verified events yet.' : 'No events recorded yet.'}</p>
-                          <p className="text-sm">{statsFilter.startsWith('verified') ? 'Switch to All to see unverified events.' : 'Be the first to track a goal!'}</p>
+                          <p>No events recorded yet.</p>
+                          <p className="text-sm">Be the first to track a goal!</p>
                         </div>
                       ) : (
                         displayEvents.slice().reverse().map((event) => {

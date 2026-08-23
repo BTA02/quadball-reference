@@ -5,6 +5,8 @@
  * Designed to be used with useMemo for zero-cost re-renders.
  */
 
+import { isFullyCompleteWithSubs, isTeamComplete, type TeamCompletion } from './gameCompletion';
+
 // Re-declare minimal types to avoid circular imports
 interface GameEvent {
   id: string;
@@ -30,7 +32,10 @@ interface Player {
 
 interface Game {
   id: string;
+  /** Legacy whole-game completion flag; see lib/gameCompletion.ts. */
   isVerified?: boolean;
+  homeCompletion?: TeamCompletion | null;
+  awayCompletion?: TeamCompletion | null;
   seasonId: string;
   homeTeamId: string;
   awayTeamId: string;
@@ -740,7 +745,9 @@ export function computeAdvancedStats(
       };
     };
 
-    const isGameVerified = !!game.isVerified;
+    // League baselines only draw on games where both sides are complete *with* subs —
+    // minutes-weighted averages fall apart on half-tracked or sub-less games.
+    const isGameVerified = isFullyCompleteWithSubs(game);
 
     if (processHome) {
       homeStints = computePlayerStints(sorted, resolvedHomeId, homePlayerIds, gameEndTime).filter(s => s.position !== 'beater' && s.position !== 'seeker');
@@ -826,7 +833,9 @@ export function computeAdvancedStats(
       const activeHome = processHome && homeActive ? getActivePlayersAtTime(homeStints, e.videoTime, filters.position) : new Set<string>();
       const activeAway = processAway && awayActive ? getActivePlayersAtTime(awayStints, e.videoTime, filters.position) : new Set<string>();
 
-      const isGameVerified = !!game.isVerified;
+      // League baselines only draw on games where both sides are complete *with* subs —
+      // minutes-weighted averages fall apart on half-tracked or sub-less games.
+      const isGameVerified = isFullyCompleteWithSubs(game);
 
       for (const pid of activeHome) {
         const accum = getAccum(pid);
@@ -1224,7 +1233,9 @@ function computeRAPM(
 ): Map<string, number> {
   if (filters.skipRapm) return new Map<string, number>();
   const { relevantGames: allRelevant, eventsByGame } = groupEventsByGame(events, games, filters);
-  const relevantGames = allRelevant.filter(g => g.isVerified);
+  // RAPM regresses both lineups against each other, so it needs every stint on both sides:
+  // a half-tracked game or one without subs would feed the model phantom lineups.
+  const relevantGames = allRelevant.filter(g => isFullyCompleteWithSubs(g));
   const matchups = new Map<string, { offPlayers: string[], defPlayers: string[], poss: number, goals: number }>();
 
   for (const [gameId, gameEvents] of eventsByGame) {
@@ -1601,11 +1612,15 @@ export function computeTeamQuadballStats(
   const validGamesForParams = relevantGames.map(x => x.id);
   const filteredGames = games.filter(g => validGamesForParams.includes(g.id) && (!teamIdSet || teamIdSet.has(g.homeTeamId) || teamIdSet.has(g.awayTeamId)));
 
+  // A game counts toward a team only if *that* team's tracking is complete. In a
+  // half-tracked game the opponent still supplies context (goals against, possessions
+  // faced) but gets no stat line of its own.
   for (const g of filteredGames) {
-    if (!teamGameIds.has(g.homeTeamId)) teamGameIds.set(g.homeTeamId, new Set());
-    if (!teamGameIds.has(g.awayTeamId)) teamGameIds.set(g.awayTeamId, new Set());
-    teamGameIds.get(g.homeTeamId)!.add(g.id);
-    teamGameIds.get(g.awayTeamId)!.add(g.id);
+    for (const tid of [g.homeTeamId, g.awayTeamId]) {
+      if (!isTeamComplete(g, tid)) continue;
+      if (!teamGameIds.has(tid)) teamGameIds.set(tid, new Set());
+      teamGameIds.get(tid)!.add(g.id);
+    }
   }
 
   // Aggregate: for team-level stats, we count raw events per team (not per player)
@@ -1626,9 +1641,11 @@ export function computeTeamQuadballStats(
   };
 
   for (const g of filteredGames) {
+    const teamCounts = (tid: string) => isTeamComplete(g, tid);
+
     // Safety check - make sure both teams get initialized even if 0 events
-    getTA(g.homeTeamId);
-    getTA(g.awayTeamId);
+    if (teamCounts(g.homeTeamId)) getTA(g.homeTeamId);
+    if (teamCounts(g.awayTeamId)) getTA(g.awayTeamId);
 
     const gameEvents = events.filter(e => e.gameId === g.id);
     const sorted = [...gameEvents].sort((a,b) => a.videoTime - b.videoTime);
@@ -1650,8 +1667,8 @@ export function computeTeamQuadballStats(
       if (['goal', 'shot', 'attempt', 'miss_ko', 'turnover'].includes(t)) {
         isNewPossForEventTeam = (currentInferredPossTeam !== e.teamId);
         if (isNewPossForEventTeam) {
-          getTA(e.teamId).teamPoss++;
-          getTA(oppId).oppPoss++;
+          if (teamCounts(e.teamId)) getTA(e.teamId).teamPoss++;
+          if (teamCounts(oppId)) getTA(oppId).oppPoss++;
           currentInferredPossTeam = e.teamId;
           const isShotOrAttempt = (t === 'shot' || t === 'attempt' || t === 'miss_ko');
           didCurrentPossShoot = isShotOrAttempt;
@@ -1663,8 +1680,8 @@ export function computeTeamQuadballStats(
         }
       }
 
-      const isValidForTeam = isStateActiveForTeam(e.teamId, e.videoTime, controlPeriods, flagReleaseTime, filters as any);
-      const isValidForOpp = isStateActiveForTeam(oppId, e.videoTime, controlPeriods, flagReleaseTime, filters as any);
+      const isValidForTeam = teamCounts(e.teamId) && isStateActiveForTeam(e.teamId, e.videoTime, controlPeriods, flagReleaseTime, filters as any);
+      const isValidForOpp = teamCounts(oppId) && isStateActiveForTeam(oppId, e.videoTime, controlPeriods, flagReleaseTime, filters as any);
 
       if (isValidForTeam) {
         const acc = getTA(e.teamId);
@@ -1820,6 +1837,8 @@ export function computeTeamBeaterStats(
 
     for (const teamId of [game.homeTeamId, game.awayTeamId]) {
       if (teamIdSet && !teamIdSet.has(teamId)) continue;
+      // Half-tracked games only produce a stat line for the side that's complete.
+      if (!isTeamComplete(game, teamId)) continue;
       if (!teamAccum.has(teamId)) {
         teamAccum.set(teamId, { controlSeconds: 0, totalSeconds: 0, gameIds: new Set() });
       }
@@ -2172,7 +2191,9 @@ export function computeBeaterSoloStats(
     const flagReleaseEvent = sorted.find(ev => ev.type === 'flag_released');
     const flagReleaseTime = flagReleaseEvent?.videoTime ?? Infinity;
 
-    const isGameVerified = !!game.isVerified;
+    // League baselines only draw on games where both sides are complete *with* subs —
+    // minutes-weighted averages fall apart on half-tracked or sub-less games.
+    const isGameVerified = isFullyCompleteWithSubs(game);
 
     for (const stint of beaterStints) {
       if (teamIdSet && !teamIdSet.has(stint.teamId)) continue;
@@ -2254,7 +2275,9 @@ export function computeBeaterSoloStats(
         else if (eventTeamId === resolvedAwayId && isStateActiveForTeam(resolvedAwayId, e.videoTime, controlPeriods, flagReleaseTime, filters)) awayGoalsThisGame++;
       }
 
-      const isGameVerified = !!game.isVerified;
+      // League baselines only draw on games where both sides are complete *with* subs —
+      // minutes-weighted averages fall apart on half-tracked or sub-less games.
+      const isGameVerified = isFullyCompleteWithSubs(game);
 
       for (const stint of beaterStints) {
         if (teamIdSet && !teamIdSet.has(stint.teamId)) continue;
@@ -2595,7 +2618,9 @@ export function computeBeaterPairStats(
 
     const pairOverlaps = computePairOverlaps(beaterStints);
 
-    const isGameVerified = !!game.isVerified;
+    // League baselines only draw on games where both sides are complete *with* subs —
+    // minutes-weighted averages fall apart on half-tracked or sub-less games.
+    const isGameVerified = isFullyCompleteWithSubs(game);
 
     for (const overlap of pairOverlaps) {
       if (teamIdSet && !teamIdSet.has(overlap.teamId)) continue;
@@ -2686,7 +2711,9 @@ export function computeBeaterPairStats(
           const acc = getPairAcc(overlap.player1, overlap.player2, overlapTeamRaw);
           const isTeamEv = overlap.teamId === eventTeamId;
 
-          const isGameVerified = !!game.isVerified;
+          // League baselines only draw on games where both sides are complete *with* subs —
+          // minutes-weighted averages fall apart on half-tracked or sub-less games.
+          const isGameVerified = isFullyCompleteWithSubs(game);
           if (isGoal) {
             const hasControl = controlPeriods.some(cp =>
               cp.teamId === overlap.teamId && e.videoTime >= cp.startTime && e.videoTime <= cp.endTime

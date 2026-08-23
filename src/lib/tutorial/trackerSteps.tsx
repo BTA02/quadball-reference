@@ -150,8 +150,8 @@ export const TRACKER_STEPS: TutorialStep[] = [
     title: 'Recording is yours',
     body: (
       <p>
-        Because you're signed in, you get the <strong>Record</strong> tab. Anything you add becomes
-        part of the public record once it's verified by votes.
+        Because you're signed in, you get the <strong>Record</strong> tab. Anything you add is part
+        of the public record right away — votes and suggested edits are how it gets corrected.
       </p>
     ),
   },

@@ -208,6 +208,20 @@ for (const [name, payload] of [
   });
 }
 
+await it('a moderator may set per-team completion on a game', async () => {
+  await assertSucceeds(setDoc(doc(asModerator(), 'games', 'completion-ok'), {
+    id: 'completion-ok', seasonId: 's1', homeTeamId: 'team1', awayTeamId: 'team2', authorTeamId: null,
+    isVerified: false, homeCompletion: 'complete', awayCompletion: 'complete_no_subs', createdAt: null,
+  }));
+});
+
+await it('a game may NOT carry an unknown completion value', async () => {
+  await assertFails(setDoc(doc(asModerator(), 'games', 'completion-bad'), {
+    id: 'completion-bad', seasonId: 's1', homeTeamId: 'team1', awayTeamId: 'team2', authorTeamId: null,
+    isVerified: false, homeCompletion: 'mostly', awayCompletion: 'none', createdAt: null,
+  }));
+});
+
 await it('an author may NOT write aggregated data', async () => {
   await assertFails(setDoc(doc(asAuthor(), 'aggregated', 'games'), { data: [] }));
 });

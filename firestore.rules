@@ -175,6 +175,12 @@ service cloud.firestore {
              (data.awayTeamId == null || data.awayTeamId is string) &&
              (data.authorTeamId == null || data.authorTeamId is string) &&
              (data.isVerified == null || data.isVerified is bool) &&
+             // Per-team tracking completion. `isVerified` is the legacy whole-game flag,
+             // now written as a mirror of "both sides complete".
+             (!('homeCompletion' in data) || data.homeCompletion == null ||
+                data.homeCompletion in ['none', 'complete', 'complete_no_subs']) &&
+             (!('awayCompletion' in data) || data.awayCompletion == null ||
+                data.awayCompletion in ['none', 'complete', 'complete_no_subs']) &&
              (data.createdAt == null || data.createdAt is timestamp);
     }
 

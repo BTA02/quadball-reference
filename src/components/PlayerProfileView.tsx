@@ -82,7 +82,7 @@ export default function PlayerProfileView({
   const [sortKey, setSortKey] = useState('minutesPlayed');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
 
-  const baseFilters = useMemo(() => ({ skipRapm: statsFilter === 'verified_events', outlierFilter: 'include' as const }), [statsFilter]);
+  const baseFilters = useMemo(() => ({ skipRapm: false, outlierFilter: 'include' as const }), [statsFilter]);
 
   const activeGames = activeSeasonId === 'all' ? playedGames : playedGames.filter(g => g.seasonId === activeSeasonId);
   const activeEvents = events.filter(e => activeGames.some(g => g.id === e.gameId));
