@@ -37,7 +37,7 @@ interface SeekerStatsViewProps {
   teams: Team[];
   games: Game[];
   seasons: Season[];
-  statsFilter?: 'all' | 'verified' | 'verified_events' | 'legacy';
+  statsFilter?: 'public' | 'full';
   teamIds?: string[];
   search?: string;
   minGames?: number;
@@ -47,7 +47,7 @@ interface SeekerStatsViewProps {
 }
 
 export default function SeekerStatsView({ 
-  players, events, teams, games, seasons, statsFilter = 'all',
+  players, events, teams, games, seasons, statsFilter = 'public',
   teamIds: teamFilterIds = [], search = '',
   minGames = 1, bludgerControlMode = 'all', flagFilter = 'all',
   onPlayerSelect
@@ -66,7 +66,7 @@ export default function SeekerStatsView({
 
   const filteredSeasons = useMemo(() => {
     let sArr = [...seasons];
-    if (statsFilter === 'all') {
+    if (statsFilter === 'public') {
       sArr = sArr.filter(sea => {
         const yearMatch = sea.name.match(/\d{4}/);
         return yearMatch ? parseInt(yearMatch[0]) > 2020 : true;
@@ -76,7 +76,7 @@ export default function SeekerStatsView({
   }, [seasons, statsFilter]);
 
   const filteredTeams = useMemo(() => {
-    if (statsFilter !== 'all') return teams;
+    if (statsFilter !== 'public') return teams;
     const seasonIdsAfter2020 = new Set(filteredSeasons.map(s => s.id));
     const teamsWithGamesAfter2020 = new Set<string>();
     games.forEach(g => {
@@ -95,7 +95,7 @@ export default function SeekerStatsView({
     teamIds: teamFilterIds.length > 0 ? teamFilterIds : undefined,
     controlFilter: bludgerControlMode === 'all' ? undefined : undefined,
     flagFilter: flagFilter === 'all' ? undefined : flagFilter,
-    statsFilter: statsFilter === 'verified_events' ? 'verified' : statsFilter
+    statsFilter
   }), [teamFilterIds, bludgerControlMode, flagFilter, statsFilter]);
 
   const seekerStats = useMemo(

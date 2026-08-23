@@ -35,7 +35,7 @@ interface QuadballStatsViewProps {
   teams: Team[];
   games: Game[];
   seasons: Season[];
-  statsFilter?: 'all' | 'verified' | 'verified_events' | 'legacy';
+  statsFilter?: 'public' | 'full';
   teamIds?: string[];
   search?: string;
   minGames?: number;
@@ -47,7 +47,7 @@ interface QuadballStatsViewProps {
 }
 
 export default function QuadballStatsView({ 
-  players, events, teams, games, seasons, statsFilter = 'all',
+  players, events, teams, games, seasons, statsFilter = 'public',
   teamIds: teamFilterIds = [], search = '',
   minGames = 1, bludgerControlMode = 'all', flagFilter = 'all', positionFilter = 'all',
   onPlayerSelect, onTeamSelect
@@ -68,7 +68,7 @@ export default function QuadballStatsView({
 
   const filteredSeasons = useMemo(() => {
     let s = [...seasons];
-    if (statsFilter === 'all') {
+    if (statsFilter === 'public') {
       s = s.filter(sea => {
         const yearMatch = sea.name.match(/\d{4}/);
         return yearMatch ? parseInt(yearMatch[0]) > 2020 : true;
@@ -78,7 +78,7 @@ export default function QuadballStatsView({
   }, [seasons, statsFilter]);
 
   const filteredTeams = useMemo(() => {
-    if (statsFilter !== 'all') return teams;
+    if (statsFilter !== 'public') return teams;
     const seasonIdsAfter2020 = new Set(filteredSeasons.map(s => s.id));
     const teamsWithGamesAfter2020 = new Set<string>();
     games.forEach(g => {
@@ -98,7 +98,7 @@ export default function QuadballStatsView({
     position: positionFilter === 'all' ? undefined : positionFilter,
     controlFilter: undefined,
     flagFilter: flagFilter === 'all' ? undefined : flagFilter,
-    skipRapm: statsFilter === 'verified_events'
+    skipRapm: false
   }), [teamFilterIds, positionFilter, flagFilter, statsFilter]);
 
   const filtersWith = useMemo(() => ({ ...filtersAll, controlFilter: 'with' as const }), [filtersAll]);

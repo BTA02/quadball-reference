@@ -1,7 +1,7 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { collection, collectionGroup, getDocs, query, where, limit } from 'firebase/firestore';
 import { toast } from 'sonner';
-import { RefreshCw, ShieldAlert, MessageSquareWarning, Inbox, PlayCircle, Activity, ChevronDown, ChevronUp } from 'lucide-react';
+import { RefreshCw, MessageSquareWarning, Inbox, PlayCircle, Activity, ChevronDown, ChevronUp } from 'lucide-react';
 import { db } from '../lib/firebase';
 import { cn } from '../lib/utils';
 
@@ -31,7 +31,6 @@ interface RecentEventsViewProps {
 interface GameActivity {
   gameId: string;
   newStats: number;
-  unverified: number;
   contested: number;
   openSuggestions: number;
   lastAt: number;
@@ -125,7 +124,7 @@ export default function RecentEventsView({ games, teams, seasons = [], onOpenGam
     const entryFor = (gameId: string) => {
       let entry = byGame.get(gameId);
       if (!entry) {
-        entry = { gameId, newStats: 0, unverified: 0, contested: 0, openSuggestions: 0, lastAt: 0 };
+        entry = { gameId, newStats: 0, contested: 0, openSuggestions: 0, lastAt: 0 };
         byGame.set(gameId, entry);
       }
       return entry;
@@ -140,7 +139,6 @@ export default function RecentEventsView({ games, teams, seasons = [], onOpenGam
       const entry = entryFor(ev._gameId);
       if (created !== null && created >= cutoff) {
         entry.newStats++;
-        if (ev.status !== 'verified') entry.unverified++;
       }
       if ((ev.downvotes || ev.downvoterIds?.length || 0) > 0) entry.contested++;
       if (mostRecent > entry.lastAt) entry.lastAt = mostRecent;
@@ -255,7 +253,6 @@ export default function RecentEventsView({ games, teams, seasons = [], onOpenGam
                   <tr className="text-left text-[10px] font-bold uppercase tracking-wider text-gray-400">
                     <th className="px-6 py-3">Game</th>
                     <th className="px-6 py-3 text-right">New Stats</th>
-                    <th className="px-6 py-3 text-right">Unverified</th>
                     <th className="px-6 py-3 text-right">Contested</th>
                     <th className="px-6 py-3 text-right">Suggestions</th>
                     <th className="px-6 py-3 text-right">Review</th>
@@ -277,15 +274,6 @@ export default function RecentEventsView({ games, teams, seasons = [], onOpenGam
                           <p className="text-[10px] text-gray-400 font-medium">
                             {formatAgo(row.lastAt, loadedAt || row.lastAt)}
                           </p>
-                        </td>
-                        <td className="px-6 py-4 text-right">
-                          {row.unverified > 0 ? (
-                            <span className="inline-flex items-center gap-1 font-bold text-amber-600">
-                              <ShieldAlert className="w-3.5 h-3.5" /> {row.unverified.toLocaleString()}
-                            </span>
-                          ) : (
-                            <span className="text-gray-300">—</span>
-                          )}
                         </td>
                         <td className="px-6 py-4 text-right">
                           {row.contested > 0 ? (

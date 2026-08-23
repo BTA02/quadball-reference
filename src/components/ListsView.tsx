@@ -27,7 +27,7 @@ interface ListsViewProps {
   teams: Team[];
   games: Game[];
   seasons: Season[];
-  statsFilter?: 'all' | 'verified' | 'verified_events' | 'legacy';
+  statsFilter?: 'public' | 'full';
   onPlayerSelect?: (playerId: string) => void;
   onBack?: () => void;
 }
@@ -60,7 +60,7 @@ function getQuadballOnlyPlayerIds(events: GameEvent[], players: Player[]): Set<s
 }
 
 export default function ListsView({
-  players, events, teams, games, seasons, statsFilter = 'all',
+  players, events, teams, games, seasons, statsFilter = 'public',
   onPlayerSelect, onBack
 }: ListsViewProps) {
   const [groupKey, setGroupKey] = useState<GroupKey>('beater');
@@ -68,7 +68,7 @@ export default function ListsView({
   const [showHelp, setShowHelp] = useState(false);
 
   const filters = useMemo(() => ({
-    skipRapm: statsFilter === 'verified_events'
+    skipRapm: false
   }), [statsFilter]);
 
   return (
