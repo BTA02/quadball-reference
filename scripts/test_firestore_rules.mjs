@@ -222,6 +222,34 @@ await it('a game may NOT carry an unknown completion value', async () => {
   }));
 });
 
+// Mirrors exactly what handleSetTeamCompletion in App.tsx sends: a moderator seeds a full
+// game doc (as the Create tab would), then patches it with a *partial* updateDoc carrying
+// only the one changed completion field plus the mirrored isVerified flag — never the whole
+// document. The setDoc-only coverage above wouldn't have caught a rule that only worked for
+// a full document.
+await it('a moderator may PATCH a game with just one completion field (update, not set)', async () => {
+  const modDb = asModerator();
+  await setDoc(doc(modDb, 'games', 'completion-patch'), {
+    id: 'completion-patch', seasonId: 's1', homeTeamId: 'team1', awayTeamId: 'team2', authorTeamId: null,
+    isVerified: false, homeCompletion: 'none', awayCompletion: 'none', createdAt: null,
+  });
+  await assertSucceeds(updateDoc(doc(modDb, 'games', 'completion-patch'), {
+    homeCompletion: 'complete', isVerified: false,
+  }));
+});
+
+// handleSetTeamCompletion uses set(..., {merge:true}) instead of update() specifically so
+// that marking a team complete works even when the game's local state entry exists but its
+// Firestore doc hasn't been written yet (new games are added to local state before the
+// background Firestore sync completes) — update() would throw "no document to update" here.
+await it('a moderator may self-heal a missing game doc via merge-set completion patch', async () => {
+  await assertSucceeds(setDoc(
+    doc(asModerator(), 'games', 'completion-self-heal'),
+    { id: 'completion-self-heal', homeCompletion: 'complete', isVerified: false },
+    { merge: true }
+  ));
+});
+
 await it('an author may NOT write aggregated data', async () => {
   await assertFails(setDoc(doc(asAuthor(), 'aggregated', 'games'), { data: [] }));
 });

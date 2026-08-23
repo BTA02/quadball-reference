@@ -169,19 +169,25 @@ service cloud.firestore {
     }
 
     function isValidGame(data) {
+      // Every optional field is guarded with `!('field' in data) || ...` rather than just
+      // `data.field == null`: accessing a map key that is entirely absent (not merely
+      // null-valued) raises a rules evaluation error, not a plain `false`, and denies the
+      // write outright. That matters here specifically because completion is set with a
+      // merge write that may create the doc from a sparse patch (just the changed field) —
+      // a genuinely partial document is the normal case for this collection, not an edge case.
       return data.id is string && data.id.size() > 0 &&
-             (data.seasonId == null || data.seasonId is string) &&
-             (data.homeTeamId == null || data.homeTeamId is string) &&
-             (data.awayTeamId == null || data.awayTeamId is string) &&
-             (data.authorTeamId == null || data.authorTeamId is string) &&
-             (data.isVerified == null || data.isVerified is bool) &&
+             (!('seasonId' in data) || data.seasonId == null || data.seasonId is string) &&
+             (!('homeTeamId' in data) || data.homeTeamId == null || data.homeTeamId is string) &&
+             (!('awayTeamId' in data) || data.awayTeamId == null || data.awayTeamId is string) &&
+             (!('authorTeamId' in data) || data.authorTeamId == null || data.authorTeamId is string) &&
+             (!('isVerified' in data) || data.isVerified == null || data.isVerified is bool) &&
              // Per-team tracking completion. `isVerified` is the legacy whole-game flag,
              // now written as a mirror of "both sides complete".
              (!('homeCompletion' in data) || data.homeCompletion == null ||
                 data.homeCompletion in ['none', 'complete', 'complete_no_subs']) &&
              (!('awayCompletion' in data) || data.awayCompletion == null ||
                 data.awayCompletion in ['none', 'complete', 'complete_no_subs']) &&
-             (data.createdAt == null || data.createdAt is timestamp);
+             (!('createdAt' in data) || data.createdAt == null || data.createdAt is timestamp);
     }
 
     function isValidVideo(data) {

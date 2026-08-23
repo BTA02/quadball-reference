@@ -7327,7 +7327,13 @@ export default function App() {
 
     try {
       const batch = writeBatch(db);
-      batch.update(doc(db, 'games', gameId), patch);
+      // A game's local state entry can exist before its Firestore doc does — new games are
+      // added to local state immediately, with the actual `games/{id}` doc written in the
+      // background afterward — so `update()` here would throw "no document to update" on
+      // that race. `set(..., {merge:true})` heals it instead, same as every other admin-tool
+      // repair of this collection, carrying over whatever the local copy already knows
+      // (home/away team, season, etc.) rather than creating a bare completion-only doc.
+      batch.set(doc(db, 'games', gameId), { ...game, ...patch, id: gameId }, { merge: true });
 
       const aggGameRef = doc(db, 'aggregated', 'games');
       const aggSnap = await getDoc(aggGameRef);
