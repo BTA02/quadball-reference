@@ -5833,6 +5833,7 @@ export default function App() {
   const [suggestFormState, setSuggestFormState] = useState<{ mode: 'edit' | 'delete' | 'add'; targetEvent?: GameEvent } | null>(null);
   const [expandedSuggestionEventIds, setExpandedSuggestionEventIds] = useState<Set<string>>(new Set());
   const [showSuggestionQueue, setShowSuggestionQueue] = useState(false);
+  const [showVerifyMenu, setShowVerifyMenu] = useState(false);
   // How much chrome the events feed shows. Persisted locally only — the tracker view doesn't
   // participate in the app's URL deep-linking today, so this stays out of that system rather
   // than bolting a one-off param onto it.
@@ -7291,29 +7292,28 @@ export default function App() {
     }
   };
 
-  const handleToggleAllEventsVerified = async (gameId: string) => {
+  const handleToggleAllEventsVerified = async (gameId: string, scope: 'all' | 'home' | 'away' = 'all') => {
     if (!canModerate) {
       toast.error('Only admins or moderators can verify events.');
       return;
     }
     if (!gameId) return;
     try {
+      const game = games.find(g => g.id === gameId);
+      const scopeTeamId = scope === 'home' ? game?.homeTeamId : scope === 'away' ? game?.awayTeamId : undefined;
       const gameEventsRef = doc(db, 'gameEvents', gameId);
       const snap = await getDoc(gameEventsRef);
       if (!snap.exists()) return;
       const currentEvents = (snap.data()?.events || []) as GameEvent[];
-      // If all non-draft events are verified, unverify them; otherwise verify them
-      const nonDraftEvents = currentEvents.filter(e => e.id && !e.id.includes('_draft'));
-      const allVerified = nonDraftEvents.length > 0 && nonDraftEvents.every(e => e.status === 'verified');
+      // If all non-draft events in scope are verified, unverify them; otherwise verify them
+      const inScope = (e: GameEvent) => !!e.id && !e.id.includes('_draft') && (!scopeTeamId || e.teamId === scopeTeamId);
+      const scopedEvents = currentEvents.filter(inScope);
+      const allVerified = scopedEvents.length > 0 && scopedEvents.every(e => e.status === 'verified');
       const newStatus = allVerified ? 'recorded' : 'verified';
-      const updatedEvents = currentEvents.map(e => {
-        if (e.id && !e.id.includes('_draft')) {
-          return { ...e, status: newStatus };
-        }
-        return e;
-      });
+      const updatedEvents = currentEvents.map(e => inScope(e) ? { ...e, status: newStatus } : e);
       await updateDoc(gameEventsRef, { events: updatedEvents });
-      toast.success(allVerified ? 'All events unverified.' : 'All events verified!');
+      const scopeLabel = scope === 'home' ? 'Home' : scope === 'away' ? 'Away' : 'All';
+      toast.success(allVerified ? `${scopeLabel} events unverified.` : `${scopeLabel} events verified!`);
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, `gameEvents/${gameId}`);
     }
@@ -10022,22 +10022,71 @@ export default function App() {
                       {canModerate && currentGame && (
                         <div className="flex items-center gap-2">
                           {(() => {
-                            const allEvts = activeTrackingEvents.filter(e => e.id && !e.id.includes('_draft'));
-                            const allVerified = allEvts.length > 0 && allEvts.every(e => e.status === 'verified');
+                            const homeTeamId = currentGame.homeTeamId;
+                            const awayTeamId = currentGame.awayTeamId;
+                            const nonDraft = activeTrackingEvents.filter(e => e.id && !e.id.includes('_draft'));
+                            const scopedEvts = (teamId?: string) => teamId ? nonDraft.filter(e => e.teamId === teamId) : nonDraft;
+                            const isAllVerified = (teamId?: string) => {
+                              const evts = scopedEvts(teamId);
+                              return evts.length > 0 && evts.every(e => e.status === 'verified');
+                            };
+                            const allVerified = isAllVerified();
+                            const homeVerified = isAllVerified(homeTeamId);
+                            const awayVerified = isAllVerified(awayTeamId);
+                            const homeTeamObj = teams.find(t => t.id === homeTeamId);
+                            const awayTeamObj = teams.find(t => t.id === awayTeamId);
                             return (
-                              <button
-                                onClick={() => handleToggleAllEventsVerified(currentGame.id)}
-                                className={cn(
-                                  'flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md text-[10px] font-bold transition-all border',
-                                  allVerified
-                                    ? 'bg-emerald-50 text-emerald-600 border-emerald-200 hover:bg-emerald-100'
-                                    : 'bg-white text-gray-400 border-gray-200 hover:text-emerald-500 hover:border-emerald-300'
+                              <div className="relative flex-1">
+                                <div className="flex items-stretch rounded-md border border-gray-200 overflow-hidden">
+                                  <button
+                                    onClick={() => handleToggleAllEventsVerified(currentGame.id, 'all')}
+                                    className={cn(
+                                      'flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-[10px] font-bold transition-all',
+                                      allVerified
+                                        ? 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'
+                                        : 'bg-white text-gray-400 hover:text-emerald-500'
+                                    )}
+                                    title={allVerified ? 'Unverify all events' : 'Verify all events'}
+                                  >
+                                    <ShieldCheck className="w-3 h-3" />
+                                    {allVerified ? 'Events Verified ✓' : 'Verify All Events'}
+                                  </button>
+                                  <button
+                                    onClick={() => setShowVerifyMenu(v => !v)}
+                                    className={cn(
+                                      'flex items-center justify-center px-1.5 border-l transition-all',
+                                      allVerified ? 'bg-emerald-50 text-emerald-600 border-emerald-200 hover:bg-emerald-100' : 'bg-white text-gray-400 border-gray-200 hover:text-emerald-500'
+                                    )}
+                                    title="Verify by team"
+                                  >
+                                    <ChevronDown className={cn('w-3 h-3 transition-transform', showVerifyMenu && 'rotate-180')} />
+                                  </button>
+                                </div>
+                                {showVerifyMenu && (
+                                  <>
+                                    <div className="fixed inset-0 z-0" onClick={() => setShowVerifyMenu(false)} />
+                                    <div className="absolute z-10 mt-1 left-0 right-0 rounded-md border border-gray-200 bg-white shadow-lg overflow-hidden">
+                                      {[
+                                        { scope: 'home' as const, label: `${homeTeamObj?.name || 'Home'} Events`, verified: homeVerified },
+                                        { scope: 'away' as const, label: `${awayTeamObj?.name || 'Away'} Events`, verified: awayVerified },
+                                        { scope: 'all' as const, label: 'All Events', verified: allVerified },
+                                      ].map(({ scope, label, verified }, i) => (
+                                        <button
+                                          key={scope}
+                                          onClick={() => { handleToggleAllEventsVerified(currentGame.id, scope); setShowVerifyMenu(false); }}
+                                          className={cn(
+                                            'w-full flex items-center justify-between gap-2 px-2 py-1.5 text-[10px] font-bold text-left hover:bg-gray-50',
+                                            i > 0 && 'border-t border-gray-100'
+                                          )}
+                                        >
+                                          <span>{label}</span>
+                                          {verified && <ShieldCheck className="w-3 h-3 text-emerald-500" />}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </>
                                 )}
-                                title={allVerified ? 'Unverify all events' : 'Verify all events'}
-                              >
-                                <ShieldCheck className="w-3 h-3" />
-                                {allVerified ? 'Events Verified ✓' : 'Verify All Events'}
-                              </button>
+                              </div>
                             );
                           })()}
                           <button
@@ -10382,38 +10431,51 @@ export default function App() {
                           const nestedAssist = event.type === 'goal' ? nestedAssistByGoalId.get(event.id) : undefined;
                           const hasOpenSuggestions = suggestions.some(s => s.targetEventId === event.id && s.status === 'open');
 
+                          // Home events hug the left edge, away events hug the right edge, and
+                          // team-less (neutral) events stay centered — alignment alone signals
+                          // which side an event belongs to, so cards are capped well under full
+                          // width instead of stretching edge to edge.
+                          const isHome = event.teamId === currentGame?.homeTeamId;
+                          const isAway = event.teamId === currentGame?.awayTeamId;
                           return (
                             <div
                               key={event.id}
-                              data-event-time={event.videoTime}
                               className={cn(
-                                "group border rounded-xl p-3 transition-all",
-                                !event.teamId && "bg-white border-gray-200 hover:border-gray-300",
-                                event.status === 'rejected' && "opacity-50 grayscale",
-                                hasOpenSuggestions && "border-l-4"
+                                "flex w-full",
+                                isHome ? "justify-start" : isAway ? "justify-end" : "justify-center"
                               )}
-                              style={{
-                                // A team-colored card sets borderColor (all four sides) via inline style, which
-                                // would silently beat the amber Tailwind class below since inline style always
-                                // wins over a class for the same property — so the amber override has to be
-                                // merged in after, not left to CSS specificity.
-                                ...(event.teamId === currentGame?.homeTeamId ? { backgroundColor: hexToRgba(feedHomeColor, 0.06), borderColor: hexToRgba(feedHomeColor, 0.25) } :
-                                  event.teamId === currentGame?.awayTeamId ? { backgroundColor: hexToRgba(feedAwayColor, 0.06), borderColor: hexToRgba(feedAwayColor, 0.25) } :
-                                    {}),
-                                ...(hasOpenSuggestions ? { borderLeftColor: '#f59e0b', borderLeftWidth: '4px' } : {}),
-                              }}
                             >
-                              {renderTrackingEventBody(event)}
-                              {nestedAssist && (
-                                <>
-                                  <div className="flex items-center gap-2 my-2">
-                                    <div className="flex-1 border-t border-dashed border-gray-300" />
-                                    <CornerDownRight className="w-3.5 h-3.5 text-gray-300 shrink-0" />
-                                    <div className="flex-1 border-t border-dashed border-gray-300" />
-                                  </div>
-                                  {renderTrackingEventBody(nestedAssist)}
-                                </>
-                              )}
+                              <div
+                                data-event-time={event.videoTime}
+                                className={cn(
+                                  "group border rounded-xl p-3 transition-all w-full max-w-[85%] sm:max-w-[75%]",
+                                  !event.teamId && "bg-white border-gray-200 hover:border-gray-300",
+                                  event.status === 'rejected' && "opacity-50 grayscale",
+                                  hasOpenSuggestions && "border-l-4"
+                                )}
+                                style={{
+                                  // A team-colored card sets borderColor (all four sides) via inline style, which
+                                  // would silently beat the amber Tailwind class below since inline style always
+                                  // wins over a class for the same property — so the amber override has to be
+                                  // merged in after, not left to CSS specificity.
+                                  ...(isHome ? { backgroundColor: hexToRgba(feedHomeColor, 0.06), borderColor: hexToRgba(feedHomeColor, 0.25) } :
+                                    isAway ? { backgroundColor: hexToRgba(feedAwayColor, 0.06), borderColor: hexToRgba(feedAwayColor, 0.25) } :
+                                      {}),
+                                  ...(hasOpenSuggestions ? { borderLeftColor: '#f59e0b', borderLeftWidth: '4px' } : {}),
+                                }}
+                              >
+                                {renderTrackingEventBody(event)}
+                                {nestedAssist && (
+                                  <>
+                                    <div className="flex items-center gap-2 my-2">
+                                      <div className="flex-1 border-t border-dashed border-gray-300" />
+                                      <CornerDownRight className="w-3.5 h-3.5 text-gray-300 shrink-0" />
+                                      <div className="flex-1 border-t border-dashed border-gray-300" />
+                                    </div>
+                                    {renderTrackingEventBody(nestedAssist)}
+                                  </>
+                                )}
+                              </div>
                             </div>
                           );
                         })
