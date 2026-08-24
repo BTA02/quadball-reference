@@ -8697,7 +8697,9 @@ export default function App() {
   const verifiedTeams = useMemo(() => {
     const tSet = new Set<string>();
     statsGames.forEach(g => {
-      if (!isPartiallyComplete(g)) return;
+      // "Completed Games" is fully-complete games only; half-tracked games stay in
+      // Watch and Contribute (trackingFilteredGames) until the other side is done.
+      if (!isFullyComplete(g)) return;
       if (verifiedYearId !== 'all') {
         const s = statsSeasons.find(sea => sea.id === g.seasonId);
         const yearStr = (s && s.name) ? s.name : g.seasonId;
@@ -8714,7 +8716,7 @@ export default function App() {
 
   const verifiedFilteredGames = useMemo(() => {
     return statsGames.filter(g => {
-      if (!isPartiallyComplete(g)) return false;
+      if (!isFullyComplete(g)) return false;
       if (verifiedYearId !== 'all') {
         const s = statsSeasons.find(sea => sea.id === g.seasonId);
         const yearStr = (s && s.name) ? s.name : g.seasonId;
