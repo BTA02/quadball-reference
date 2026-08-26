@@ -95,6 +95,9 @@ export function isFullyCompleteWithSubs(game: CompletionGame | null | undefined)
   return sideCompletion(game, 'home') === 'complete' && sideCompletion(game, 'away') === 'complete';
 }
 
+/** Alias of {@link isFullyCompleteWithSubs} — the pristine bar for the "Completed Games" list. */
+export const isPristineComplete = isFullyCompleteWithSubs;
+
 export function gameMatchesScope(game: CompletionGame | null | undefined, scope: CompletionScope): boolean {
   return scope === 'full' ? isFullyComplete(game) : isPartiallyComplete(game);
 }

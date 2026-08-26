@@ -88,6 +88,7 @@ import {
   gameMatchesScope,
   isFullyComplete,
   isPartiallyComplete,
+  isPristineComplete,
   isTeamComplete,
   scopeEventsToCompleteTeams,
   sideCompletion,
@@ -8646,8 +8647,9 @@ export default function App() {
 
   const trackingFilteredGames = useMemo(() => {
     return statsGames.filter(g => {
-      // Anything with a side still untracked belongs in the "needs tracking" list.
-      if (isFullyComplete(g)) return false;
+      // Anything short of pristine (both sides 'complete', subs included) belongs here —
+      // that's the only bar the "Completed Games" list holds to.
+      if (isPristineComplete(g)) return false;
       const s = statsSeasons.find(sea => sea.id === g.seasonId);
       if (trackerYearId !== 'all') {
         const yearStr = (s && s.name) ? s.name : g.seasonId;
@@ -8697,7 +8699,9 @@ export default function App() {
   const verifiedTeams = useMemo(() => {
     const tSet = new Set<string>();
     statsGames.forEach(g => {
-      if (!isPartiallyComplete(g)) return;
+      // "Completed Games" is pristine games only (both sides 'complete', subs included);
+      // anything short of that stays in Watch and Contribute (trackingFilteredGames).
+      if (!isPristineComplete(g)) return;
       if (verifiedYearId !== 'all') {
         const s = statsSeasons.find(sea => sea.id === g.seasonId);
         const yearStr = (s && s.name) ? s.name : g.seasonId;
@@ -8714,7 +8718,7 @@ export default function App() {
 
   const verifiedFilteredGames = useMemo(() => {
     return statsGames.filter(g => {
-      if (!isPartiallyComplete(g)) return false;
+      if (!isPristineComplete(g)) return false;
       if (verifiedYearId !== 'all') {
         const s = statsSeasons.find(sea => sea.id === g.seasonId);
         const yearStr = (s && s.name) ? s.name : g.seasonId;
@@ -9135,7 +9139,7 @@ export default function App() {
               <h2 className="text-3xl font-extrabold border-b pb-4 text-gray-900 mb-6">Become an Author</h2>
               <div className="space-y-4 text-gray-700 leading-relaxed text-sm">
                 <p>Just... sign in. That's it. Any event you author counts immediately — nothing waits on approval. If an event is wrong, votes and suggested edits are how it gets corrected, not hidden.</p>
-                <p>Where those events show up on the Stats page depends on tracking being finished. Completeness is tracked per team, so once one team's events are all in, that team's stats publish on the <strong>Public</strong> tab even if nobody has covered the other side yet. Games with both teams finished also appear under <strong>Fully Complete</strong>.</p>
+                <p>Where those events show up on the Stats page depends on tracking being finished. Completeness is tracked per team, so once one team's events are all in, that team's stats publish on the <strong>With Partial</strong> tab even if nobody has covered the other side yet. Games with both teams finished also appear under <strong>Complete</strong>.</p>
               </div>
             </div>
 
@@ -9404,12 +9408,12 @@ export default function App() {
                 <StatsTabButton active={statsSubView === 'beaters'} onClick={() => setStatsSubView('beaters')} label="Dodgeball" activeClass="bg-neutral-900 text-white" />
                 <StatsTabButton active={statsSubView === 'seekers'} onClick={() => setStatsSubView('seekers')} label="Flag" activeClass="bg-yellow-400 text-black" />
               </StatsTabSelector>
-              {/* Public = every game with at least one side complete, counting only the
-                  complete side. Fully Complete = both sides done. */}
+              {/* With Partial = every game with at least one side complete, counting only the
+                  complete side. Complete = both sides done. */}
               <div className="flex border rounded-lg bg-gray-50 overflow-hidden text-xs font-bold shadow-sm">
                 {([
-                  { value: 'public' as const, label: 'Public', title: 'Every game with at least one team complete. Only the complete team\u2019s stats are counted.' },
-                  { value: 'full' as const, label: 'Fully Complete', title: 'Only games where both teams are marked complete.' },
+                  { value: 'public' as const, label: 'With Partial', title: 'Every game with at least one team complete. Only the complete team\u2019s stats are counted.' },
+                  { value: 'full' as const, label: 'Complete', title: 'Only games where both teams are marked complete.' },
                 ]).map(option => (
                   <button
                     key={option.value}
@@ -9721,8 +9725,9 @@ export default function App() {
                     const acts = statsVideos.filter(v => v.gameId === g.id);
                     if (acts.length === 0) return null;
 
-                    // "Complete" here means at least one side is finished; the badge says whether
-                    // that's the whole game or just half of it.
+                    // Pristine games (both sides 'complete') live in the Completed Games list,
+                    // so anything reaching this list is either half-done ("Partial") or fully
+                    // tracked but missing subs on at least one side ("Missing Subs").
                     const someComplete = isPartiallyComplete(g);
                     const bothComplete = isFullyComplete(g);
                     const completeSides = (['home', 'away'] as const)
@@ -9731,6 +9736,7 @@ export default function App() {
                         const t = statsTeams.find(tm => tm.id === (side === 'home' ? g.homeTeamId : g.awayTeamId));
                         return t?.nickname || t?.name || side;
                       });
+                    const statusLabel = bothComplete ? 'Missing Subs' : 'Partial';
                     const isVerified = someComplete;
                     return acts.map((vid, idx) => (
                       <button
@@ -9765,10 +9771,10 @@ export default function App() {
                                   'inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider',
                                   bothComplete ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'
                                 )}
-                                title={bothComplete ? 'Both teams complete' : `Complete: ${completeSides.join(', ')}`}
+                                title={bothComplete ? 'Both teams complete, subs missing on at least one side' : `Complete: ${completeSides.join(', ')}`}
                               >
                                 <ShieldCheck className="w-3 h-3" />
-                                {bothComplete ? 'Complete' : 'Half'}
+                                {statusLabel}
                               </span>
                             )}
                             <ChevronRight className={cn("w-4 h-4", isVerified ? "text-amber-300" : "text-gray-300")} />
