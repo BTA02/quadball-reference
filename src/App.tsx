@@ -9139,7 +9139,7 @@ export default function App() {
               <h2 className="text-3xl font-extrabold border-b pb-4 text-gray-900 mb-6">Become an Author</h2>
               <div className="space-y-4 text-gray-700 leading-relaxed text-sm">
                 <p>Just... sign in. That's it. Any event you author counts immediately — nothing waits on approval. If an event is wrong, votes and suggested edits are how it gets corrected, not hidden.</p>
-                <p>Where those events show up on the Stats page depends on tracking being finished. Completeness is tracked per team, so once one team's events are all in, that team's stats publish on the <strong>Public</strong> tab even if nobody has covered the other side yet. Games with both teams finished also appear under <strong>Fully Complete</strong>.</p>
+                <p>Where those events show up on the Stats page depends on tracking being finished. Completeness is tracked per team, so once one team's events are all in, that team's stats publish on the <strong>With Partial</strong> tab even if nobody has covered the other side yet. Games with both teams finished also appear under <strong>Complete</strong>.</p>
               </div>
             </div>
 
@@ -9408,12 +9408,12 @@ export default function App() {
                 <StatsTabButton active={statsSubView === 'beaters'} onClick={() => setStatsSubView('beaters')} label="Dodgeball" activeClass="bg-neutral-900 text-white" />
                 <StatsTabButton active={statsSubView === 'seekers'} onClick={() => setStatsSubView('seekers')} label="Flag" activeClass="bg-yellow-400 text-black" />
               </StatsTabSelector>
-              {/* Public = every game with at least one side complete, counting only the
-                  complete side. Fully Complete = both sides done. */}
+              {/* With Partial = every game with at least one side complete, counting only the
+                  complete side. Complete = both sides done. */}
               <div className="flex border rounded-lg bg-gray-50 overflow-hidden text-xs font-bold shadow-sm">
                 {([
-                  { value: 'public' as const, label: 'Public', title: 'Every game with at least one team complete. Only the complete team\u2019s stats are counted.' },
-                  { value: 'full' as const, label: 'Fully Complete', title: 'Only games where both teams are marked complete.' },
+                  { value: 'public' as const, label: 'With Partial', title: 'Every game with at least one team complete. Only the complete team\u2019s stats are counted.' },
+                  { value: 'full' as const, label: 'Complete', title: 'Only games where both teams are marked complete.' },
                 ]).map(option => (
                   <button
                     key={option.value}
