@@ -324,12 +324,16 @@ export interface AdvancedPlayerStats {
   goalsPerTwenty: number;
   assistsPerTwenty: number;
   pointsPerTwenty: number;
+  turnoversPerTwenty: number;
   goalsPerGame: number;
   assistsPerGame: number;
   pointsPerGame: number;
+  turnoversPerGame: number;
+  minutesPerGame: number;
   goalsPer25Possessions: number;
   assistsPer25Possessions: number;
   pointsPer25Possessions: number;
+  turnoversPer25Possessions: number;
   shotPct: number;
   assistToTurnover: number;
   controlPctOnField: number;
@@ -1113,12 +1117,16 @@ export function computeAdvancedStats(
       goalsPerTwenty: minutes > 0 ? Math.round((accum.goals / minutes) * 20 * 100) / 100 : ('N/A' as any),
       assistsPerTwenty: minutes > 0 ? Math.round((accum.assists / minutes) * 20 * 100) / 100 : ('N/A' as any),
       pointsPerTwenty: minutes > 0 ? Math.round((points / minutes) * 20 * 100) / 100 : ('N/A' as any),
+      turnoversPerTwenty: minutes > 0 ? Math.round((accum.turnovers / minutes) * 20 * 100) / 100 : ('N/A' as any),
       goalsPerGame: accum.gameIds.size > 0 ? Math.round((accum.goals / accum.gameIds.size) * 100) / 100 : ('N/A' as any),
       assistsPerGame: accum.gameIds.size > 0 ? Math.round((accum.assists / accum.gameIds.size) * 100) / 100 : ('N/A' as any),
       pointsPerGame: accum.gameIds.size > 0 ? Math.round((points / accum.gameIds.size) * 100) / 100 : ('N/A' as any),
+      turnoversPerGame: accum.gameIds.size > 0 ? Math.round((accum.turnovers / accum.gameIds.size) * 100) / 100 : ('N/A' as any),
+      minutesPerGame: accum.gameIds.size > 0 ? Math.round((minutes / accum.gameIds.size) * 100) / 100 : ('N/A' as any),
       goalsPer25Possessions: accum.teamPossessions > 0 ? Math.round((accum.goals / accum.teamPossessions) * 25 * 100) / 100 : ('N/A' as any),
       assistsPer25Possessions: accum.teamPossessions > 0 ? Math.round((accum.assists / accum.teamPossessions) * 25 * 100) / 100 : ('N/A' as any),
       pointsPer25Possessions: accum.teamPossessions > 0 ? Math.round((points / accum.teamPossessions) * 25 * 100) / 100 : ('N/A' as any),
+      turnoversPer25Possessions: accum.teamPossessions > 0 ? Math.round((accum.turnovers / accum.teamPossessions) * 25 * 100) / 100 : ('N/A' as any),
       shotPct: (accum.goals + accum.shots + accum.attempts + accum.missKo) > 0 ? Math.round((accum.goals / (accum.goals + accum.shots + accum.attempts + accum.missKo)) * 1000) / 10 : 0,
       assistToTurnover: accum.turnovers > 0
         ? Math.round((accum.assists / accum.turnovers) * 100) / 100
@@ -1214,12 +1222,16 @@ export interface ExtendedPlayerStats {
   goalsPerGame: number;
   assistsPerGame: number;
   pointsPerGame: number;
+  turnoversPerGame: number;
+  minutesPerGame: number;
   goalsPerTwenty: number;
   assistsPerTwenty: number;
   pointsPerTwenty: number;
+  turnoversPerTwenty: number;
   goalsPer25Possessions: number;
   assistsPer25Possessions: number;
   pointsPer25Possessions: number;
+  turnoversPer25Possessions: number;
 }
 
 
@@ -1541,12 +1553,16 @@ export function computeExtendedStats(
       goalsPerGame: a.gamesPlayed > 0 ? Math.round((a.goals / a.gamesPlayed) * 100) / 100 : 0,
       assistsPerGame: a.gamesPlayed > 0 ? Math.round((a.assists / a.gamesPlayed) * 100) / 100 : 0,
       pointsPerGame: a.gamesPlayed > 0 ? Math.round((points / a.gamesPlayed) * 100) / 100 : 0,
+      turnoversPerGame: a.turnoversPerGame,
+      minutesPerGame: a.minutesPerGame,
       goalsPerTwenty: a.goalsPerTwenty,
       assistsPerTwenty: a.assistsPerTwenty,
       pointsPerTwenty: a.pointsPerTwenty,
+      turnoversPerTwenty: a.turnoversPerTwenty,
       goalsPer25Possessions: a.goalsPer25Possessions,
       assistsPer25Possessions: a.assistsPer25Possessions,
       pointsPer25Possessions: a.pointsPer25Possessions,
+      turnoversPer25Possessions: a.turnoversPer25Possessions,
     };
   });
 }

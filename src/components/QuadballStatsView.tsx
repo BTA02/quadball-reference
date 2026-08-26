@@ -253,15 +253,19 @@ export default function QuadballStatsView({
             <ul className="list-disc pl-4 space-y-1 opacity-90">
               <li><strong>GP</strong> — Games Played.</li>
               <li><strong>MIN</strong> — Minutes Played.</li>
+              <li><strong>MIN/G</strong> — Minutes per Game.</li>
               <li><strong>G/G</strong> — Goals per Game.</li>
               <li><strong>A/G</strong> — Assists per Game.</li>
               <li><strong>PTS/G</strong> — Points (Goals + Assists) per Game.</li>
+              <li><strong>TO/G</strong> — Turnovers per Game.</li>
               <li><strong>G/20</strong> — Goals per 20 minutes played. Normalizes for different playing times.</li>
               <li><strong>A/20</strong> — Assists per 20 minutes played.</li>
               <li><strong>PTS/20</strong> — Points per 20 minutes played.</li>
+              <li><strong>TO/20</strong> — Turnovers per 20 minutes played.</li>
               <li><strong>G/25</strong> — Goals per 25 possessions. Adjusts for pace differences between games.</li>
               <li><strong>A/25</strong> — Assists per 25 possessions.</li>
               <li><strong>PTS/25</strong> — Points per 25 possessions.</li>
+              <li><strong>TO/25</strong> — Turnovers per 25 possessions.</li>
             </ul>
           </>) : tab === 'plusminus' ? (<>
             <p className="font-semibold">Plus/Minus — On-Field Impact</p>
@@ -337,15 +341,19 @@ export default function QuadballStatsView({
                 </>) : tab === 'rates' ? (<>
                   <HeaderCell label="GP" sortKey="gamesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Games Played" />
                   <HeaderCell label="MIN" sortKey="minutesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Minutes Played" />
+                  <HeaderCell label="MIN/G" sortKey="minutesPerGame" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Minutes per Game" />
                   <HeaderCell label="G/G" sortKey="goalsPerGame" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals per Game" />
                   <HeaderCell label="A/G" sortKey="assistsPerGame" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Assists per Game" />
                   <HeaderCell label="PTS/G" sortKey="pointsPerGame" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Points per Game" />
+                  <HeaderCell label="TO/G" sortKey="turnoversPerGame" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Turnovers per Game" />
                   <HeaderCell label="G/20" sortKey="goalsPerTwenty" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals per 20 Minutes" />
                   <HeaderCell label="A/20" sortKey="assistsPerTwenty" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Assists per 20 Minutes" />
                   <HeaderCell label="PTS/20" sortKey="pointsPerTwenty" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Points per 20 Minutes" />
+                  <HeaderCell label="TO/20" sortKey="turnoversPerTwenty" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Turnovers per 20 Minutes" />
                   <HeaderCell label="G/25" sortKey="goalsPer25Possessions" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Goals per 25 Possessions" />
                   <HeaderCell label="A/25" sortKey="assistsPer25Possessions" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Assists per 25 Possessions" />
                   <HeaderCell label="PTS/25" sortKey="pointsPer25Possessions" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Points per 25 Possessions" />
+                  <HeaderCell label="TO/25" sortKey="turnoversPer25Possessions" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Turnovers per 25 Possessions" />
                 </>) : tab === 'advanced' ? (<>
                   <HeaderCell label="GP" sortKey="gamesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Games Played" />
                   <HeaderCell label="MIN" sortKey="minutesPlayed" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} tooltip="Minutes Played" />
@@ -436,15 +444,19 @@ export default function QuadballStatsView({
                     </>) : tab === 'rates' ? (<>
                       <DataCell prop="gamesPlayed" />
                       <DataCell prop="minutesPlayed" />
+                      <DataCell prop="minutesPerGame" />
                       <DataCell prop="goalsPerGame" />
                       <DataCell prop="assistsPerGame" />
                       <DataCell prop="pointsPerGame" bold />
+                      <DataCell prop="turnoversPerGame" />
                       <DataCell prop="goalsPerTwenty" />
                       <DataCell prop="assistsPerTwenty" />
                       <DataCell prop="pointsPerTwenty" bold />
+                      <DataCell prop="turnoversPerTwenty" />
                       <DataCell prop="goalsPer25Possessions" />
                       <DataCell prop="assistsPer25Possessions" />
                       <DataCell prop="pointsPer25Possessions" bold />
+                      <DataCell prop="turnoversPer25Possessions" />
                     </>) : tab === 'advanced' ? (<>
                       <DataCell prop="gamesPlayed" />
                       <DataCell prop="minutesPlayed" />
