@@ -31,7 +31,7 @@ import type { TutorialStep } from './types';
  *   [data-tour="video-player"]     the YouTube embed
  *   [data-tour="scrub-controls"]   rewind / play / forward buttons
  *   [data-tour="scoreboard"]       live score + team names
- *   [data-tour="cinema-toggle"]    Cinema Mode button
+ *   [data-tour="cinema-toggle"]    ungroup-all-panels button
  *   [data-tour="panel-tabs"]       the whole right-panel tab bar
  *   [data-tour="tab-events"]       Events tab button
  *   [data-tour="tab-record"]       Record tab button (authors only)
@@ -122,11 +122,17 @@ export const TRACKER_STEPS: TutorialStep[] = [
     placement: 'bottom',
     title: 'Four ways to look at the game',
     body: (
-      <p>
-        <strong>Events</strong> is the running log, <strong>Record</strong> is where you add to it,
-        <strong> Players</strong> shows who's on the pitch, and <strong>Momentum</strong> charts
-        how the game swung.
-      </p>
+      <>
+        <p>
+          <strong>Events</strong> is the running log, <strong>Record</strong> is where you add to
+          it, <strong>Players</strong> shows who's on the pitch, and <strong>Momentum</strong>
+          {' '}charts how the game swung.
+        </p>
+        <p className="text-gray-500">
+          Hover a tab and hit the arrow to pull it out into a column of its own — the video gives
+          up exactly that much width and nothing else shifts around.
+        </p>
+      </>
     ),
   },
   {
@@ -276,11 +282,11 @@ export const TRACKER_STEPS: TutorialStep[] = [
     target: '[data-tour="cinema-toggle"]',
     placement: 'bottom',
     showOn: 'desktop',
-    title: 'Cinema Mode',
+    title: 'Everything at once',
     body: (
       <p>
-        Hides the video and puts all four panels side by side. Useful once you know your way
-        around and want everything visible at once.
+        Pulls every tab out into its own column beside the video, then puts them all back. The
+        Players column can be split further still, one team per column.
       </p>
     ),
   },
