@@ -104,6 +104,22 @@ export default function GameCastView({ players, events, teams, games, overrideGa
     return { gameEvents, resolvedHomeId, resolvedAwayId, playerTeamMap };
   }, [selectedGameId, events, games]);
 
+  // A sub_out's own `position` field is unreliable — the tracker's manual draft
+  // queue can carry a stale position into it from an earlier sub_in row (see
+  // handleSaveDraftEvent in App.tsx) — so the label is derived from the player's
+  // most recent prior sub_in instead of trusting whatever is stored on the
+  // sub_out event itself. This also self-heals the label for any already-recorded
+  // sub_out events that picked up a stray position before that was fixed.
+  const resolveSubOutPosition = (ev: GameEvent): string | null => {
+    if (!ev.playerId) return null;
+    let latest: GameEvent | null = null;
+    for (const e of gameEvents) {
+      if (e.type !== 'sub_in' || e.playerId !== ev.playerId || e.videoTime > ev.videoTime) continue;
+      if (!latest || e.videoTime > latest.videoTime) latest = e;
+    }
+    return latest?.position || null;
+  };
+
   const getTeamName = (teamId: string) => {
     if (teamId === 'home_inferred') return 'Home Team';
     if (teamId === 'unknown') return 'Unknown Team';
@@ -328,7 +344,8 @@ export default function GameCastView({ players, events, teams, games, overrideGa
                      <div className="mt-3 pt-2 border-t border-gray-200/50 space-y-1.5 max-h-32 overflow-y-auto custom-scrollbar">
                         {poss.events.map((ev: any, eventIndex: number) => {
                           const evConfig = EVENT_CONFIG[ev.type as keyof typeof EVENT_CONFIG];
-                          const dynamicLabel = (ev.type === 'sub_in' && ev.position) ? `${ev.position} In` : (ev.type === 'sub_out' && ev.position) ? `${ev.position} Out` : evConfig?.label || ev.type;
+                          const subOutPosition = ev.type === 'sub_out' ? resolveSubOutPosition(ev) : null;
+                          const dynamicLabel = (ev.type === 'sub_in' && ev.position) ? `${ev.position} In` : (ev.type === 'sub_out' && subOutPosition) ? `${subOutPosition} Out` : evConfig?.label || ev.type;
                           
                           let assistStr = '';
                           if (ev.type === 'goal') {

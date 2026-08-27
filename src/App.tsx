@@ -6550,11 +6550,14 @@ export default function App() {
   };
   const groupedRosterSides = (['home', 'away'] as const).filter(side => !watchRosterSideOut[side]);
 
+  // shrink-0 on every tab icon: each is a direct child of the tab's flex row
+  // alongside a truncating label, so without it a narrow tab would shrink the
+  // icon's width (not its fixed height) instead of letting the label give first.
   const watchTabDefs: { key: WatchTabKey; label: string; icon: React.ReactNode; tour: string; activeClass: string }[] = [
-    { key: 'live_events', label: 'Events', icon: <Clock className="w-3.5 h-3.5" />, tour: 'tab-events', activeClass: 'text-red-600 border-red-600' },
-    ...(canRecordEvents ? [{ key: 'record' as const, label: 'Record', icon: <UploadCloud className="w-3.5 h-3.5" />, tour: 'tab-record', activeClass: 'text-emerald-600 border-emerald-600' }] : []),
-    { key: 'rosters' as const, label: 'Players', icon: <User className="w-3.5 h-3.5" />, tour: 'tab-players', activeClass: 'text-red-600 border-red-600' },
-    { key: 'momentum' as const, label: 'Momentum', icon: <TrendingUp className="w-3.5 h-3.5" />, tour: 'tab-momentum', activeClass: 'text-red-600 border-red-600' },
+    { key: 'live_events', label: 'Events', icon: <Clock className="w-3.5 h-3.5 shrink-0" />, tour: 'tab-events', activeClass: 'text-red-600 border-red-600' },
+    ...(canRecordEvents ? [{ key: 'record' as const, label: 'Record', icon: <UploadCloud className="w-3.5 h-3.5 shrink-0" />, tour: 'tab-record', activeClass: 'text-emerald-600 border-emerald-600' }] : []),
+    { key: 'rosters' as const, label: 'Players', icon: <User className="w-3.5 h-3.5 shrink-0" />, tour: 'tab-players', activeClass: 'text-red-600 border-red-600' },
+    { key: 'momentum' as const, label: 'Momentum', icon: <TrendingUp className="w-3.5 h-3.5 shrink-0" />, tour: 'tab-momentum', activeClass: 'text-red-600 border-red-600' },
   ];
 
   const groupedWatchTabs = watchTabDefs.filter(t => (
@@ -7505,7 +7508,12 @@ export default function App() {
       undefined, // subPlayerId usually not drafted this way, but we can extend later
       draft.relatedEventId || undefined,
       draft.teamId || null,
-      draft.position || null,
+      // A sub_out never carries its own position — the field only means something on
+      // sub_in, and a draft row that started life as a chained sub_in (position set)
+      // then got flipped to sub_out via the Type dropdown would otherwise carry that
+      // stale value straight into the stored event (e.g. a "Seeker Out" label on
+      // whoever actually just subbed out, regardless of the position they played).
+      draft.type === 'sub_out' ? null : (draft.position || null),
       draft.videoTime,
       draft.gameTime,
       draft.color || null
@@ -9225,10 +9233,28 @@ export default function App() {
                       });
                       const nestedAssistIds = new Set(Array.from(nestedAssistByGoalId.values()).map((e: any) => e.id));
 
+                      // A sub_out's own `position` field is unreliable — a queue row that started
+                      // as a chained sub_in (position set) and got flipped to sub_out via the Type
+                      // dropdown could carry that stale value into the stored event. So the label
+                      // for a sub_out is derived from the player's most recent prior sub_in instead
+                      // of trusting whatever ended up stored on the sub_out event itself — which
+                      // also self-heals the label for any already-recorded sub_out events that
+                      // picked up a stray position before this was fixed.
+                      const resolveSubOutPosition = (evt: any): PositionType | null => {
+                        if (!evt.playerId) return null;
+                        let latest: any = null;
+                        for (const e of activeTrackingEvents) {
+                          if (e.type !== 'sub_in' || e.playerId !== evt.playerId || e.videoTime > evt.videoTime) continue;
+                          if (!latest || e.videoTime > latest.videoTime) latest = e;
+                        }
+                        return (latest?.position as PositionType) || null;
+                      };
+
                       const renderTrackingEventBody = (evt: any) => {
                         const cfg = EVENT_CONFIG[evt.type as EventType] || { label: evt.type, icon: <AlertCircle className="w-4 h-4" />, color: 'bg-neutral-500' };
                         const openSuggestionsForEvent = suggestions.filter(s => s.targetEventId === evt.id && s.status === 'open');
-                        const label = (evt.type === 'sub_in' && evt.position) ? `${evt.position} In` : (evt.type === 'sub_out' && evt.position) ? `${evt.position} Out` : (evt.type === 'card' && evt.color) ? `${evt.color} Card` : cfg.label;
+                        const subOutPosition = evt.type === 'sub_out' ? resolveSubOutPosition(evt) : null;
+                        const label = (evt.type === 'sub_in' && evt.position) ? `${evt.position} In` : (evt.type === 'sub_out' && subOutPosition) ? `${subOutPosition} Out` : (evt.type === 'card' && evt.color) ? `${evt.color} Card` : cfg.label;
                         const cardIconColor = evt.type === 'card' && evt.color
                           ? (evt.color === 'blue' ? 'bg-blue-500' : evt.color === 'yellow' ? 'bg-yellow-400' : evt.color === 'red' ? 'bg-red-500' : cfg.color)
                           : cfg.color;
@@ -9470,7 +9496,10 @@ export default function App() {
                               <div
                                 data-event-time={event.videoTime}
                                 className={cn(
-                                  "group border rounded-xl p-2 transition-all w-full max-w-[92%] sm:max-w-[86%]",
+                                  // rounded-lg, not -xl: its 8px radius matches this card's 8px padding, so
+                                  // the vote/edit buttons in the footer row sit flush against the curve
+                                  // instead of poking past it at the bottom corners.
+                                  "group border rounded-lg p-2 transition-all w-full max-w-[92%] sm:max-w-[86%]",
                                   !event.teamId && "bg-white border-gray-200 hover:border-gray-300",
                                   event.status === 'rejected' && "opacity-50 grayscale",
                                   hasOpenSuggestions && "border-l-4"
@@ -9789,7 +9818,11 @@ export default function App() {
                                       value={draft.type || ''}
                                       onChange={(e) => {
                                         const newType = e.target.value as EventType;
-                                        setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, type: newType } : d));
+                                        // Position only means anything on a sub_in row. Flipping a chained
+                                        // draft's type away from sub_in must drop whatever position it was
+                                        // carrying, or a later sub_out submitted from this same row would
+                                        // silently inherit it (see the note in handleSaveDraftEvent).
+                                        setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, type: newType, position: newType === 'sub_in' ? d.position : null } : d));
                                       }}
                                       className="w-20 text-[9px] font-bold text-gray-700 border border-gray-300 rounded p-1 bg-white shadow-sm outline-none shrink-0"
                                     >
@@ -10024,6 +10057,10 @@ export default function App() {
                       const showHome = sides.includes('home');
                       const showAway = sides.includes('away');
                       const twoCol = showHome && showAway;
+                      const sideTeamLabel = (side: 'home' | 'away') => {
+                        const t = teams.find(tm => tm.id === (side === 'home' ? currentGame?.homeTeamId : currentGame?.awayTeamId));
+                        return t?.nickname || t?.name || (side === 'home' ? 'Home' : 'Away');
+                      };
                       const pastEvents = activeTrackingEvents.filter(e => e.videoTime <= currentTime);
                       const liveStats = new Map<string, { g: number, a: number, plus: number, minus: number }>();
 
@@ -10394,11 +10431,24 @@ export default function App() {
                               );
                             })()}
 
-                            {activePlayerPositions.size === 0 && (
-                              <div className="text-center py-8 text-gray-400 text-sm font-medium italic">
-                                No players currently checked in.
-                              </div>
-                            )}
+                            {(() => {
+                              // Scoped to whichever side(s) this view is actually showing — a
+                              // standalone team column, or one half of a split Players view,
+                              // shouldn't claim nobody's checked in just because the OTHER
+                              // team hasn't subbed anyone in yet.
+                              const homeHasActive = homeRosterPlayers.some(rp => activePlayerPositions.has(rp.playerId));
+                              const awayHasActive = awayRosterPlayers.some(rp => activePlayerPositions.has(rp.playerId));
+                              const emptySides = sides.filter(side => side === 'home' ? !homeHasActive : !awayHasActive);
+                              if (emptySides.length === 0) return null;
+                              const message = (twoCol && emptySides.length < sides.length)
+                                ? `No ${sideTeamLabel(emptySides[0])} players currently checked in.`
+                                : 'No players currently checked in.';
+                              return (
+                                <div className="text-center py-8 text-gray-400 text-sm font-medium italic">
+                                  {message}
+                                </div>
+                              );
+                            })()}
                           </div>
                         </div>
                       );
@@ -10426,12 +10476,16 @@ export default function App() {
       const t = teams.find(tm => tm.id === id);
       return t?.nickname || t?.name || '';
     };
-    if (k === 'live_events') return { label: 'Events', icon: <Clock className="w-3.5 h-3.5" /> };
-    if (k === 'record') return { label: 'Record', icon: <UploadCloud className="w-3.5 h-3.5 text-emerald-600" /> };
-    if (k === 'rosters') return { label: 'Players', icon: <User className="w-3.5 h-3.5" /> };
-    if (k === 'roster_home') return { label: teamLabel(currentGame?.homeTeamId) || 'Home', icon: <User className="w-3.5 h-3.5 text-[#FF4B4B]" /> };
-    if (k === 'roster_away') return { label: teamLabel(currentGame?.awayTeamId) || 'Away', icon: <User className="w-3.5 h-3.5 text-blue-500" /> };
-    return { label: 'Momentum', icon: <TrendingUp className="w-3.5 h-3.5" /> };
+    // shrink-0 on every icon here: each one sits as a direct child of a flex row
+    // that also holds a truncating label, and without it a tight row shrinks the
+    // icon's width (but not its fixed height) right along with the label, visibly
+    // squashing it — the label should be the only thing that gives.
+    if (k === 'live_events') return { label: 'Events', icon: <Clock className="w-3.5 h-3.5 shrink-0" /> };
+    if (k === 'record') return { label: 'Record', icon: <UploadCloud className="w-3.5 h-3.5 text-emerald-600 shrink-0" /> };
+    if (k === 'rosters') return { label: 'Players', icon: <User className="w-3.5 h-3.5 shrink-0" /> };
+    if (k === 'roster_home') return { label: teamLabel(currentGame?.homeTeamId) || 'Home', icon: <User className="w-3.5 h-3.5 text-[#FF4B4B] shrink-0" /> };
+    if (k === 'roster_away') return { label: teamLabel(currentGame?.awayTeamId) || 'Away', icon: <User className="w-3.5 h-3.5 text-blue-500 shrink-0" /> };
+    return { label: 'Momentum', icon: <TrendingUp className="w-3.5 h-3.5 shrink-0" /> };
   };
 
   if (!isAuthReady) return <div className="min-h-screen bg-white flex items-center justify-center text-gray-900">Loading...</div>;
