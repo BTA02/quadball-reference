@@ -24,9 +24,9 @@ export interface TutorialContext {
   // --- Game tracker ---
   /** Switch the tracker's right-hand panel before a step is shown. */
   setRightPanelTab: (tab: 'live_events' | 'record' | 'momentum' | 'rosters') => void;
-  /** Enter/leave Cinema Mode (hides the video, shows all four panels side by side). */
+  /** Ungroup every tab into its own view beside the video, or regroup them. */
   setIsExpandedLayout: (expanded: boolean) => void;
-  /** Currently in Cinema Mode? */
+  /** True when every tab is currently ungrouped. */
   isExpandedLayout: boolean;
   /** True when the user can record events (i.e. the Record tab is rendered). */
   canRecord: boolean;

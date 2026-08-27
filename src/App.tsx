@@ -52,7 +52,12 @@ import {
   EyeOff,
   ChevronDown,
   ChevronUp,
-  SlidersHorizontal
+  SlidersHorizontal,
+  Minimize2,
+  Columns2,
+  Merge,
+  Layers,
+  PanelRightOpen
 } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
 import {
@@ -5781,6 +5786,27 @@ function CreateView({
   );
 }
 
+// --- Watch tab panel model --------------------------------------------------
+// The Watch view is a row of independent "views". One of them is the video, which
+// flexes; every other is a fixed-width column. Tabs live in a single grouped view
+// by default, and any of them can be "ungrouped" into a view of its own. Widths
+// are fixed per panel rather than fractional so that the group can adopt the width
+// of its widest member and stop resizing every time you switch tabs.
+type WatchTabKey = 'live_events' | 'record' | 'rosters' | 'momentum';
+type WatchPanelKey = 'live_events' | 'record' | 'rosters' | 'roster_home' | 'roster_away' | 'momentum';
+
+const WATCH_PANEL_WIDTH: Record<WatchPanelKey, number> = {
+  // Record is the widest — it is the panel that actually needs the room, and it
+  // therefore sets the group's width whenever it is grouped.
+  record: 420,
+  live_events: 356,
+  rosters: 320,
+  // A single team's column only ever holds one card per row.
+  roster_home: 186,
+  roster_away: 186,
+  momentum: 340,
+};
+
 type RouteView = 'tracker' | 'video' | 'manage' | 'create' | 'stats' | 'review' | 'info' | 'playerProfile' | 'teamProfile' | 'gameProfile' | 'lists';
 
 const SIMPLE_ROUTES = ['tracker', 'video', 'manage', 'create', 'review', 'info', 'lists'];
@@ -5886,7 +5912,6 @@ export default function App() {
 
   const [player, setPlayer] = useState<any>(null);
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
-  const [isExpandedLayout, setIsExpandedLayout] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const hasAutoSeekedRef = useRef<boolean>(false);
   const pendingSeekTimeRef = useRef<number | null>(null);
@@ -6143,7 +6168,9 @@ export default function App() {
     videos: Video[];
     fileName: string;
   } | null>(null);
-  const [rightPanelTab, setRightPanelTab] = useState<'live_events' | 'record' | 'momentum' | 'rosters'>('live_events');
+  const [rightPanelTab, setRightPanelTab] = useState<WatchTabKey>('live_events');
+  // Panels that have been popped out of the tab group, in the order they were popped.
+  const [outWatchPanels, setOutWatchPanels] = useState<WatchPanelKey[]>([]);
   const [eventsListFilterMode, setEventsListFilterMode] = useState<'now' | 'all'>('now');
   const [eventsFilterSet, setEventsFilterSet] = useState<string>('all');
   const [draftEvents, setDraftEvents] = useState<DraftEvent[]>([]);
@@ -6512,10 +6539,74 @@ export default function App() {
   const canRecordEvents = effectiveRole !== 'user';
   const canUseCreateTools = canModerate;
 
+  // --- Watch tab: which views exist right now --------------------------------
+  // A roster half counts as "out" either because the combined Players panel was
+  // popped out, or because that half was split off on its own. Whatever is left
+  // still renders under the group's Players tab, so splitting one team out leaves
+  // the other one grouped rather than blanking the tab.
+  const watchRosterSideOut = {
+    home: outWatchPanels.includes('rosters') || outWatchPanels.includes('roster_home'),
+    away: outWatchPanels.includes('rosters') || outWatchPanels.includes('roster_away'),
+  };
+  const groupedRosterSides = (['home', 'away'] as const).filter(side => !watchRosterSideOut[side]);
+
+  const watchTabDefs: { key: WatchTabKey; label: string; icon: React.ReactNode; tour: string; activeClass: string }[] = [
+    { key: 'live_events', label: 'Events', icon: <Clock className="w-3.5 h-3.5" />, tour: 'tab-events', activeClass: 'text-red-600 border-red-600' },
+    ...(canRecordEvents ? [{ key: 'record' as const, label: 'Record', icon: <UploadCloud className="w-3.5 h-3.5" />, tour: 'tab-record', activeClass: 'text-emerald-600 border-emerald-600' }] : []),
+    { key: 'rosters' as const, label: 'Players', icon: <User className="w-3.5 h-3.5" />, tour: 'tab-players', activeClass: 'text-red-600 border-red-600' },
+    { key: 'momentum' as const, label: 'Momentum', icon: <TrendingUp className="w-3.5 h-3.5" />, tour: 'tab-momentum', activeClass: 'text-red-600 border-red-600' },
+  ];
+
+  const groupedWatchTabs = watchTabDefs.filter(t => (
+    t.key === 'rosters' ? groupedRosterSides.length > 0 : !outWatchPanels.includes(t.key)
+  ));
+
+  // The group keeps the width of its widest remaining member. A Players tab down
+  // to one team is as narrow as a standalone team column.
+  const groupedTabWidth = (k: WatchTabKey) => (
+    k === 'rosters'
+      ? (groupedRosterSides.length === 2 ? WATCH_PANEL_WIDTH.rosters : WATCH_PANEL_WIDTH.roster_home)
+      : WATCH_PANEL_WIDTH[k]
+  );
+  const watchGroupWidth = groupedWatchTabs.length
+    ? Math.max(...groupedWatchTabs.map(t => groupedTabWidth(t.key)))
+    : 0;
+
+  // Popping out the selected tab would otherwise leave the group showing nothing.
+  const activeWatchTab: WatchTabKey | undefined = groupedWatchTabs.some(t => t.key === rightPanelTab)
+    ? rightPanelTab
+    : groupedWatchTabs[0]?.key;
+
+  const ungroupWatchTab = (k: WatchTabKey) => setOutWatchPanels(prev => {
+    if (k !== 'rosters') return prev.includes(k) ? prev : [...prev, k];
+    if (groupedRosterSides.length === 2) return [...prev, 'rosters'];
+    if (groupedRosterSides.length === 1) return [...prev, groupedRosterSides[0] === 'home' ? 'roster_home' : 'roster_away'];
+    return prev;
+  });
+
+  const regroupWatchPanel = (k: WatchPanelKey) => setOutWatchPanels(prev => prev.filter(p => p !== k));
+
+  const splitRosterPanel = () => setOutWatchPanels(prev => (
+    prev.flatMap(p => (p === 'rosters' ? ['roster_home' as WatchPanelKey, 'roster_away' as WatchPanelKey] : [p]))
+  ));
+
+  const mergeRosterPanels = () => setOutWatchPanels(prev => {
+    const at = prev.findIndex(p => p === 'roster_home' || p === 'roster_away');
+    const rest = prev.filter(p => p !== 'roster_home' && p !== 'roster_away');
+    rest.splice(at < 0 ? rest.length : at, 0, 'rosters');
+    return rest;
+  });
+
+  const isWatchUngroupedAll = groupedWatchTabs.length === 0;
+  const toggleUngroupAllWatchTabs = () => setOutWatchPanels(
+    isWatchUngroupedAll ? [] : watchTabDefs.map(t => t.key as WatchPanelKey)
+  );
+
   const tutorialApp = {
     setRightPanelTab,
-    setIsExpandedLayout,
-    isExpandedLayout,
+    // The old Cinema Mode is now "every panel gets its own view".
+    setIsExpandedLayout: (expanded: boolean) => setOutWatchPanels(expanded ? watchTabDefs.map(t => t.key as WatchPanelKey) : []),
+    isExpandedLayout: isWatchUngroupedAll,
     setCreateTab: setCreateActiveTab,
     role: effectiveRole,
     canRecord: canRecordEvents,
@@ -8828,6 +8919,1521 @@ export default function App() {
     return active;
   }, [manualActivePlayerIds, activeTrackingEvents, currentTime]);
 
+
+  // --- Watch tab: the panel bodies -------------------------------------------
+  // Each body renders into a positioned parent (the panel shell supplies
+  // `relative`), so a body is identical whether it is showing inside the tab
+  // group or in a view of its own. `renderRostersBody` is the only one that
+  // takes an argument: which team columns to draw, so a single roster can be
+  // popped out on its own without duplicating ~350 lines of stat math.
+
+  const renderScrubControls = () => (
+    <div data-tour="scrub-controls" className="flex gap-1 items-center shrink-0">
+                    <button onClick={() => player?.seekTo(Math.max(0, currentTime - 15))} className="p-1.5 md:px-2 md:py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-[9px] md:text-[10px] uppercase tracking-wider font-bold rounded shadow-sm flex items-center justify-center gap-0.5 md:gap-1 transition-all" title="Rewind 15s"><Rewind className="w-3 h-3"/> <span className="hidden md:block">15s</span></button>
+                    <button onClick={() => player?.seekTo(Math.max(0, currentTime - 5))} className="p-1.5 md:px-2 md:py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-[9px] md:text-[10px] uppercase tracking-wider font-bold rounded shadow-sm flex items-center justify-center gap-0.5 md:gap-1 transition-all" title="Rewind 5s"><Rewind className="w-3 h-3"/> <span className="hidden md:block">5s</span></button>
+                    <button onClick={() => isVideoPlaying ? player?.pauseVideo() : player?.playVideo()} className="p-1.5 md:px-3 md:py-1.5 bg-red-100 hover:bg-red-200 text-red-700 text-[9px] md:text-[10px] uppercase tracking-wider font-bold rounded shadow-sm flex items-center justify-center gap-0.5 md:gap-1 transition-all" title={isVideoPlaying ? "Pause" : "Play"}>
+                      {isVideoPlaying ? <Pause className="w-3 h-3"/> : <Play className="w-3 h-3"/>}
+                    </button>
+                    <button onClick={() => player?.seekTo(currentTime + 5)} className="p-1.5 md:px-2 md:py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-[9px] md:text-[10px] uppercase tracking-wider font-bold rounded shadow-sm flex items-center justify-center gap-0.5 md:gap-1 transition-all" title="Forward 5s"><span className="hidden md:block">5s</span> <FastForward className="w-3 h-3"/></button>
+                    <button onClick={() => player?.seekTo(currentTime + 15)} className="p-1.5 md:px-2 md:py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-[9px] md:text-[10px] uppercase tracking-wider font-bold rounded shadow-sm flex items-center justify-center gap-0.5 md:gap-1 transition-all" title="Forward 15s"><span className="hidden md:block">15s</span> <FastForward className="w-3 h-3"/></button>
+    </div>
+  );
+
+  const renderWatchScoreboard = () =>
+                      (() => {
+                        if (!currentGame) return null;
+                        const pastEvents = activeTrackingEvents.filter(e => e.videoTime <= currentTime);
+                        const liveScores = computeScores(pastEvents, currentGame.homeTeamId, currentGame.awayTeamId);
+                        const winCond = computeWinCondition(pastEvents, currentGame.homeTeamId, currentGame.awayTeamId);
+                        const homeTeamObj = teams.find(t => t.id === currentGame.homeTeamId);
+                        const awayTeamObj = teams.find(t => t.id === currentGame.awayTeamId);
+                        const homeName = homeTeamObj?.nickname || homeTeamObj?.name || 'Home';
+                        const awayName = awayTeamObj?.nickname || awayTeamObj?.name || 'Away';
+                        const homeColor = avoidWhite(homeTeamObj?.colorPrimaryDark || homeTeamObj?.colorPrimary || '#dc2626');
+                        const awayColor = avoidWhite(awayTeamObj?.colorPrimaryLight || awayTeamObj?.colorLight || '#2563eb');
+                        const currentDodgeballTeamId = getControlTeamAtTime(computeControlPeriods(pastEvents), currentTime);
+
+                        return (
+                          <div className={cn("bg-white border rounded py-1.5 px-2 shrink-0 shadow-sm flex items-center justify-between w-full mx-auto gap-2 relative", winCond.flagOnPitch && !winCond.winner ? "bg-yellow-50 border-yellow-300" : "border-gray-200")}>
+                            {/* Left: Home */}
+                            <div className="flex items-center justify-end flex-1 w-0 gap-2">
+                              <p className="text-[10px] md:text-xs uppercase font-bold truncate text-right w-full" style={{ color: homeColor }}>{homeName}</p>
+                              <div className="flex items-center gap-1 shrink-0">
+                                <p className="text-xl font-mono font-bold" style={{ color: homeColor }}>{liveScores.home}</p>
+                                {currentDodgeballTeamId === currentGame.homeTeamId && <div title="Dodgeball Control" className="w-1.5 h-1.5 bg-black rounded-sm shadow-sm" />}
+                              </div>
+                            </div>
+
+                            {/* Center: Clock & Win Cond */}
+                            <div className="flex flex-col items-center justify-center shrink-0 border-x border-gray-100 px-2.5 min-w-[84px]">
+                              <p className="text-xs font-mono font-bold text-gray-800 bg-gray-100 px-2 py-0.5 rounded shadow-inner leading-none">{formatTime(gameTime)}</p>
+                              {winCond.winner ? (
+                                <p className="text-[8px] font-bold text-yellow-600 uppercase tracking-widest mt-1 truncate">
+                                  Winner: {teams.find(t => t.id === winCond.winner)?.nickname || teams.find(t => t.id === winCond.winner)?.name || winCond.winner}
+                                </p>
+                              ) : winCond.targetSet ? (
+                                <div className="flex items-center gap-1 mt-1 text-[8px] font-bold uppercase tracking-widest text-yellow-600">
+                                  {winCond.flagOnPitch && <Flag className="w-2.5 h-2.5" />} Target: {winCond.threshold}
+                                </div>
+                              ) : null}
+                            </div>
+
+                            {/* Right: Away */}
+                            <div className="flex items-center justify-start flex-1 w-0 gap-2">
+                              <div className="flex items-center gap-1 shrink-0">
+                                {currentDodgeballTeamId === currentGame.awayTeamId && <div title="Dodgeball Control" className="w-1.5 h-1.5 bg-black rounded-sm shadow-sm" />}
+                                <p className="text-xl font-mono font-bold" style={{ color: awayColor }}>{liveScores.away}</p>
+                              </div>
+                              <p className="text-[10px] md:text-xs uppercase font-bold truncate text-left w-full" style={{ color: awayColor }}>{awayName}</p>
+                            </div>
+
+                            <div className="pl-2 ml-1 border-l border-gray-200 flex items-center justify-center shrink-0">
+                              <button data-tour="cinema-toggle" onClick={toggleUngroupAllWatchTabs} className={cn("p-1.5 rounded transition-colors", isWatchUngroupedAll ? "text-red-600 bg-red-50 hover:bg-red-100" : "text-gray-400 hover:text-red-600")} title={isWatchUngroupedAll ? "Regroup every panel back into one tabbed view" : "Give every panel its own view"}>
+                                {isWatchUngroupedAll ? <Layers className="w-5 h-5" /> : <Maximize2 className="w-5 h-5" />}
+                              </button>
+                              <button onClick={() => handleGameProfileClick(currentGame.id)} className="p-1.5 text-gray-400 hover:text-blue-600 transition-colors" title="View Box Score">
+                                <Activity className="w-5 h-5" />
+                              </button>
+                              {user && (
+                                <button onClick={trackerTutorial.start} className="p-1.5 text-gray-400 hover:text-red-600 transition-colors" title="Replay the tutorial">
+                                  <HelpCircle className="w-5 h-5" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })();
+
+  const renderEventsBody = () => (
+    <div id="events-scroll-container" data-tour="events-feed" className="absolute inset-0 overflow-y-auto p-3 custom-scrollbar bg-gray-50">
+                    <div className="sticky top-0 z-10 bg-gray-50/95 backdrop-blur-md pb-3 pt-1 mb-4 border-b border-gray-200/60 flex flex-col gap-2.5">
+                      {/* This row is the only thing a collapsed header shows, so the scrub/filter
+                          controls that matter for just watching along live here, with the
+                          collapse toggle at the end. Everything past it — density, suggestions,
+                          per-team completion — is moderator/author territory and folds away. */}
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => {
+                            const container = document.getElementById('events-scroll-container');
+                            if (!container) return;
+                            const allCards = container.querySelectorAll('[data-event-time]');
+                            let nearest: Element | null = null;
+                            let bestDiff = Infinity;
+                            allCards.forEach(card => {
+                              const t = parseFloat(card.getAttribute('data-event-time') || '0');
+                              const diff = Math.abs(t - currentTime);
+                              if (diff < bestDiff) { bestDiff = diff; nearest = card; }
+                            });
+                            if (nearest) (nearest as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
+                          }}
+                          className="flex items-center gap-1 px-3 py-1 rounded text-[10px] font-bold transition-all border bg-white text-gray-500 border-gray-200 hover:text-red-500 hover:border-red-300 shadow-sm shrink-0"
+                          title="Scroll to event nearest current time"
+                        >
+                          <SkipForward className="w-3 h-3" />
+                          Now
+                        </button>
+                        <button
+                          onClick={handleRegeneratePossessionPins}
+                          className="flex items-center gap-1 px-2 py-1 rounded transition-all border bg-white text-purple-500 border-purple-200 hover:text-purple-700 hover:border-purple-400 shadow-sm shrink-0"
+                          title="Regenerate auto-pins (possession & control) for the current video"
+                        >
+                          <RefreshCcw className="w-3 h-3" />
+                        </button>
+                        <select value={eventsFilterSet} onChange={e => setEventsFilterSet(e.target.value)} className="flex-1 min-w-0 text-[10px] font-bold text-gray-600 bg-white border border-gray-200 rounded-md py-1.5 px-2 outline-none focus:border-red-300 focus:ring-1 focus:ring-red-200 shadow-sm appearance-none">
+                          <option value="all">All Events</option>
+                          <option value="all_no_subs">All (No Subs)</option>
+                          {currentGame?.homeTeamId && <option value="home_focused">Home Focused</option>}
+                          {currentGame?.awayTeamId && <option value="away_focused">Away Focused</option>}
+                          <option value="possession_scoring">Possessions & Scoring</option>
+                        </select>
+                        <button
+                          onClick={toggleEventsHeaderExpanded}
+                          className="flex items-center justify-center p-1.5 rounded-md transition-all border bg-white text-gray-400 border-gray-200 hover:text-gray-700 shrink-0"
+                          title={eventsHeaderExpanded ? 'Collapse' : 'Expand'}
+                        >
+                          {eventsHeaderExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                      {eventsHeaderExpanded && (
+                        <>
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1 flex bg-white border border-gray-200 rounded-md p-0.5 shadow-sm">
+                              {([
+                                { key: 'full' as const, icon: <Eye className="w-3 h-3" />, label: 'Full' },
+                                { key: 'compact' as const, icon: <EyeOff className="w-3 h-3" />, label: 'Compact' },
+                              ]).map(opt => (
+                                <button
+                                  key={opt.key}
+                                  onClick={() => setEventDensity(opt.key)}
+                                  title={`${opt.label} events — ${opt.key === 'full' ? 'everything shown, including the voting/editing footer' : 'same as Full, without the voting/editing footer'}`}
+                                  className={cn('flex-1 flex items-center justify-center gap-1 py-1 rounded text-[9px] font-bold uppercase tracking-wider transition-all', eventDensity === opt.key ? 'bg-gray-900 text-white' : 'text-gray-400 hover:text-gray-700')}
+                                >
+                                  {opt.icon}
+                                </button>
+                              ))}
+                            </div>
+                            {suggestions.some(s => s.status === 'open') && (
+                              <button
+                                onClick={() => setShowSuggestionQueue(v => !v)}
+                                className={cn('flex items-center gap-1 px-2 py-1.5 rounded-md text-[10px] font-bold transition-all border shrink-0', showSuggestionQueue ? 'bg-amber-500/10 text-amber-600 border-amber-500/30' : 'bg-white text-gray-400 border-gray-200 hover:text-amber-500')}
+                                title="Open suggestions for this game, sorted by score"
+                              >
+                                <Inbox className="w-3 h-3" />
+                                {suggestions.filter(s => s.status === 'open').length}
+                              </button>
+                            )}
+                            <button
+                              onClick={() => setSuggestFormState({ mode: 'add' })}
+                              className="flex items-center gap-1 px-2 py-1.5 rounded-md text-[10px] font-bold transition-all border bg-white text-gray-400 border-gray-200 hover:text-blue-500 hover:border-blue-300 shrink-0"
+                              title="Suggest a missing event"
+                            >
+                              <Plus className="w-3 h-3" />
+                            </button>
+                          </div>
+                          {showSuggestionQueue && (
+                            <div className="space-y-2 max-h-64 overflow-y-auto rounded-lg border border-amber-200 bg-amber-50/30 p-2">
+                              {suggestions.filter(s => s.status === 'open').sort((a, b) => b.score - a.score).map(sugg => (
+                                <SuggestionCard
+                                  key={sugg.id}
+                                  suggestion={sugg}
+                                  voterId={voterId}
+                                  canModerate={canModerate}
+                                  compact
+                                  playerName={(id) => { const p = allPlayers.find(pl => pl.id === id); return p ? `${p.firstName.charAt(0)}. ${p.lastName}` : undefined; }}
+                                  teamName={(id) => teams.find(tm => tm.id === id)?.name}
+                                  onVote={(isUp) => currentVideo && handleVoteOnSuggestion(currentVideo.gameId, sugg, isUp)}
+                                  onAccept={() => currentVideo && handleAcceptSuggestion(currentVideo.gameId, sugg)}
+                                  onReject={() => currentVideo && handleRejectSuggestion(currentVideo.gameId, sugg)}
+                                  onRemove={() => currentVideo && handleWithdrawSuggestion(currentVideo.gameId, sugg.id)}
+                                  onSeek={sugg.targetEventId ? () => {
+                                    const target = events.find(e => e.id === sugg.targetEventId);
+                                    if (target) player?.seekTo(target.videoTime);
+                                  } : undefined}
+                                />
+                              ))}
+                              {suggestions.filter(s => s.status === 'open').length === 0 && (
+                                <p className="text-xs text-gray-400 text-center py-4">No open suggestions.</p>
+                              )}
+                            </div>
+                          )}
+                          {canModerate && currentGame && (
+                            <div className="flex flex-col gap-1.5">
+                              <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400">Tracking Complete</p>
+                              {/* Completion is per team, so whoever tracked one side can publish that
+                                  side's stats without waiting for anyone to cover the other. Both rows
+                                  read the same left-to-right — team, then status — rather than
+                                  mirroring home/away, which just made the two harder to compare. */}
+                              <div className="flex flex-col gap-1">
+                                {(['home', 'away'] as const).map(side => {
+                                  const teamId = side === 'home' ? currentGame.homeTeamId : currentGame.awayTeamId;
+                                  const teamObj = teams.find(t => t.id === teamId);
+                                  const teamColor = side === 'home'
+                                    ? avoidWhite(teamObj?.colorPrimaryDark || teamObj?.colorPrimary || '#dc2626')
+                                    : avoidWhite(teamObj?.colorPrimaryLight || teamObj?.colorLight || '#2563eb');
+                                  const current = sideCompletion(currentGame, side);
+                                  return (
+                                    <div key={side} className="flex items-center gap-2 rounded-md border border-gray-200 bg-white pl-2.5 pr-1.5 py-1">
+                                      <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: teamColor }} />
+                                      <span
+                                        className="text-[10px] font-bold uppercase tracking-wider truncate"
+                                        style={{ color: teamColor }}
+                                        title={teamObj?.name || (side === 'home' ? 'Home' : 'Away')}
+                                      >
+                                        {teamObj?.nickname || teamObj?.name || (side === 'home' ? 'Home' : 'Away')}
+                                      </span>
+                                      <div className="ml-auto flex items-center gap-1">
+                                        {current !== 'none' && <ShieldCheck className="w-3 h-3 text-emerald-500 shrink-0" />}
+                                        <select
+                                          value={current}
+                                          onChange={e => handleSetTeamCompletion(currentGame.id, side, e.target.value as TeamCompletion)}
+                                          className={cn(
+                                            'text-[10px] font-bold bg-transparent outline-none cursor-pointer py-1 pl-1 pr-0.5 rounded',
+                                            current === 'none' ? 'text-gray-400' : 'text-emerald-600'
+                                          )}
+                                          title={`${teamObj?.name || side}: ${TEAM_COMPLETION_LABELS[current]}`}
+                                        >
+                                          {TEAM_COMPLETION_VALUES.map(value => (
+                                            <option key={value} value={value}>{TEAM_COMPLETION_LABELS[value]}</option>
+                                          ))}
+                                        </select>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                    <div className="space-y-4">
+                    {(() => {
+                      const feedHomeTeamObj = teams.find(t => t.id === currentGame?.homeTeamId);
+                      const feedAwayTeamObj = teams.find(t => t.id === currentGame?.awayTeamId);
+                      const feedHomeColor = avoidWhite(feedHomeTeamObj?.colorPrimaryDark || feedHomeTeamObj?.colorPrimary || '#dc2626');
+                      const feedAwayColor = avoidWhite(feedAwayTeamObj?.colorPrimaryLight || feedAwayTeamObj?.colorLight || '#2563eb');
+                      const pinEvents = pins.filter(p => p.videoId === currentVideo?.id).map(p => ({
+                        id: p.id,
+                        type: `pin_${p.type}`,
+                        videoTime: p.time,
+                        gameTime: 0,
+                        teamId: null,
+                        playerId: null,
+                        status: 'recorded'
+                      } as any));
+                      let displayEvents = [...activeTrackingEvents, ...pinEvents].sort((a,b) => a.videoTime - b.videoTime);
+                      
+                      switch (eventsFilterSet) {
+                        case 'all_no_subs':
+                          displayEvents = displayEvents.filter(e => (e.type !== 'sub_in' && e.type !== 'sub_out') || e.type.startsWith('pin_'));
+                          break;
+                        case 'home_focused':
+                          displayEvents = displayEvents.filter(e => 
+                            e.type.startsWith('pin_') || 
+                            e.teamId === currentGame?.homeTeamId || 
+                            (e.teamId === currentGame?.awayTeamId && e.type === 'goal')
+                          );
+                          break;
+                        case 'away_focused':
+                          displayEvents = displayEvents.filter(e => 
+                            e.type.startsWith('pin_') || 
+                            e.teamId === currentGame?.awayTeamId || 
+                            (e.teamId === currentGame?.homeTeamId && e.type === 'goal')
+                          );
+                          break;
+                        case 'possession_scoring':
+                          displayEvents = displayEvents.filter(e => 
+                            e.type.startsWith('pin_') || 
+                            ['goal', 'assist', 'shot', 'attempt', 'miss_ko', 'turnover', 'control_change', 'control_start'].includes(e.type)
+                          );
+                          break;
+                        case 'all':
+                        default:
+                          // No additional filtering needed
+                          break;
+                      }
+
+                      // An assist is nested under (rendered inside) its goal's card whenever
+                      // that goal is also present in the current filtered view. Only one
+                      // assist per goal is nested; any others fall back to standalone cards.
+                      const nestedAssistByGoalId = new Map<string, any>();
+                      displayEvents.forEach(e => {
+                        if (e.type === 'assist' && e.relatedEventId && !nestedAssistByGoalId.has(e.relatedEventId)) {
+                          const goal = displayEvents.find(g => g.id === e.relatedEventId && g.type === 'goal');
+                          if (goal) nestedAssistByGoalId.set(goal.id, e);
+                        }
+                      });
+                      const nestedAssistIds = new Set(Array.from(nestedAssistByGoalId.values()).map((e: any) => e.id));
+
+                      const renderTrackingEventBody = (evt: any) => {
+                        const cfg = EVENT_CONFIG[evt.type as EventType] || { label: evt.type, icon: <AlertCircle className="w-4 h-4" />, color: 'bg-neutral-500' };
+                        const openSuggestionsForEvent = suggestions.filter(s => s.targetEventId === evt.id && s.status === 'open');
+                        const label = (evt.type === 'sub_in' && evt.position) ? `${evt.position} In` : (evt.type === 'sub_out' && evt.position) ? `${evt.position} Out` : (evt.type === 'card' && evt.color) ? `${evt.color} Card` : cfg.label;
+                        const cardIconColor = evt.type === 'card' && evt.color
+                          ? (evt.color === 'blue' ? 'bg-blue-500' : evt.color === 'yellow' ? 'bg-yellow-400' : evt.color === 'red' ? 'bg-red-500' : cfg.color)
+                          : cfg.color;
+                        return (
+                          <>
+                            <div className="flex items-start justify-between mb-2">
+                              <div className="flex items-center gap-2">
+                                <div className={cn("p-1.5 rounded-md", cardIconColor)}>
+                                  {React.cloneElement(cfg.icon as React.ReactElement<any>, { className: 'w-3 h-3' })}
+                                </div>
+                                <div className="flex flex-col items-center">
+                                  <p className="font-mono text-xs font-bold text-gray-800 w-12 text-center">{formatTime(evt.gameTime || 0)}</p>
+                                  <p className="font-mono text-[9px] text-gray-400 w-12 text-center">({formatTime(evt.videoTime)})</p>
+                                </div>
+                                <div className="flex flex-col justify-center gap-0.5 ml-1">
+                                  <div className="flex items-center gap-1.5">
+                                    <p className="text-sm font-bold capitalize">
+                                      {label}
+                                    </p>
+                                  </div>
+                                  {(evt.playerId || evt.teamId) && (
+                                    <div className="text-xs">
+                                      {evt.playerId ? (() => {
+                                        const p = allPlayers.find(pl => pl.id === evt.playerId);
+                                        return p ? (
+                                          <span
+                                            className="font-bold tracking-tight"
+                                            style={evt.teamId === currentGame?.homeTeamId ? { color: feedHomeColor } : evt.teamId === currentGame?.awayTeamId ? { color: feedAwayColor } : { color: '#374151' }}
+                                          >
+                                            {p.firstName.charAt(0)}. {p.lastName}
+                                          </span>
+                                        ) : 'Player';
+                                      })() : (() => {
+                                        const t = teams.find(tm => tm.id === evt.teamId);
+                                        return t ? (
+                                          <span
+                                            className="font-bold text-[9px] uppercase tracking-wider"
+                                            style={evt.teamId === currentGame?.homeTeamId ? { color: feedHomeColor } : evt.teamId === currentGame?.awayTeamId ? { color: feedAwayColor } : { color: '#6b7280' }}
+                                          >
+                                            {t.name}
+                                          </span>
+                                        ) : 'Team';
+                                      })()}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={() => player?.seekTo(evt.videoTime)}
+                                  className="text-[10px] font-mono bg-gray-100 hover:bg-red-600 px-2 py-1 rounded transition-colors"
+                                >
+                                  Seek {formatTime(evt.videoTime)}
+                                </button>
+                              </div>
+                            </div>
+
+                            {eventDensity !== 'compact' && (
+                              <div className="flex items-center justify-between pt-2 border-t border-gray-200/50">
+                                {/* Net, then the vote counters. Events are valid as soon as they're
+                                    authored — there is no verification step here any more, so voting
+                                    is the whole accuracy story. */}
+                                <div className="flex items-center gap-3">
+                                  <span className={cn(
+                                    "text-xs font-bold",
+                                    evt.votes > 0 ? "text-green-500" : evt.votes < 0 ? "text-red-500" : "text-gray-400"
+                                  )}>
+                                    {evt.votes > 0 ? `+${evt.votes}` : evt.votes}
+                                  </span>
+                                  <span className="text-[10px] text-gray-300 uppercase font-bold tracking-tighter">Net</span>
+                                  <div className="h-3 w-px bg-gray-100 mx-1" />
+                                  <button
+                                    onClick={() => handleVote(evt.id, true)}
+                                    className={cn(
+                                      'flex items-center gap-1 px-1.5 py-1 rounded transition-all',
+                                      evt.upvoterIds?.includes(voterId)
+                                        ? 'bg-green-500/15 text-green-600 ring-1 ring-green-500/30'
+                                        : 'text-gray-400 hover:bg-green-500/10 hover:text-green-500'
+                                    )}
+                                    title="Mark accurate"
+                                  >
+                                    <CheckCircle2 className="w-3.5 h-3.5" />
+                                    <span className="text-xs font-bold">{evt.upvotes || 0}</span>
+                                  </button>
+                                  <button
+                                    onClick={() => handleVote(evt.id, false)}
+                                    className={cn(
+                                      'flex items-center gap-1 px-1.5 py-1 rounded transition-all',
+                                      evt.downvoterIds?.includes(voterId)
+                                        ? 'bg-red-500/15 text-red-600 ring-1 ring-red-500/30'
+                                        : 'text-gray-400 hover:bg-red-500/10 hover:text-red-500'
+                                    )}
+                                    title="Mark inaccurate"
+                                  >
+                                    <XCircle className="w-3.5 h-3.5" />
+                                    <span className="text-xs font-bold">{evt.downvotes || 0}</span>
+                                  </button>
+                                </div>
+
+                                {/* Every editing entry point lives here, in this order: edit, delete,
+                                    suggest a fix, suggest a removal. Nothing edit-related sits in the
+                                    header any more, so Compact can hide this one div and be done. */}
+                                <div className="flex items-center gap-1">
+                                  {(canModerate || (evt.userId === user?.uid && evt.status !== 'verified')) && (
+                                    <>
+                                      <button
+                                        onClick={() => handleEditRecordedEvent(evt.id)}
+                                        className="p-1 text-gray-400 hover:text-blue-500 hover:bg-blue-50 transition-colors rounded flex items-center justify-center border border-transparent hover:border-blue-100"
+                                        title="Edit Event"
+                                      >
+                                        <Edit2 className="w-3.5 h-3.5" />
+                                      </button>
+                                      <button
+                                        onClick={() => { if (window.confirm('Delete this event permanently?')) handleDeleteRecordedEvent(evt.id) }}
+                                        className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors rounded flex items-center justify-center border border-transparent hover:border-red-100"
+                                        title="Delete Event"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    </>
+                                  )}
+                                  <button
+                                    onClick={() => setSuggestFormState({ mode: 'edit', targetEvent: evt })}
+                                    className="p-1 text-gray-400 hover:text-amber-600 hover:bg-amber-50 transition-colors rounded flex items-center justify-center border border-transparent hover:border-amber-100"
+                                    title="Suggest a fix"
+                                  >
+                                    <MessageSquarePlus className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={() => setSuggestFormState({ mode: 'delete', targetEvent: evt })}
+                                    className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors rounded flex items-center justify-center border border-transparent hover:border-red-100"
+                                    title="Suggest this be removed"
+                                  >
+                                    <Ban className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+
+                            {openSuggestionsForEvent.length > 0 && (
+                              <div className="mt-2 pt-2 border-t border-amber-200/60">
+                                <button
+                                  onClick={() => setExpandedSuggestionEventIds(prev => {
+                                    const next = new Set(prev);
+                                    if (next.has(evt.id)) next.delete(evt.id); else next.add(evt.id);
+                                    return next;
+                                  })}
+                                  className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-amber-600 hover:text-amber-700"
+                                >
+                                  {expandedSuggestionEventIds.has(evt.id) ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                                  {openSuggestionsForEvent.length} suggested fix{openSuggestionsForEvent.length === 1 ? '' : 'es'}
+                                </button>
+                                {expandedSuggestionEventIds.has(evt.id) && (
+                                  <div className="mt-2 space-y-2">
+                                    {openSuggestionsForEvent.map(sugg => (
+                                      <SuggestionCard
+                                        key={sugg.id}
+                                        suggestion={sugg}
+                                        voterId={voterId}
+                                        canModerate={canModerate}
+                                        playerName={(id) => { const p = allPlayers.find(pl => pl.id === id); return p ? `${p.firstName.charAt(0)}. ${p.lastName}` : undefined; }}
+                                        teamName={(id) => teams.find(tm => tm.id === id)?.name}
+                                        onVote={(isUp) => currentVideo && handleVoteOnSuggestion(currentVideo.gameId, sugg, isUp)}
+                                        onAccept={() => currentVideo && handleAcceptSuggestion(currentVideo.gameId, sugg)}
+                                        onReject={() => currentVideo && handleRejectSuggestion(currentVideo.gameId, sugg)}
+                                        onRemove={() => currentVideo && handleWithdrawSuggestion(currentVideo.gameId, sugg.id)}
+                                      />
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </>
+                        );
+                      };
+
+                      return displayEvents.length === 0 ? (
+                        <div className="h-full flex flex-col items-center justify-center text-gray-400 text-center p-8">
+                          <Clock className="w-12 h-12 mb-4 opacity-20" />
+                          <p>No events recorded yet.</p>
+                          <p className="text-sm">Be the first to track a goal!</p>
+                        </div>
+                      ) : (
+                        displayEvents.slice().reverse().map((event) => {
+                          const isPin = event.type.startsWith('pin_');
+                          if (isPin) {
+                            const pinType = event.type.replace('pin_', '');
+                            let colorClass = "bg-gray-400 text-white";
+                            let lineClass = "bg-gray-400";
+                            if (pinType === 'control') { colorClass = "bg-black text-white"; lineClass = "bg-black"; }
+                            else if (pinType === 'general') { colorClass = "bg-yellow-400 text-yellow-900"; lineClass = "bg-yellow-400"; }
+                            else if (pinType === 'possession') { colorClass = "bg-purple-600 text-white"; lineClass = "bg-purple-600"; }
+                            else if (pinType === 'sub') { colorClass = "bg-cyan-600 text-white"; lineClass = "bg-cyan-600"; }
+
+                            return (
+                              <div key={event.id} className="flex items-center gap-1.5 group w-full py-1 relative">
+                                <div className={`flex-1 h-[2px] ${lineClass} opacity-30 group-hover:opacity-100 transition-opacity`}></div>
+                                <button 
+                                  onClick={() => player?.seekTo(event.videoTime)}
+                                  className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider ${colorClass} hover:opacity-80 transition-opacity flex items-center gap-1 shadow-sm shrink-0`}
+                                >
+                                  <MapPin className="w-2.5 h-2.5" />
+                                  {pinType} @ {formatTime(event.videoTime)}
+                                </button>
+                                <button 
+                                  onClick={(e) => { e.stopPropagation(); setPins(prev => prev.filter(pin => pin.id !== event.id)); }} 
+                                  className="text-gray-400 hover:text-red-500 transition-colors p-0.5 opacity-0 group-hover:opacity-100 shrink-0" 
+                                  title="Dismiss Pin"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                                <div className={`flex-1 h-[2px] ${lineClass} opacity-30 group-hover:opacity-100 transition-opacity`}></div>
+                              </div>
+                            );
+                          }
+
+                          if (nestedAssistIds.has(event.id)) {
+                            // Rendered nested inside its goal's card below instead.
+                            return null;
+                          }
+
+                          const nestedAssist = event.type === 'goal' ? nestedAssistByGoalId.get(event.id) : undefined;
+                          const hasOpenSuggestions = suggestions.some(s => s.targetEventId === event.id && s.status === 'open');
+
+                          // Home events hug the left edge, away events hug the right edge, and
+                          // team-less (neutral) events stay centered — alignment alone signals
+                          // which side an event belongs to, so cards are capped well under full
+                          // width instead of stretching edge to edge.
+                          const isHome = event.teamId === currentGame?.homeTeamId;
+                          const isAway = event.teamId === currentGame?.awayTeamId;
+                          return (
+                            <div
+                              key={event.id}
+                              className={cn(
+                                "flex w-full",
+                                isHome ? "justify-start" : isAway ? "justify-end" : "justify-center"
+                              )}
+                            >
+                              <div
+                                data-event-time={event.videoTime}
+                                className={cn(
+                                  "group border rounded-xl p-2 transition-all w-full max-w-[92%] sm:max-w-[86%]",
+                                  !event.teamId && "bg-white border-gray-200 hover:border-gray-300",
+                                  event.status === 'rejected' && "opacity-50 grayscale",
+                                  hasOpenSuggestions && "border-l-4"
+                                )}
+                                style={{
+                                  // A team-colored card sets borderColor (all four sides) via inline style, which
+                                  // would silently beat the amber Tailwind class below since inline style always
+                                  // wins over a class for the same property — so the amber override has to be
+                                  // merged in after, not left to CSS specificity.
+                                  ...(isHome ? { backgroundColor: hexToRgba(feedHomeColor, 0.06), borderColor: hexToRgba(feedHomeColor, 0.25) } :
+                                    isAway ? { backgroundColor: hexToRgba(feedAwayColor, 0.06), borderColor: hexToRgba(feedAwayColor, 0.25) } :
+                                      {}),
+                                  ...(hasOpenSuggestions ? { borderLeftColor: '#f59e0b', borderLeftWidth: '4px' } : {}),
+                                }}
+                              >
+                                {renderTrackingEventBody(event)}
+                                {nestedAssist && (
+                                  <>
+                                    <div className="flex items-center gap-2 my-2">
+                                      <div className="flex-1 border-t border-dashed border-gray-300" />
+                                      <CornerDownRight className="w-3.5 h-3.5 text-gray-300 shrink-0" />
+                                      <div className="flex-1 border-t border-dashed border-gray-300" />
+                                    </div>
+                                    {renderTrackingEventBody(nestedAssist)}
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })
+                      );
+                    })()}
+                    </div>
+    </div>
+  );
+
+  const renderRecordBody = () => (
+    <div data-tour="record-panel" className="absolute inset-0 overflow-y-auto custom-scrollbar p-4 bg-white">
+
+                    {/* Voice & NLP Event Logger (Hidden for production deploy) */}
+                    {/*
+                    <div className="bg-slate-900 text-white rounded-2xl p-4 mb-4 shadow-lg border border-slate-800 relative overflow-hidden transition-all duration-300 hover:shadow-emerald-950/20">
+                      <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/10 rounded-full blur-2xl pointer-events-none" />
+                      
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <span className="flex h-2 w-2 relative">
+                            {isListening ? (
+                              <>
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                                <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+                              </>
+                            ) : (
+                              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400 animate-pulse"></span>
+                            )}
+                          </span>
+                          <h4 className="text-[11px] font-bold uppercase tracking-widest text-slate-300">Voice & NLP Event Logger</h4>
+                        </div>
+                        <button
+                          onClick={toggleSpeechRecognition}
+                          className={cn(
+                            "flex items-center justify-center p-2 rounded-xl transition-all duration-300 active:scale-95",
+                            isListening 
+                              ? "bg-red-500 text-white shadow-md shadow-red-500/30 animate-pulse" 
+                              : "bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-600/20 hover:scale-105"
+                          )}
+                          title="Click to dictate an event"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" />
+                          </svg>
+                        </button>
+                      </div>
+
+                      <form onSubmit={(e) => { e.preventDefault(); if (voiceCommandText.trim()) { parseNlpCommand(voiceCommandText); setVoiceCommandText(''); } }} className="flex gap-2">
+                        <input
+                          type="text"
+                          value={voiceCommandText}
+                          onChange={(e) => setVoiceCommandText(e.target.value)}
+                          placeholder='Try: "goal home 10, assist 5" or "sub 12 in for 8"'
+                          className="flex-1 bg-slate-800/90 text-white border border-slate-700/80 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500/50 transition-all font-medium placeholder-slate-500"
+                        />
+                        <button
+                          type="submit"
+                          className="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700/80 px-3 py-2 rounded-xl text-xs font-semibold hover:text-white transition-all active:scale-95 shadow-sm"
+                        >
+                          Send
+                        </button>
+                      </form>
+
+                      {voiceStatusMessage && (
+                        <div className="mt-2.5 text-[10px] font-medium text-slate-400 bg-slate-800/40 rounded-lg py-1.5 px-2.5 border border-slate-800/50 flex items-center gap-1.5 animate-pulse">
+                          <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+                          <span>{voiceStatusMessage}</span>
+                        </div>
+                      )}
+                    </div>
+                    */}
+
+                    {/* Event Type Grid ALWAYS visible because Player Actions are now local popups */}
+                    <div data-tour="event-grid" className="flex flex-col gap-3 mb-2">
+                      {(() => {
+                        const chaserTypes = ['goal', 'shot', 'attempt', 'miss_ko', 'turnover'];
+                        const clockTypes = ['gameStart', 'gamePause', 'gameEnd'];
+
+                        return (
+                          <>
+                            <div data-tour="record-actions" className="flex flex-col gap-1.5 mb-2">
+                              <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Chaser Actions</span>
+                              <div className="grid grid-cols-5 gap-1.5">
+                                {chaserTypes.map(type => {
+                                  const config = EVENT_CONFIG[type as EventType];
+                                  if (!config) return null;
+                                  return (
+                                    <button
+                                      key={type}
+                                      onClick={() => handleCreateDraftEvent(type as EventType, null, null, null, null)}
+                                      className="flex flex-col items-center justify-center py-2 px-1 rounded-lg border border-gray-200 hover:border-gray-500 hover:bg-gray-50 transition-all active:scale-95 text-center bg-white shadow-sm"
+                                    >
+                                      <span className="text-[9px] uppercase font-bold tracking-tight text-gray-900 leading-tight">{config.label}</span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+
+                            <div data-tour="record-clock" className="flex flex-col gap-1.5">
+                              <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Game Clock</span>
+                              <div className="grid grid-cols-3 gap-1.5">
+                                {clockTypes.map(type => {
+                                  const config = EVENT_CONFIG[type as EventType];
+                                  if (!config) return null;
+                                  return (
+                                    <button
+                                      key={type}
+                                      onClick={() => handleCreateDraftEvent(type as EventType, null, null, null, null)}
+                                      className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-gray-200 hover:border-gray-500 hover:bg-gray-50 transition-all active:scale-95 text-center bg-white shadow-sm"
+                                    >
+                                      <span className="text-[10px] uppercase font-bold tracking-tight text-gray-700 leading-tight">{config.label}</span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          </>
+                        );
+                      })()}
+
+                      {/* Control Change UI */}
+                      <div data-tour="record-control" className="flex flex-col gap-1.5 mt-1">
+                        <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Control Change</span>
+                        <div className="flex rounded-lg overflow-hidden border border-emerald-200 shadow-sm">
+                          <button
+                            onClick={() => handleCreateDraftEvent('control_change', currentGame?.homeTeamId || null, null, null, null)}
+                            className="flex-1 flex flex-col items-center justify-center py-1.5 px-1 bg-white hover:bg-emerald-50 active:bg-emerald-100 transition-all border-r border-emerald-100 group"
+                          >
+                            <span className="text-[10px] uppercase font-bold tracking-tight text-emerald-700 leading-tight group-hover:text-emerald-800">Home Control</span>
+                          </button>
+                          <button
+                            onClick={() => handleCreateDraftEvent('control_change', currentGame?.awayTeamId || null, null, null, null)}
+                            className="flex-1 flex flex-col items-center justify-center py-1.5 px-1 bg-white hover:bg-emerald-50 active:bg-emerald-100 transition-all group"
+                          >
+                            <span className="text-[10px] uppercase font-bold tracking-tight text-emerald-700 leading-tight group-hover:text-emerald-800">Away Control</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Drop Pins UI */}
+                      {player && currentVideo && (
+                        <div data-tour="record-pins" className="flex flex-col gap-1.5 mt-1">
+                          <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Drop Pin</span>
+                          <div className="grid grid-cols-4 gap-1.5">
+                            <button onClick={() => setPins(prev => [...prev, { id: crypto.randomUUID(), videoId: currentVideo.id, time: player.getCurrentTime(), type: 'sub' }])} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-yellow-200 hover:border-yellow-500 hover:bg-yellow-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[9px] uppercase font-bold tracking-tight text-yellow-700">Sub Pin</span></button>
+                            <button onClick={() => setPins(prev => [...prev, { id: crypto.randomUUID(), videoId: currentVideo.id, time: player.getCurrentTime(), type: 'control' }])} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-yellow-200 hover:border-yellow-500 hover:bg-yellow-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[9px] uppercase font-bold tracking-tight text-yellow-700">Ctrl Pin</span></button>
+                            <button onClick={() => setPins(prev => [...prev, { id: crypto.randomUUID(), videoId: currentVideo.id, time: player.getCurrentTime(), type: 'possession' }])} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-yellow-200 hover:border-yellow-500 hover:bg-yellow-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[9px] uppercase font-bold tracking-tight text-yellow-700">Poss Pin</span></button>
+                            <button onClick={() => setPins(prev => [...prev, { id: crypto.randomUUID(), videoId: currentVideo.id, time: player.getCurrentTime(), type: 'general' }])} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-yellow-200 hover:border-yellow-500 hover:bg-yellow-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[9px] uppercase font-bold tracking-tight text-yellow-700">Gen Pin</span></button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Cards UI */}
+                      <div className="flex flex-col gap-1.5 mt-1">
+                        <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Penalties</span>
+                        <div className="grid grid-cols-3 gap-1.5">
+                          <button onClick={() => { handleCreateDraftEvent('card', selectedTeamContext === 'home' ? currentGame?.homeTeamId || null : selectedTeamContext === 'away' ? currentGame?.awayTeamId || null : null, selectedPlayerId || null, null, null); setDraftEvents(d => { const last = d[0]; if (last) last.color = 'blue'; return [...d]; }); }} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-blue-200 hover:border-blue-500 hover:bg-blue-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[10px] uppercase font-bold tracking-tight text-blue-700">Blue Card</span></button>
+                          <button onClick={() => { handleCreateDraftEvent('card', selectedTeamContext === 'home' ? currentGame?.homeTeamId || null : selectedTeamContext === 'away' ? currentGame?.awayTeamId || null : null, selectedPlayerId || null, null, null); setDraftEvents(d => { const last = d[0]; if (last) last.color = 'yellow'; return [...d]; }); }} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-yellow-200 hover:border-yellow-500 hover:bg-yellow-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[10px] uppercase font-bold tracking-tight text-yellow-700">Yellow Card</span></button>
+                          <button onClick={() => { handleCreateDraftEvent('card', selectedTeamContext === 'home' ? currentGame?.homeTeamId || null : selectedTeamContext === 'away' ? currentGame?.awayTeamId || null : null, selectedPlayerId || null, null, null); setDraftEvents(d => { const last = d[0]; if (last) last.color = 'red'; return [...d]; }); }} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-red-200 hover:border-red-500 hover:bg-red-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[10px] uppercase font-bold tracking-tight text-red-700">Red Card</span></button>
+                        </div>
+                      </div>
+
+                      {/* Game Phase Events */}
+                      <div className="flex flex-col gap-1.5 mt-1">
+                        <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Game Phase Events</span>
+                        <div className="grid grid-cols-4 gap-1.5">
+                          <button onClick={() => handleCreateDraftEvent('quadball_start', null, null, null, null)} className="flex flex-col items-center justify-center py-1.5 px-0.5 rounded-lg border border-gray-200 hover:border-red-500 hover:bg-red-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[8px] sm:text-[9px] uppercase font-bold tracking-tight text-gray-700 leading-tight text-center">Quadball Start</span></button>
+                          <button onClick={() => handleCreateDraftEvent('control_start', null, null, null, null)} className="flex flex-col items-center justify-center py-1.5 px-0.5 rounded-lg border border-gray-200 hover:border-emerald-500 hover:bg-emerald-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[8px] sm:text-[9px] uppercase font-bold tracking-tight text-emerald-800 leading-tight text-center">Control Start</span></button>
+                          <button onClick={() => handleCreateDraftEvent('flag_released', null, null, null, null)} className="flex flex-col items-center justify-center py-1.5 px-0.5 rounded-lg border border-gray-200 hover:border-purple-500 hover:bg-purple-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[8px] sm:text-[9px] uppercase font-bold tracking-tight text-purple-800 leading-tight text-center">Flag Released</span></button>
+                          <button onClick={() => handleCreateDraftEvent('flag_catch', selectedTeamContext === 'home' ? currentGame?.homeTeamId || null : currentGame?.awayTeamId || null, selectedPlayerId || null, null, null)} className="flex flex-col items-center justify-center py-1.5 px-0.5 rounded-lg border border-gray-200 hover:border-purple-500 hover:bg-purple-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[8px] sm:text-[9px] uppercase font-bold tracking-tight text-purple-800 leading-tight text-center">Flag Catch</span></button>
+                        </div>
+                      </div>
+
+                      {/* Sub UI */}
+                      <div data-tour="record-subs" className="flex flex-col gap-1.5 mt-1 border border-gray-200 bg-gray-50 p-2 rounded-lg">
+                        <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest">Substitutions</span>
+                        <div className="flex gap-4">
+                          <div className="flex-1 flex flex-col gap-1">
+                            <span className="text-[9px] text-gray-500 font-bold uppercase truncate">{getScoreboardName(teams.find(t => t.id === currentGame?.homeTeamId))}</span>
+                            <div className="flex gap-1">
+                              <button onClick={() => handleCreateDraftEvent('sub_in', currentGame?.homeTeamId || null, null, null, null)} className="flex-1 py-1.5 bg-gray-800 hover:bg-gray-900 rounded text-white text-[9px] font-bold shadow-sm transition-all active:scale-95">IN</button>
+                              <button onClick={() => handleCreateDraftEvent('sub_out', currentGame?.homeTeamId || null, null, null, null)} className="flex-1 py-1.5 bg-gray-800 hover:bg-gray-900 rounded text-white text-[9px] font-bold shadow-sm transition-all active:scale-95">OUT</button>
+                            </div>
+                          </div>
+                          <div className="flex-1 flex flex-col gap-1">
+                            <span className="text-[9px] text-gray-500 font-bold uppercase truncate">{getScoreboardName(teams.find(t => t.id === currentGame?.awayTeamId))}</span>
+                            <div className="flex gap-1">
+                              <button onClick={() => handleCreateDraftEvent('sub_in', currentGame?.awayTeamId || null, null, null, null)} className="flex-1 py-1.5 bg-gray-800 hover:bg-gray-900 rounded text-white text-[9px] font-bold shadow-sm transition-all active:scale-95">IN</button>
+                              <button onClick={() => handleCreateDraftEvent('sub_out', currentGame?.awayTeamId || null, null, null, null)} className="flex-1 py-1.5 bg-gray-800 hover:bg-gray-900 rounded text-white text-[9px] font-bold shadow-sm transition-all active:scale-95">OUT</button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* End Event Grid */}
+                    </div>
+                    {/* Draft Cards Pipeline */}
+                    <div data-tour="draft-queue" className="flex flex-col gap-4">
+                      {draftEvents.length > 0 ? (
+                        <div className="flex flex-col gap-3">
+                          <h4 className="text-[11px] font-bold uppercase tracking-widest text-emerald-600 border-b border-emerald-100 pb-2">Pending Events Queue ({draftEvents.length})</h4>
+                          {draftEvents.map(draft => (
+                            <div key={draft.id} className="p-2.5 bg-emerald-50/20 border border-emerald-200 rounded-lg shadow-sm flex flex-col gap-2 animate-in fade-in slide-in-from-top-2">
+                              {/* Header */}
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-1.5">
+                                  {/* -1s / +1s time adjusters */}
+                                  <button
+                                    onClick={() => setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, videoTime: Math.max(0, d.videoTime - 1) } : d))}
+                                    title="Shift timestamp back 1 second"
+                                    className="h-5 w-5 flex items-center justify-center rounded bg-gray-200 hover:bg-gray-300 active:scale-95 text-gray-700 text-[10px] font-bold transition-all select-none"
+                                  >−</button>
+                                  <div className="px-2 py-0.5 bg-gray-800 text-white rounded text-[10px] font-mono shadow-inner tracking-wider">
+                                    {formatTime(draft.videoTime)}
+                                  </div>
+                                  <button
+                                    onClick={() => setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, videoTime: d.videoTime + 1 } : d))}
+                                    title="Shift timestamp forward 1 second"
+                                    className="h-5 w-5 flex items-center justify-center rounded bg-gray-200 hover:bg-gray-300 active:scale-95 text-gray-700 text-[10px] font-bold transition-all select-none"
+                                  >+</button>
+                                  <span className="text-xs font-bold text-gray-600 ml-1">Pending Log</span>
+                                </div>
+                              </div>
+
+                              {/* Form Array */}
+                              <div className="flex flex-col gap-2">
+                                {/* Team & Player Selects (Hidden for Clock Events) */}
+                                {!['gameStart', 'gamePause', 'gameEnd'].includes(draft.type || '') ? (
+                                  <div className="flex items-center gap-1.5 w-full">
+                                    <select
+                                      value={draft.teamId === currentGame?.homeTeamId ? (draft.playerId || 'TEAM_ONLY') : ''}
+                                      onChange={(e) => {
+                                        const newPlr = e.target.value;
+                                        if (!newPlr) {
+                                          setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, teamId: null, playerId: null } : d));
+                                          return;
+                                        }
+                                        if (newPlr === 'TEAM_ONLY') {
+                                          setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, teamId: currentGame?.homeTeamId || null, playerId: null } : d));
+                                          return;
+                                        }
+                                        setDraftEvents(prev => prev.map(d => {
+                                          if (d.id !== draft.id) return d;
+                                          let updatedDraft = { ...d, teamId: currentGame?.homeTeamId || null, playerId: newPlr };
+                                          // Position is whatever it was already set to (defaulting to chaser the
+                                          // first time), never guessed from the newly-picked player's history —
+                                          // changing who's subbing in shouldn't silently change the position too.
+                                          if (d.type === 'sub_in' && !updatedDraft.position) {
+                                            updatedDraft.position = 'chaser';
+                                          }
+                                          return updatedDraft;
+                                        }));
+                                      }}
+                                      className={`flex-1 w-0 text-[10px] border rounded p-1.5 shadow-sm ${draft.teamId === currentGame?.homeTeamId ? 'bg-white border-gray-300' : 'bg-red-50 border-red-300 text-red-600 font-bold'}`}
+                                    >
+                                      <option value="" disabled>⚠ Home Team - Select Player</option>
+                                      <option value="TEAM_ONLY" className="font-bold text-gray-500">- {teams.find(t => t.id === currentGame?.homeTeamId)?.nickname || teams.find(t => t.id === currentGame?.homeTeamId)?.name || 'Team'} / No Player -</option>
+                                      {homeRosterPlayers
+                                        .filter(rp => {
+                                          if (draft.type === 'sub_in') return !activePlayerPositions.has(rp.playerId);
+                                          if (draft.type === 'sub_out') return activePlayerPositions.has(rp.playerId);
+                                          return true;
+                                        })
+                                        .sort((a, b) => {
+                                          if (draft.type === 'sub_in') {
+                                            return (a.player?.lastName || '').localeCompare(b.player?.lastName || '');
+                                          }
+                                          const aActive = activePlayerPositions.has(a.playerId);
+                                          const bActive = activePlayerPositions.has(b.playerId);
+                                          if (aActive !== bActive) return aActive ? -1 : 1;
+                                          if (aActive) {
+                                            const posA = activePlayerPositions.get(a.playerId) || 'chaser';
+                                            const posB = activePlayerPositions.get(b.playerId) || 'chaser';
+                                            const order = { chaser: 1, keeper: 2, beater: 3, seeker: 4 } as Record<string, number>;
+                                            return order[posA] - order[posB];
+                                          }
+                                          return (a.player?.lastName || '').localeCompare(b.player?.lastName || '');
+                                        })
+                                        .map(rp => (
+                                          <option key={rp.playerId} value={rp.playerId}>
+                                            {draft.type !== 'sub_in' ? `[${(activePlayerPositions.get(rp.playerId) || 'off').substring(0, 1).toUpperCase()}] ` : ''}
+                                            {getPlayerShortName(rp.player, homeRosterPlayers)}
+                                          </option>
+                                        ))}
+                                    </select>
+
+                                    <select
+                                      value={draft.type || ''}
+                                      onChange={(e) => {
+                                        const newType = e.target.value as EventType;
+                                        setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, type: newType } : d));
+                                      }}
+                                      className="w-20 text-[9px] font-bold text-gray-700 border border-gray-300 rounded p-1 bg-white shadow-sm outline-none shrink-0"
+                                    >
+                                      {!draft.type && <option value="">Type</option>}
+                                      {Object.entries(EVENT_CONFIG).map(([typeKey, config]) => (
+                                        <option key={typeKey} value={typeKey}>{config.label}</option>
+                                      ))}
+                                    </select>
+
+                                    <select
+                                      value={draft.teamId === currentGame?.awayTeamId ? (draft.playerId || 'TEAM_ONLY') : ''}
+                                      onChange={(e) => {
+                                        const newPlr = e.target.value;
+                                        if (!newPlr) {
+                                          setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, teamId: null, playerId: null } : d));
+                                          return;
+                                        }
+                                        if (newPlr === 'TEAM_ONLY') {
+                                          setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, teamId: currentGame?.awayTeamId || null, playerId: null } : d));
+                                          return;
+                                        }
+                                        setDraftEvents(prev => prev.map(d => {
+                                          if (d.id !== draft.id) return d;
+                                          let updatedDraft = { ...d, teamId: currentGame?.awayTeamId || null, playerId: newPlr };
+                                          // Position is whatever it was already set to (defaulting to chaser the
+                                          // first time), never guessed from the newly-picked player's history —
+                                          // changing who's subbing in shouldn't silently change the position too.
+                                          if (d.type === 'sub_in' && !updatedDraft.position) {
+                                            updatedDraft.position = 'chaser';
+                                          }
+                                          return updatedDraft;
+                                        }));
+                                      }}
+                                      className={`flex-1 w-0 text-[10px] border rounded p-1.5 shadow-sm ${draft.teamId === currentGame?.awayTeamId ? 'bg-white border-gray-300' : 'bg-red-50 border-red-300 text-red-600 font-bold'}`}
+                                    >
+                                      <option value="" disabled>⚠ Away Team - Select Player</option>
+                                      <option value="TEAM_ONLY" className="font-bold text-gray-500">- {teams.find(t => t.id === currentGame?.awayTeamId)?.nickname || teams.find(t => t.id === currentGame?.awayTeamId)?.name || 'Team'} / No Player -</option>
+                                      {awayRosterPlayers
+                                        .filter(rp => {
+                                          if (draft.type === 'sub_in') return !activePlayerPositions.has(rp.playerId);
+                                          if (draft.type === 'sub_out') return activePlayerPositions.has(rp.playerId);
+                                          return true;
+                                        })
+                                        .sort((a, b) => {
+                                          if (draft.type === 'sub_in') {
+                                            return (a.player?.lastName || '').localeCompare(b.player?.lastName || '');
+                                          }
+                                          const aActive = activePlayerPositions.has(a.playerId);
+                                          const bActive = activePlayerPositions.has(b.playerId);
+                                          if (aActive !== bActive) return aActive ? -1 : 1;
+                                          if (aActive) {
+                                            const posA = activePlayerPositions.get(a.playerId) || 'chaser';
+                                            const posB = activePlayerPositions.get(b.playerId) || 'chaser';
+                                            const order = { chaser: 1, keeper: 2, beater: 3, seeker: 4 } as Record<string, number>;
+                                            return order[posA] - order[posB];
+                                          }
+                                          return (a.player?.lastName || '').localeCompare(b.player?.lastName || '');
+                                        })
+                                        .map(rp => (
+                                          <option key={rp.playerId} value={rp.playerId}>
+                                            {draft.type !== 'sub_in' ? `[${(activePlayerPositions.get(rp.playerId) || 'off').substring(0, 1).toUpperCase()}] ` : ''}
+                                            {getPlayerShortName(rp.player, awayRosterPlayers)}
+                                          </option>
+                                        ))}
+                                    </select>
+                                  </div>
+                                ) : (
+                                  <div className="w-full text-center text-[10px] border border-gray-200 rounded p-1.5 bg-gray-50 text-gray-600 font-bold flex items-center justify-center gap-1.5 uppercase tracking-tight shadow-sm">
+                                    {EVENT_CONFIG[draft.type as EventType] ? React.cloneElement(EVENT_CONFIG[draft.type as EventType].icon as React.ReactElement<any>, { className: 'w-3 h-3' }) : null}
+                                    {EVENT_CONFIG[draft.type as EventType]?.label || 'Event'}
+                                  </div>
+                                )}
+
+                                    {draft.type === 'sub_in' && (
+                                      <select
+                                        value={draft.position || 'chaser'}
+                                        onChange={(e) => setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, position: e.target.value as PositionType } : d))}
+                                        className="text-xs border border-green-200 rounded p-1.5 bg-green-50 text-green-800 disabled:opacity-50 mt-1"
+                                      >
+                                        <option value="chaser">Chaser</option>
+                                        <option value="beater">Beater</option>
+                                        <option value="keeper">Keeper</option>
+                                        <option value="seeker">Seeker</option>
+                                      </select>
+                                    )}
+
+                                    {draft.type === 'sub_out' && (
+                                      <select
+                                        value={draft.subPlayerId || ''}
+                                        onChange={(e) => setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, subPlayerId: e.target.value } : d))}
+                                        className="text-xs border border-green-200 rounded p-1.5 bg-green-50 text-green-800 disabled:opacity-50 mt-1"
+                                        disabled={!draft.teamId}
+                                      >
+                                        <option value="">Sub In... (Optional)</option>
+                                        {draft.teamId && (draft.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)
+                                          .filter(rp => !activePlayerPositions.has(rp.playerId) && rp.playerId !== draft.playerId)
+                                          .sort((a, b) => (a.player?.lastName || '').localeCompare(b.player?.lastName || ''))
+                                          .map(rp => (
+                                            <option key={rp.playerId} value={rp.playerId}>
+                                              Sub in {getPlayerShortName(rp.player, draft.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)}
+                                            </option>
+                                          ))}
+                                      </select>
+                                    )}
+
+                                    {draft.type === 'card' && (
+                                      <div className="col-span-2 flex flex-col gap-1.5 mt-1">
+                                        <div className="flex rounded-lg overflow-hidden border border-gray-200 shadow-sm">
+                                          {(['blue', 'yellow', 'red'] as const).map(c => (
+                                            <button
+                                              key={c}
+                                              type="button"
+                                              onClick={() => setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, color: c } : d))}
+                                              className={cn(
+                                                "flex-1 py-1.5 text-[10px] font-bold uppercase tracking-tight capitalize transition-all",
+                                                draft.color === c
+                                                  ? c === 'blue' ? 'bg-blue-500 text-white' : c === 'yellow' ? 'bg-yellow-400 text-yellow-900' : 'bg-red-500 text-white'
+                                                  : 'bg-white text-gray-500 hover:bg-gray-50'
+                                              )}
+                                            >
+                                              {c} Card
+                                            </button>
+                                          ))}
+                                        </div>
+
+                                        {draft.playerId && activePlayerPositions.get(draft.playerId) === 'keeper' && (
+                                          <div className="flex flex-col gap-1 p-2 border border-indigo-200 bg-indigo-50 rounded-lg">
+                                            <span className="text-[9px] uppercase font-bold text-indigo-600 tracking-wider">Keeper Swap (optional)</span>
+                                            <select
+                                              value={draft.swapPlayerId || ''}
+                                              onChange={(e) => setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, swapPlayerId: e.target.value || null } : d))}
+                                              className="text-xs border border-indigo-200 rounded p-1.5 bg-white text-indigo-800"
+                                            >
+                                              <option value="">No swap</option>
+                                              {draft.teamId && (draft.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)
+                                                .filter(rp => rp.playerId !== draft.playerId && activePlayerPositions.has(rp.playerId))
+                                                .sort((a, b) => (a.player?.lastName || '').localeCompare(b.player?.lastName || ''))
+                                                .map(rp => (
+                                                  <option key={rp.playerId} value={rp.playerId}>
+                                                    Swap in [{(activePlayerPositions.get(rp.playerId) || 'chaser').substring(0, 1).toUpperCase()}] {getPlayerShortName(rp.player, draft.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)}
+                                                  </option>
+                                                ))}
+                                            </select>
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
+
+                                    {draft.type === 'goal' && (
+                                      <select
+                                        value={draft.assistedByPlayerId || ''}
+                                        onChange={(e) => setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, assistedByPlayerId: e.target.value } : d))}
+                                        className="col-span-2 text-xs border border-purple-200 rounded p-1.5 bg-purple-50 text-purple-800 disabled:opacity-50 mt-1"
+                                        disabled={!draft.teamId}
+                                      >
+                                        <option value="">No Assist Data</option>
+                                        {draft.teamId && (draft.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)
+                                          .filter(rp => rp.playerId !== draft.playerId)
+                                          .sort((a, b) => {
+                                            const aActive = activePlayerPositions.has(a.playerId);
+                                            const bActive = activePlayerPositions.has(b.playerId);
+                                            if (aActive !== bActive) return aActive ? -1 : 1;
+                                            if (aActive) {
+                                              const posA = activePlayerPositions.get(a.playerId) || 'chaser';
+                                              const posB = activePlayerPositions.get(b.playerId) || 'chaser';
+                                              const order = { chaser: 1, keeper: 2, beater: 3, seeker: 4 } as Record<string, number>;
+                                              return order[posA] - order[posB];
+                                            }
+                                            return (a.player?.lastName || '').localeCompare(b.player?.lastName || '');
+                                          })
+                                          .map(rp => (
+                                            <option key={rp.playerId} value={rp.playerId}>
+                                              Assist - [{(activePlayerPositions.get(rp.playerId) || 'off').substring(0, 1).toUpperCase()}] {getPlayerShortName(rp.player, draft.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)}
+                                            </option>
+                                          ))}
+                                      </select>
+                                    )}
+
+                              </div>
+
+                              <div className="flex gap-2 w-full mt-1">
+                                {draft.type === 'sub_out' || draft.type === 'sub_in' ? (
+                                  <div className="flex gap-1 flex-1">
+                                    <button
+                                      onClick={() => handleSaveDraftEvent(draft, false)}
+                                      className="flex-1 shrink-0 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] py-1.5 rounded-lg transition-colors shadow flex items-center justify-center gap-1 min-h-[32px] px-1"
+                                    >
+                                      <CheckCircle2 className="w-3.5 h-3.5" /> Save
+                                    </button>
+                                    <button
+                                      onClick={() => handleSaveDraftEvent(draft, true)}
+                                      className="flex-1 shrink-0 bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-[11px] py-1.5 rounded-lg transition-colors shadow flex items-center justify-center gap-1 min-h-[32px] px-1"
+                                    >
+                                      <CheckCircle2 className="w-3.5 h-3.5" /> + Next
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    onClick={() => handleSaveDraftEvent(draft, false)}
+                                    className="flex-1 shrink-0 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] py-1.5 rounded-lg transition-colors shadow flex items-center justify-center gap-1.5 min-h-[32px]"
+                                  >
+                                    <CheckCircle2 className="w-3.5 h-3.5" /> Save to Timeline
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => handleDeleteDraftEvent(draft.id)}
+                                  className="w-10 shrink-0 bg-red-50 border border-red-100 hover:bg-red-100 text-red-500 font-bold p-1.5 text-[11px] rounded-lg transition-colors flex items-center justify-center min-h-[32px]"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="flex flex-col items-center justify-center text-center py-6 px-4 bg-gray-100 rounded-xl border border-dashed border-gray-300">
+                          <History className="w-8 h-8 text-gray-300 mb-2" />
+                          <p className="text-[11px] font-bold text-gray-400">No pending events.</p>
+                          <p className="text-[10px] text-gray-400 mt-0.5">Select an action above to draft an event at the current video timestamp.</p>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Vertical Event Thread Remapped to Screen Floor -> Empty placeholder rendering null as component was relocated natively globally component above! */}
+
+    </div>
+  );
+
+  const renderRostersBody = (sides: readonly ('home' | 'away')[]) => (
+    <div data-tour="rosters-panel" className="absolute inset-0 overflow-y-auto custom-scrollbar p-2.5 bg-gray-50">
+                    {(() => {
+                      const showHome = sides.includes('home');
+                      const showAway = sides.includes('away');
+                      const twoCol = showHome && showAway;
+                      const pastEvents = activeTrackingEvents.filter(e => e.videoTime <= currentTime);
+                      const liveStats = new Map<string, { g: number, a: number, plus: number, minus: number }>();
+
+                      const activePlayers = new Set<string>();
+                      const seenSubIn = new Set<string>();
+                      const sortedEvents = [...pastEvents].sort((a, b) => a.videoTime - b.videoTime);
+
+                      for (const e of sortedEvents) {
+                        if (!e.playerId) continue;
+                        if (!liveStats.has(e.playerId)) liveStats.set(e.playerId, { g: 0, a: 0, plus: 0, minus: 0 });
+
+                        if (e.type === 'sub_in') { seenSubIn.add(e.playerId); }
+                        else if (e.type === 'sub_out') { if (!seenSubIn.has(e.playerId)) activePlayers.add(e.playerId); }
+                        else { if (!seenSubIn.has(e.playerId)) activePlayers.add(e.playerId); }
+                      }
+
+                      const activeHomeTracking = new Set<string>();
+                      const activeAwayTracking = new Set<string>();
+                      for (const pid of activePlayers) {
+                        if (homeRosterPlayers.some(r => r.playerId === pid)) activeHomeTracking.add(pid);
+                        if (awayRosterPlayers.some(r => r.playerId === pid)) activeAwayTracking.add(pid);
+                      }
+
+                      for (const e of sortedEvents) {
+                        if (e.type === 'sub_in' && e.playerId) {
+                          if (homeRosterPlayers.some(r => r.playerId === e.playerId)) activeHomeTracking.add(e.playerId);
+                          if (awayRosterPlayers.some(r => r.playerId === e.playerId)) activeAwayTracking.add(e.playerId);
+                        }
+                        if (e.type === 'sub_out' && e.playerId) {
+                          activeHomeTracking.delete(e.playerId);
+                          activeAwayTracking.delete(e.playerId);
+                        }
+
+                        if (e.type === 'goal') {
+                          const isHomeGoal = e.teamId === currentGame?.homeTeamId;
+                          const isAwayGoal = e.teamId === currentGame?.awayTeamId;
+                          if (isHomeGoal || isAwayGoal) {
+                            for (const pid of activeHomeTracking) {
+                              if (!liveStats.has(pid)) liveStats.set(pid, { g: 0, a: 0, plus: 0, minus: 0 });
+                              if (isHomeGoal) liveStats.get(pid)!.plus++;
+                              if (isAwayGoal) liveStats.get(pid)!.minus++;
+                            }
+                            for (const pid of activeAwayTracking) {
+                              if (!liveStats.has(pid)) liveStats.set(pid, { g: 0, a: 0, plus: 0, minus: 0 });
+                              if (isAwayGoal) liveStats.get(pid)!.plus++;
+                              if (isHomeGoal) liveStats.get(pid)!.minus++;
+                            }
+                          }
+                        }
+
+                        if (e.playerId && e.type === 'goal') liveStats.get(e.playerId)!.g++;
+                        if (e.playerId && e.type === 'assist') liveStats.get(e.playerId)!.a++;
+                      }
+
+                      // Compute beater control time per player
+                      const controlPeriods = computeControlPeriods(sortedEvents);
+                      const beaterControlTime = new Map<string, { ctrlSec: number, totalSec: number }>();
+
+                      // Build stints for all beaters currently tracked
+                      const allBeaters = [...homeRosterPlayers, ...awayRosterPlayers]
+                        .filter(rp => activePlayerPositions.get(rp.playerId) === 'beater');
+
+                      for (const rp of allBeaters) {
+                        const pid = rp.playerId;
+                        const teamId = homeRosterPlayers.some(r => r.playerId === pid)
+                          ? currentGame?.homeTeamId : currentGame?.awayTeamId;
+
+                        // Build stints from events
+                        const stints: { start: number; end: number }[] = [];
+                        let onField = false;
+                        let stintStart = 0;
+
+                        for (const e of sortedEvents) {
+                          if (e.playerId !== pid) continue;
+                          if (e.type === 'sub_in' && e.position === 'beater') {
+                            if (!onField) { onField = true; stintStart = e.videoTime; }
+                          } else if (e.type === 'sub_out') {
+                            if (onField) { stints.push({ start: stintStart, end: e.videoTime }); onField = false; }
+                          }
+                        }
+                        if (onField) stints.push({ start: stintStart, end: currentTime });
+
+                        // If no sub_in events found, they might have been on from the start
+                        if (stints.length === 0 && activePlayerPositions.get(pid) === 'beater') {
+                          // check if they have any events at all
+                          const hasAnyEvent = sortedEvents.some(e => e.playerId === pid);
+                          if (hasAnyEvent) {
+                            const firstEvent = sortedEvents.find(e => e.playerId === pid);
+                            stints.push({ start: firstEvent?.videoTime || 0, end: currentTime });
+                          }
+                        }
+
+                        // Calculate control time across all stints
+                        let ctrlSec = 0;
+                        let totalSec = 0;
+                        for (const stint of stints) {
+                          totalSec += Math.max(0, stint.end - stint.start);
+                          for (const cp of controlPeriods) {
+                            if (cp.teamId !== teamId) continue;
+                            const overlapStart = Math.max(stint.start, cp.startTime);
+                            const overlapEnd = Math.min(stint.end, cp.endTime ?? currentTime);
+                            if (overlapEnd > overlapStart) ctrlSec += (overlapEnd - overlapStart);
+                          }
+                        }
+
+                        beaterControlTime.set(pid, { ctrlSec: Math.round(ctrlSec), totalSec: Math.round(totalSec) });
+                      }
+
+                      // Compute seeker total seeking time
+                      const seekerTime = new Map<string, number>();
+                      const allSeekers = [...homeRosterPlayers, ...awayRosterPlayers]
+                        .filter(rp => activePlayerPositions.get(rp.playerId) === 'seeker');
+
+                      for (const rp of allSeekers) {
+                        const pid = rp.playerId;
+                        let onField = false;
+                        let stintStart = 0;
+                        let totalSec = 0;
+
+                        for (const e of sortedEvents) {
+                          if (e.playerId !== pid) continue;
+                          if (e.type === 'sub_in' && e.position === 'seeker') {
+                            if (!onField) { onField = true; stintStart = e.videoTime; }
+                          } else if (e.type === 'sub_out') {
+                            if (onField) { totalSec += Math.max(0, e.videoTime - stintStart); onField = false; }
+                          }
+                        }
+                        if (onField) totalSec += Math.max(0, currentTime - stintStart);
+
+                        // If no sub_in events found, they might have been on from the start
+                        if (totalSec === 0 && activePlayerPositions.get(pid) === 'seeker') {
+                          const hasAnyEvent = sortedEvents.some(e => e.playerId === pid);
+                          if (hasAnyEvent) {
+                            const firstEvent = sortedEvents.find(e => e.playerId === pid);
+                            totalSec = Math.max(0, currentTime - (firstEvent?.videoTime || 0));
+                          }
+                        }
+                        seekerTime.set(pid, totalSec);
+                      }
+
+                      const isAuthToRecord = !!(user && (canModerate || (currentVideo as any)?.authorId === user.uid));
+                      return (
+                        <div className="flex flex-col gap-4 w-full max-w-full">
+                          <div className={cn("grid gap-2 border-b border-gray-200 pb-2", twoCol ? "grid-cols-2" : "grid-cols-1")}>
+                            {showHome && (
+                              <h4 className="text-[10px] font-bold uppercase tracking-widest text-[#FF4B4B] text-center truncate px-1" title={teams.find(t => t.id === currentGame?.homeTeamId)?.name}>
+                                {teams.find(t => t.id === currentGame?.homeTeamId)?.name || 'Home'}
+                              </h4>
+                            )}
+                            {showAway && (
+                              <h4 className="text-[10px] font-bold uppercase tracking-widest text-blue-500 text-center truncate px-1" title={teams.find(t => t.id === currentGame?.awayTeamId)?.name}>
+                                {teams.find(t => t.id === currentGame?.awayTeamId)?.name || 'Away'}
+                              </h4>
+                            )}
+                          </div>
+
+                          <div className="flex flex-col gap-3">
+                            {['chaser', 'keeper', 'beater', 'seeker'].map(pos => {
+                              const homePlrs = homeRosterPlayers.filter(rp => activePlayerPositions.has(rp.playerId) && activePlayerPositions.get(rp.playerId) === pos).sort((a, b) => (a.player?.lastName || '').localeCompare(b.player?.lastName || ''));
+                              const awayPlrs = awayRosterPlayers.filter(rp => activePlayerPositions.has(rp.playerId) && activePlayerPositions.get(rp.playerId) === pos).sort((a, b) => (a.player?.lastName || '').localeCompare(b.player?.lastName || ''));
+
+                              if ((!showHome || homePlrs.length === 0) && (!showAway || awayPlrs.length === 0)) return null;
+
+                              homePlrs.sort((a, b) => (a.player?.lastName || '').localeCompare(b.player?.lastName || ''));
+                              awayPlrs.sort((a, b) => (a.player?.lastName || '').localeCompare(b.player?.lastName || ''));
+
+                              const maxRows = Math.max(showHome ? homePlrs.length : 0, showAway ? awayPlrs.length : 0);
+
+                              return (
+                                <div
+                                  key={pos}
+                                  className="flex flex-col gap-1.5 relative bg-transparent rounded-lg transition-colors min-h-[44px] p-0.5"
+                                  onDragOver={e => { e.preventDefault(); e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.05)'; }}
+                                  onDragLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                                  onDrop={e => {
+                                    e.preventDefault();
+                                    e.currentTarget.style.backgroundColor = 'transparent';
+                                    if (!isAuthToRecord) return;
+                                    try {
+                                      const data = JSON.parse(e.dataTransfer.getData('text/plain'));
+                                      if (data.playerId && data.teamId) {
+                                        const eType = 'sub_in';
+                                        handleCreateDraftEvent(eType, data.teamId, data.playerId, null, pos as PositionType);
+                                      }
+                                    } catch (err) { }
+                                  }}
+                                >
+                                  <div className="text-[9px] uppercase font-bold text-gray-400 text-center tracking-widest bg-gray-100 py-0.5 rounded shadow-inner mb-1 pointer-events-none">
+                                    {pos}
+                                  </div>
+                                  {Array.from({ length: maxRows }).map((_, i) => {
+                                    const hp = homePlrs[i];
+                                    const ap = awayPlrs[i];
+
+                                    const renderPlayer = (rp: any | undefined, isBench = false) => {
+                                      if (!rp) return <div className="h-full" />;
+                                      const stats = liveStats.get(rp.playerId);
+                                      const plusMinus = (stats?.plus || 0) - (stats?.minus || 0);
+                                      const isBeater = pos === 'beater';
+                                      const isSeeker = pos === 'seeker';
+                                      const bCtrl = beaterControlTime.get(rp.playerId);
+                                      const sTime = seekerTime.get(rp.playerId) || 0;
+                                      return (
+                                        <div
+                                          draggable={isAuthToRecord}
+                                          onDragStart={(e) => {
+                                            if (!isAuthToRecord) { e.preventDefault(); return; }
+                                            e.dataTransfer.setData('text/plain', JSON.stringify({ playerId: rp.playerId, teamId: rp.teamId, source: isBench ? 'bench' : 'active' }))
+                                          }}
+                                          onClick={() => {
+                                            if (!isAuthToRecord) return;
+                                            if (!isBench) {
+                                              if (selectedPlayerId === rp.playerId) {
+                                                setSelectedPlayerId(null);
+                                              } else {
+                                                setSelectedPlayerId(rp.playerId);
+                                                setPopupTimeOffset(0);
+                                              }
+                                            }
+                                          }}
+                                          className={cn(
+                                            "flex flex-col px-1.5 py-1 rounded border shadow-sm w-full transition-all relative z-0",
+                                            !isBench
+                                              ? (isAuthToRecord ? "cursor-pointer active:scale-95 cursor-grab active:cursor-grabbing" : "cursor-default")
+                                              : cn("opacity-60 grayscale-[0.3]", isAuthToRecord ? "cursor-grab active:cursor-grabbing" : "cursor-default"),
+                                            selectedPlayerId === rp.playerId
+                                              ? "bg-slate-900 border-slate-700 shadow-xl"
+                                              : "bg-white/80 border-gray-200 hover:border-gray-400"
+                                          )}
+                                        >
+                                          <div className="overflow-hidden">
+                                            <span className={cn("text-[11px] font-bold truncate block leading-tight", selectedPlayerId === rp.playerId ? "text-slate-200" : "text-gray-800")} title={getPlayerShortName(rp.player, rp.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)}>
+                                              {getPlayerShortName(rp.player, rp.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)}
+                                            </span>
+                                          </div>
+                                          <div className={cn("flex items-center gap-1 mt-0.5 text-[9px] font-mono justify-between overflow-hidden", selectedPlayerId === rp.playerId ? "text-slate-400" : "text-gray-500")}>
+                                            {isBeater ? (
+                                              <>
+                                                <span>CTRL {Math.floor((bCtrl?.ctrlSec || 0) / 60)}:{String(Math.round((bCtrl?.ctrlSec || 0) % 60)).padStart(2, '0')}</span>
+                                                <span className={cn("font-bold px-1 rounded-sm",
+                                                  bCtrl && bCtrl.totalSec > 0 && (bCtrl.ctrlSec / bCtrl.totalSec) >= 0.5 ? (selectedPlayerId === rp.playerId ? "text-emerald-400 bg-emerald-900/30" : "text-emerald-600 bg-emerald-50") :
+                                                    bCtrl && bCtrl.totalSec > 0 && (bCtrl.ctrlSec / bCtrl.totalSec) < 0.4 ? (selectedPlayerId === rp.playerId ? "text-red-400 bg-red-900/30" : "text-red-500 bg-red-50") : (selectedPlayerId === rp.playerId ? "text-slate-500" : "text-gray-400")
+                                                )}>
+                                                  {bCtrl && bCtrl.totalSec > 0 ? `${Math.round((bCtrl.ctrlSec / bCtrl.totalSec) * 100)}%` : '—'}
+                                                </span>
+                                              </>
+                                            ) : isSeeker ? (
+                                              <>
+                                                <span>SEEKING {Math.floor(sTime / 60)}:{String(Math.round(sTime % 60)).padStart(2, '0')}</span>
+                                                <span className="text-transparent">—</span>
+                                              </>
+                                            ) : (
+                                              <>
+                                                <div className="flex items-center gap-1.5 shrink-0">
+                                                  <span>{stats?.g || 0}G</span>
+                                                  <span>{stats?.a || 0}A</span>
+                                                </div>
+                                                <span className={cn("font-bold px-1 rounded-sm shrink-0", plusMinus > 0 ? (selectedPlayerId === rp.playerId ? "text-emerald-400 bg-emerald-900/30" : "text-emerald-600 bg-emerald-50") : plusMinus < 0 ? (selectedPlayerId === rp.playerId ? "text-red-400 bg-red-900/30" : "text-red-500 bg-red-50") : (selectedPlayerId === rp.playerId ? "text-slate-500" : "text-gray-400"))}>
+                                                  {plusMinus > 0 ? '+' : ''}{plusMinus}
+                                                </span>
+                                              </>
+                                            )}
+                                          </div>
+
+                                          {selectedPlayerId === rp.playerId && !isBench && (
+                                            <div className="mt-2 pt-2 border-t border-slate-700/50 animate-in slide-in-from-top-2 fade-in" onClick={(e) => e.stopPropagation()}>
+                                              <div className="flex items-center justify-between bg-slate-800 rounded p-1 mb-1.5 shadow-inner">
+                                                <button onClick={(e) => { e.stopPropagation(); setPopupTimeOffset(p => p - 1); }} className="w-5 h-5 flex items-center justify-center bg-slate-700 hover:bg-slate-600 rounded text-slate-300 text-xs font-bold transition-all active:scale-95">-1</button>
+                                                <span className="text-[10px] font-bold text-emerald-400 font-mono tracking-wider tabular-nums">
+                                                  {formatTime(Math.max(0, (player ? player.getCurrentTime() : 0) + popupTimeOffset))}
+                                                </span>
+                                                <button onClick={(e) => { e.stopPropagation(); setPopupTimeOffset(p => p + 1); }} className="w-5 h-5 flex items-center justify-center bg-slate-700 hover:bg-slate-600 rounded text-slate-300 text-xs font-bold transition-all active:scale-95">+1</button>
+                                              </div>
+                                              <div className="flex flex-col gap-1">
+                                                {(!isBeater && !isSeeker) && (
+                                                  <div className="flex gap-1 items-stretch">
+                                                    <button onClick={(e) => { e.stopPropagation(); handleCreateDraftEvent('goal', rp.teamId, rp.playerId, null, null, Math.max(0, (player ? (function(){try{return player.getCurrentTime()}catch(e){return 0}})() : 0) + popupTimeOffset)); setSelectedPlayerId(null); }} className="flex-[1.5] py-1 bg-emerald-500 hover:bg-emerald-400 text-white rounded-lg font-black tracking-widest text-[10px] shadow-[0_2px_0_theme(colors.emerald.700)] active:shadow-none active:translate-y-[2px] transition-all">GOAL</button>
+                                                    <button onClick={(e) => { e.stopPropagation(); handleCreateDraftEvent('shot', rp.teamId, rp.playerId, null, null, Math.max(0, (player ? (function(){try{return player.getCurrentTime()}catch(e){return 0}})() : 0) + popupTimeOffset)); setSelectedPlayerId(null); }} className="flex-1 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg font-bold text-[9px] border border-slate-700 transition-colors">SHOT</button>
+                                                    <button onClick={(e) => { e.stopPropagation(); handleCreateDraftEvent('attempt', rp.teamId, rp.playerId, null, null, Math.max(0, (player ? (function(){try{return player.getCurrentTime()}catch(e){return 0}})() : 0) + popupTimeOffset)); setSelectedPlayerId(null); }} className="flex-1 py-1 bg-slate-800 hover:bg-violet-900/40 text-violet-400 rounded-lg font-bold text-[8px] border border-slate-700 transition-colors">ATTEMPT</button>
+                                                    <button onClick={(e) => { e.stopPropagation(); handleCreateDraftEvent('miss_ko', rp.teamId, rp.playerId, null, null, Math.max(0, (player ? (function(){try{return player.getCurrentTime()}catch(e){return 0}})() : 0) + popupTimeOffset)); setSelectedPlayerId(null); }} className="flex-1 py-1 bg-slate-800 hover:bg-fuchsia-900/40 text-fuchsia-400 rounded-lg font-bold text-[8px] border border-slate-700 transition-colors">MISS (KO)</button>
+                                                  </div>
+                                                )}
+                                                <div className="flex gap-1 border-t border-slate-700/50 pt-1">
+                                                  <button onClick={(e) => { e.stopPropagation(); handleCreateDraftEvent('sub_out', rp.teamId, rp.playerId, null, null, Math.max(0, (player ? (function(){try{return player.getCurrentTime()}catch(e){return 0}})() : 0) + popupTimeOffset)); setSelectedPlayerId(null); }} className="flex-1 py-1.5 bg-slate-800 hover:bg-red-900/40 text-red-400 rounded-lg font-bold text-[8px] border border-slate-700 transition-colors">SUB OUT</button>
+                                                  <button onClick={(e) => { e.stopPropagation(); handleCreateDraftEvent('sub_in', rp.teamId, rp.playerId, null, null, Math.max(0, (player ? (function(){try{return player.getCurrentTime()}catch(e){return 0}})() : 0) + popupTimeOffset)); setSelectedPlayerId(null); }} className="flex-1 py-1.5 bg-slate-800 hover:bg-blue-900/40 text-blue-400 rounded-lg font-bold text-[8px] border border-slate-700 transition-colors">SUB IN</button>
+                                                </div>
+                                              </div>
+                                            </div>
+                                          )}
+                                        </div>
+                                      );
+                                    };
+
+                                    return (
+                                      <div key={i} className={cn("grid gap-2", twoCol ? "grid-cols-2" : "grid-cols-1")}>
+                                        {showHome && renderPlayer(hp)}
+                                        {showAway && renderPlayer(ap)}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              );
+                            })}
+                            {/* Bench Section */}
+                            {(() => {
+                              const homeBench = homeRosterPlayers.filter(rp => !activePlayerPositions.has(rp.playerId)).sort((a, b) => (a.player?.lastName || '').localeCompare(b.player?.lastName || ''));
+                              const awayBench = awayRosterPlayers.filter(rp => !activePlayerPositions.has(rp.playerId)).sort((a, b) => (a.player?.lastName || '').localeCompare(b.player?.lastName || ''));
+
+                              if ((!showHome || homeBench.length === 0) && (!showAway || awayBench.length === 0)) return null;
+
+                              const maxBenchRows = Math.max(showHome ? homeBench.length : 0, showAway ? awayBench.length : 0);
+
+                              const renderBenchPlayer = (rp: any | undefined) => {
+                                if (!rp) return <div className="h-full" />;
+                                const stats = liveStats.get(rp.playerId);
+                                const plusMinus = (stats?.plus || 0) - (stats?.minus || 0);
+
+                                return (
+                                  <div
+                                    draggable={isAuthToRecord}
+                                    onDragStart={(e) => {
+                                      if (!isAuthToRecord) { e.preventDefault(); return; }
+                                      e.dataTransfer.setData('text/plain', JSON.stringify({ playerId: rp.playerId, teamId: rp.teamId, source: 'bench' }))
+                                    }}
+                                    className={cn("flex flex-col px-1.5 py-1 bg-gray-50/50 rounded border border-gray-200 shadow-sm w-full overflow-hidden opacity-60 hover:bg-gray-100/50 transition-colors", isAuthToRecord ? "cursor-grab active:cursor-grabbing" : "cursor-default")}
+                                  >
+                                    <span className="text-[10px] font-bold truncate text-gray-500" title={getPlayerShortName(rp.player, rp.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)}>
+                                      {getPlayerShortName(rp.player, rp.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)}
+                                    </span>
+                                    <div className="flex items-center gap-1.5 mt-0.5 text-[8px] font-mono text-gray-400 justify-between">
+                                      <div className="flex items-center gap-1.5">
+                                        <span>{stats?.g || 0}G</span>
+                                        <span>{stats?.a || 0}A</span>
+                                      </div>
+                                      <span>{plusMinus > 0 ? '+' : ''}{plusMinus}</span>
+                                    </div>
+                                  </div>
+                                );
+                              };
+
+                              return (
+                                <div
+                                  className="flex flex-col gap-1.5 relative mt-3 bg-transparent rounded-lg transition-colors p-0.5"
+                                  onDragOver={e => { e.preventDefault(); e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.05)'; }}
+                                  onDragLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                                  onDrop={e => {
+                                    e.preventDefault();
+                                    e.currentTarget.style.backgroundColor = 'transparent';
+                                    if (!isAuthToRecord) return;
+                                    try {
+                                      const data = JSON.parse(e.dataTransfer.getData('text/plain'));
+                                      if (data.playerId && data.teamId && data.source === 'active') {
+                                        handleCreateDraftEvent('sub_out', data.teamId, data.playerId, null, null);
+                                      }
+                                    } catch (err) { }
+                                  }}
+                                >
+                                  <div className="text-[9px] uppercase font-bold text-gray-400 text-center tracking-widest bg-gray-100 py-0.5 rounded shadow-inner mb-1 pointer-events-none">
+                                    Bench — drag here to sub out
+                                  </div>
+                                  {Array.from({ length: maxBenchRows }).map((_, i) => (
+                                    <div key={i} className={cn("grid gap-2", twoCol ? "grid-cols-2" : "grid-cols-1")}>
+                                      {showHome && renderBenchPlayer(homeBench[i])}
+                                      {showAway && renderBenchPlayer(awayBench[i])}
+                                    </div>
+                                  ))}
+                                </div>
+                              );
+                            })()}
+
+                            {activePlayerPositions.size === 0 && (
+                              <div className="text-center py-8 text-gray-400 text-sm font-medium italic">
+                                No players currently checked in.
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
+    </div>
+  );
+
+  const renderMomentumBody = () => (
+    <div data-tour="momentum-panel" className="absolute inset-0 overflow-y-auto custom-scrollbar bg-white">
+      <MatchMomentumView events={enrichedEvents} teams={teams} homeTeamId={currentGame?.homeTeamId || ''} awayTeamId={currentGame?.awayTeamId || ''} currentTime={player?.getCurrentTime() || 0} onSeek={(t) => player?.seekTo(t, true)} />
+    </div>
+  );
+
+  const renderWatchPanelBody = (k: WatchPanelKey) => {
+    if (k === 'live_events') return renderEventsBody();
+    if (k === 'record') return renderRecordBody();
+    if (k === 'rosters') return renderRostersBody(['home', 'away']);
+    if (k === 'roster_home') return renderRostersBody(['home']);
+    if (k === 'roster_away') return renderRostersBody(['away']);
+    return renderMomentumBody();
+  };
+
+  const watchPanelMeta = (k: WatchPanelKey): { label: string; icon: React.ReactNode } => {
+    const teamLabel = (id: string | undefined) => {
+      const t = teams.find(tm => tm.id === id);
+      return t?.nickname || t?.name || '';
+    };
+    if (k === 'live_events') return { label: 'Events', icon: <Clock className="w-3.5 h-3.5" /> };
+    if (k === 'record') return { label: 'Record', icon: <UploadCloud className="w-3.5 h-3.5 text-emerald-600" /> };
+    if (k === 'rosters') return { label: 'Players', icon: <User className="w-3.5 h-3.5" /> };
+    if (k === 'roster_home') return { label: teamLabel(currentGame?.homeTeamId) || 'Home', icon: <User className="w-3.5 h-3.5 text-[#FF4B4B]" /> };
+    if (k === 'roster_away') return { label: teamLabel(currentGame?.awayTeamId) || 'Away', icon: <User className="w-3.5 h-3.5 text-blue-500" /> };
+    return { label: 'Momentum', icon: <TrendingUp className="w-3.5 h-3.5" /> };
+  };
+
   if (!isAuthReady) return <div className="min-h-screen bg-white flex items-center justify-center text-gray-900">Loading...</div>;
   if (!isSignedIn && !hasSeenLanding) return <LandingHero onProceed={() => { handleBypassLanding(); setView('stats'); }} onSignIn={() => handleBypassLanding()} />;
 
@@ -9797,10 +11403,13 @@ export default function App() {
           </div>
 
         ) : (
-          <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 gap-4">
-            {/* Left Column: Player & Controls */}
-            <div className={cn("flex flex-col gap-2 min-h-0 overflow-hidden", isExpandedLayout ? "lg:col-span-12 shrink-0" : "lg:col-span-9")}>
-              <div data-tour="video-player" className={cn("rounded-2xl overflow-hidden shadow-2xl border border-gray-200 flex items-center justify-center relative", isExpandedLayout ? "hidden" : "bg-black flex-1 min-h-0")}>
+          <div className="flex-1 min-h-0 flex flex-col lg:flex-row gap-2 overflow-y-auto lg:overflow-y-hidden lg:overflow-x-auto">
+
+            {/* ---- Video view. The only elastic column: it soaks up whatever the
+                    fixed-width panel views leave behind, so popping a tab out
+                    costs the video exactly that panel's width and nothing else. ---- */}
+            <div className="flex flex-col gap-2 shrink-0 lg:shrink lg:min-h-0 lg:flex-1 lg:min-w-[320px]">
+              <div data-tour="video-player" className="rounded-2xl overflow-hidden shadow-2xl border border-gray-200 flex items-center justify-center relative bg-black aspect-video lg:aspect-auto lg:flex-1 lg:min-h-0">
                 {(() => {
                   const url = currentVideo?.youtubeId || '';
                   let validId = '';
@@ -9838,1563 +11447,123 @@ export default function App() {
                 })()}
               </div>
 
-              {/* Controls and Scoreboard Row */}
-              {(() => {
-                const renderScrubControls = () => (
-                  <div data-tour="scrub-controls" className="flex gap-1 items-center shrink-0">
-                    <button onClick={() => player?.seekTo(Math.max(0, currentTime - 15))} className="p-1.5 md:px-2 md:py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-[9px] md:text-[10px] uppercase tracking-wider font-bold rounded shadow-sm flex items-center justify-center gap-0.5 md:gap-1 transition-all" title="Rewind 15s"><Rewind className="w-3 h-3"/> <span className="hidden md:block">15s</span></button>
-                    <button onClick={() => player?.seekTo(Math.max(0, currentTime - 5))} className="p-1.5 md:px-2 md:py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-[9px] md:text-[10px] uppercase tracking-wider font-bold rounded shadow-sm flex items-center justify-center gap-0.5 md:gap-1 transition-all" title="Rewind 5s"><Rewind className="w-3 h-3"/> <span className="hidden md:block">5s</span></button>
-                    <button onClick={() => isVideoPlaying ? player?.pauseVideo() : player?.playVideo()} className="p-1.5 md:px-3 md:py-1.5 bg-red-100 hover:bg-red-200 text-red-700 text-[9px] md:text-[10px] uppercase tracking-wider font-bold rounded shadow-sm flex items-center justify-center gap-0.5 md:gap-1 transition-all" title={isVideoPlaying ? "Pause" : "Play"}>
-                      {isVideoPlaying ? <Pause className="w-3 h-3"/> : <Play className="w-3 h-3"/>}
-                    </button>
-                    <button onClick={() => player?.seekTo(currentTime + 5)} className="p-1.5 md:px-2 md:py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-[9px] md:text-[10px] uppercase tracking-wider font-bold rounded shadow-sm flex items-center justify-center gap-0.5 md:gap-1 transition-all" title="Forward 5s"><span className="hidden md:block">5s</span> <FastForward className="w-3 h-3"/></button>
-                    <button onClick={() => player?.seekTo(currentTime + 15)} className="p-1.5 md:px-2 md:py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-[9px] md:text-[10px] uppercase tracking-wider font-bold rounded shadow-sm flex items-center justify-center gap-0.5 md:gap-1 transition-all" title="Forward 15s"><span className="hidden md:block">15s</span> <FastForward className="w-3 h-3"/></button>
-                  </div>
-                );
-
-                return (
-                  <div data-tour="scoreboard" className={cn("w-full mt-2 mb-3", isExpandedLayout ? "grid grid-cols-4 gap-4 items-center" : "flex flex-row items-center justify-between gap-3")}>
-                    {/* Video Scrub Controls - Left side in Expanded Mode */}
-                    {isExpandedLayout && player && (
-                      <div className="col-span-1 flex items-center justify-center">
-                        {renderScrubControls()}
-                      </div>
-                    )}
-
-                    {/* Scoreboard Persistent Header */}
-                    <div className={cn("min-w-0", isExpandedLayout ? "col-span-3" : "flex-1")}>
-                      {(() => {
-                        if (!currentGame) return null;
-                        const pastEvents = activeTrackingEvents.filter(e => e.videoTime <= currentTime);
-                        const liveScores = computeScores(pastEvents, currentGame.homeTeamId, currentGame.awayTeamId);
-                        const winCond = computeWinCondition(pastEvents, currentGame.homeTeamId, currentGame.awayTeamId);
-                        const homeTeamObj = teams.find(t => t.id === currentGame.homeTeamId);
-                        const awayTeamObj = teams.find(t => t.id === currentGame.awayTeamId);
-                        const homeName = homeTeamObj?.nickname || homeTeamObj?.name || 'Home';
-                        const awayName = awayTeamObj?.nickname || awayTeamObj?.name || 'Away';
-                        const homeColor = avoidWhite(homeTeamObj?.colorPrimaryDark || homeTeamObj?.colorPrimary || '#dc2626');
-                        const awayColor = avoidWhite(awayTeamObj?.colorPrimaryLight || awayTeamObj?.colorLight || '#2563eb');
-                        const currentDodgeballTeamId = getControlTeamAtTime(computeControlPeriods(pastEvents), currentTime);
-
-                        return (
-                          <div className={cn("bg-white border rounded py-1.5 px-3 shrink-0 shadow-sm flex items-center justify-between w-full mx-auto gap-4 relative", winCond.flagOnPitch && !winCond.winner ? "bg-yellow-50 border-yellow-300" : "border-gray-200")}>
-                            {/* Left: Home */}
-                            <div className="flex items-center justify-end flex-1 w-0 gap-2">
-                              <p className="text-[10px] md:text-xs uppercase font-bold truncate text-right w-full" style={{ color: homeColor }}>{homeName}</p>
-                              <div className="flex items-center gap-1 shrink-0">
-                                <p className="text-xl font-mono font-bold" style={{ color: homeColor }}>{liveScores.home}</p>
-                                {currentDodgeballTeamId === currentGame.homeTeamId && <div title="Dodgeball Control" className="w-1.5 h-1.5 bg-black rounded-sm shadow-sm" />}
-                              </div>
-                            </div>
-
-                            {/* Center: Clock & Win Cond */}
-                            <div className="flex flex-col items-center justify-center shrink-0 border-x border-gray-100 px-4 min-w-[100px]">
-                              <p className="text-xs font-mono font-bold text-gray-800 bg-gray-100 px-2 py-0.5 rounded shadow-inner leading-none">{formatTime(gameTime)}</p>
-                              {winCond.winner ? (
-                                <p className="text-[8px] font-bold text-yellow-600 uppercase tracking-widest mt-1 truncate">
-                                  Winner: {teams.find(t => t.id === winCond.winner)?.nickname || teams.find(t => t.id === winCond.winner)?.name || winCond.winner}
-                                </p>
-                              ) : winCond.targetSet ? (
-                                <div className="flex items-center gap-1 mt-1 text-[8px] font-bold uppercase tracking-widest text-yellow-600">
-                                  {winCond.flagOnPitch && <Flag className="w-2.5 h-2.5" />} Target: {winCond.threshold}
-                                </div>
-                              ) : null}
-                            </div>
-
-                            {/* Right: Away */}
-                            <div className="flex items-center justify-start flex-1 w-0 gap-2">
-                              <div className="flex items-center gap-1 shrink-0">
-                                {currentDodgeballTeamId === currentGame.awayTeamId && <div title="Dodgeball Control" className="w-1.5 h-1.5 bg-black rounded-sm shadow-sm" />}
-                                <p className="text-xl font-mono font-bold" style={{ color: awayColor }}>{liveScores.away}</p>
-                              </div>
-                              <p className="text-[10px] md:text-xs uppercase font-bold truncate text-left w-full" style={{ color: awayColor }}>{awayName}</p>
-                            </div>
-
-                            <div className="pl-3 ml-2 border-l border-gray-200 flex items-center justify-center shrink-0 gap-1">
-                              <button data-tour="cinema-toggle" onClick={() => setIsExpandedLayout(v => !v)} className={cn("p-1.5 rounded transition-colors", isExpandedLayout ? "text-red-600 bg-red-50 hover:bg-red-100" : "text-gray-400 hover:text-red-600")} title={isExpandedLayout ? "Restore Video" : "Cinema Mode (Hide Video)"}>
-                                <Maximize2 className="w-5 h-5" />
-                              </button>
-                              <button onClick={() => handleGameProfileClick(currentGame.id)} className="p-1.5 text-gray-400 hover:text-blue-600 transition-colors" title="View Box Score">
-                                <Activity className="w-5 h-5" />
-                              </button>
-                              {user && (
-                                <button onClick={trackerTutorial.start} className="p-1.5 text-gray-400 hover:text-red-600 transition-colors" title="Replay the tutorial">
-                                  <HelpCircle className="w-5 h-5" />
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })()}
-                    </div>
-
-                    {/* Video Scrub Controls - Right side in Normal Mode */}
-                    {!isExpandedLayout && player && renderScrubControls()}
-                  </div>
-                );
-              })()}
-
-
-              {!user && (
-                <p className="mt-4 text-center text-sm text-gray-400 flex items-center justify-center gap-2">
-                  <AlertCircle className="w-4 h-4" />
-                  Sign in to track stats and vote
-                </p>
-              )}
-            </div>
-
-            {/* Right Column: Event Feed & Roster */}
-            <div className={cn("flex flex-col gap-4 overflow-hidden h-full", isExpandedLayout ? "lg:col-span-12" : "lg:col-span-3")}>
-              <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden flex flex-col h-full relative">
-                {!isExpandedLayout && (
-                  <div className="p-0 border-b border-gray-200 flex items-center justify-between bg-gray-50/50 z-10 shrink-0">
-                    <div data-tour="panel-tabs" className="flex w-full">
-                    <button
-                      data-tour="tab-events"
-                      onClick={() => setRightPanelTab('live_events')}
-                      className={cn("flex-1 px-4 py-3 text-sm font-bold flex items-center justify-center gap-2 transition-colors", rightPanelTab === 'live_events' ? "bg-white text-red-600 border-b-2 border-red-600" : "text-gray-500 hover:text-gray-700 hover:bg-gray-100")}
-                    >
-                      <Clock className="w-4 h-4" /> Events
-                    </button>
-                    {canRecordEvents && (
-                      <button
-                        data-tour="tab-record"
-                        onClick={() => setRightPanelTab('record')}
-                        className={cn("flex-1 px-4 py-3 text-sm font-bold flex items-center justify-center gap-2 transition-colors relative", rightPanelTab === 'record' ? "bg-white text-emerald-600 border-b-2 border-emerald-600" : "text-gray-500 hover:text-gray-700 hover:bg-gray-100")}
-                      >
-                        <UploadCloud className="w-4 h-4" /> Record
-                        {draftEvents.length > 0 && (
-                          <span className="absolute top-2 right-2 flex min-w-4 h-4 items-center justify-center bg-emerald-500 text-white text-[9px] font-bold rounded-full px-1">
-                            {draftEvents.length}
-                          </span>
-                        )}
-                      </button>
-                    )}
-                    <button
-                      data-tour="tab-players"
-                      onClick={() => setRightPanelTab('rosters')}
-                      className={cn("flex-1 px-4 py-3 text-sm font-bold flex items-center justify-center gap-2 transition-colors", rightPanelTab === 'rosters' ? "bg-white text-red-600 border-b-2 border-red-600" : "text-gray-500 hover:text-gray-700 hover:bg-gray-100")}
-                    >
-                      <User className="w-4 h-4" /> Players
-                    </button>
-                    <button
-                      data-tour="tab-momentum"
-                      onClick={() => setRightPanelTab('momentum')}
-                      className={cn("flex-1 px-4 py-3 text-sm font-bold flex items-center justify-center gap-2 transition-colors", rightPanelTab === 'momentum' ? "bg-white text-red-600 border-b-2 border-red-600" : "text-gray-500 hover:text-gray-700 hover:bg-gray-100")}
-                    >
-                      <TrendingUp className="w-4 h-4" /> Momentum
-                    </button>
-                  </div>
+              {/* Scoreboard and transport stay on screen in every arrangement. They
+                  ride along inside the video view for now; the grouping is deliberate
+                  so that popping the video onto a second monitor later takes the
+                  controls with it rather than stranding them here. */}
+              <div data-tour="scoreboard" className="w-full shrink-0 flex flex-row flex-wrap items-center justify-between gap-2">
+                <div className="flex-1 basis-[380px] min-w-0">
+                  {renderWatchScoreboard()}
                 </div>
+                {player && renderScrubControls()}
+              </div>
+
+              <div className="shrink-0 flex items-center justify-between gap-3 pb-1">
+                <button
+                  data-tour="switch-video"
+                  onClick={() => setCurrentVideo(null)}
+                  className="py-1 text-xs font-bold uppercase tracking-wider text-gray-400 hover:text-gray-900 flex items-center gap-2 transition-colors"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                  Switch Video
+                </button>
+                {!user && (
+                  <span className="text-xs text-gray-400 flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4" />
+                    Sign in to track stats and vote
+                  </span>
                 )}
-
-                <div className={cn("flex-1 overflow-hidden relative", isExpandedLayout ? "grid grid-cols-1 lg:grid-cols-4 divide-y lg:divide-y-0 lg:divide-x divide-gray-200" : "")}>
-
-<div className={cn(isExpandedLayout ? "flex flex-col h-full relative" : "absolute inset-0", (rightPanelTab === 'live_events' || isExpandedLayout) ? "block" : "hidden", "overflow-y-auto p-4 custom-scrollbar bg-gray-50")} id="events-scroll-container" data-tour="events-feed">
-                    <div className="sticky top-0 z-10 bg-gray-50/95 backdrop-blur-md pb-3 pt-1 mb-4 border-b border-gray-200/60 flex flex-col gap-2.5">
-                      {/* This row is the only thing a collapsed header shows, so the scrub/filter
-                          controls that matter for just watching along live here, with the
-                          collapse toggle at the end. Everything past it — density, suggestions,
-                          per-team completion — is moderator/author territory and folds away. */}
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={() => {
-                            const container = document.getElementById('events-scroll-container');
-                            if (!container) return;
-                            const allCards = container.querySelectorAll('[data-event-time]');
-                            let nearest: Element | null = null;
-                            let bestDiff = Infinity;
-                            allCards.forEach(card => {
-                              const t = parseFloat(card.getAttribute('data-event-time') || '0');
-                              const diff = Math.abs(t - currentTime);
-                              if (diff < bestDiff) { bestDiff = diff; nearest = card; }
-                            });
-                            if (nearest) (nearest as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
-                          }}
-                          className="flex items-center gap-1 px-3 py-1 rounded text-[10px] font-bold transition-all border bg-white text-gray-500 border-gray-200 hover:text-red-500 hover:border-red-300 shadow-sm shrink-0"
-                          title="Scroll to event nearest current time"
-                        >
-                          <SkipForward className="w-3 h-3" />
-                          Now
-                        </button>
-                        <button
-                          onClick={handleRegeneratePossessionPins}
-                          className="flex items-center gap-1 px-2 py-1 rounded transition-all border bg-white text-purple-500 border-purple-200 hover:text-purple-700 hover:border-purple-400 shadow-sm shrink-0"
-                          title="Regenerate auto-pins (possession & control) for the current video"
-                        >
-                          <RefreshCcw className="w-3 h-3" />
-                        </button>
-                        <select value={eventsFilterSet} onChange={e => setEventsFilterSet(e.target.value)} className="flex-1 min-w-0 text-[10px] font-bold text-gray-600 bg-white border border-gray-200 rounded-md py-1.5 px-2 outline-none focus:border-red-300 focus:ring-1 focus:ring-red-200 shadow-sm appearance-none">
-                          <option value="all">All Events</option>
-                          <option value="all_no_subs">All (No Subs)</option>
-                          {currentGame?.homeTeamId && <option value="home_focused">Home Focused</option>}
-                          {currentGame?.awayTeamId && <option value="away_focused">Away Focused</option>}
-                          <option value="possession_scoring">Possessions & Scoring</option>
-                        </select>
-                        <button
-                          onClick={toggleEventsHeaderExpanded}
-                          className="flex items-center justify-center p-1.5 rounded-md transition-all border bg-white text-gray-400 border-gray-200 hover:text-gray-700 shrink-0"
-                          title={eventsHeaderExpanded ? 'Collapse' : 'Expand'}
-                        >
-                          {eventsHeaderExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                        </button>
-                      </div>
-                      {eventsHeaderExpanded && (
-                        <>
-                          <div className="flex items-center gap-2">
-                            <div className="flex-1 flex bg-white border border-gray-200 rounded-md p-0.5 shadow-sm">
-                              {([
-                                { key: 'full' as const, icon: <Eye className="w-3 h-3" />, label: 'Full' },
-                                { key: 'compact' as const, icon: <EyeOff className="w-3 h-3" />, label: 'Compact' },
-                              ]).map(opt => (
-                                <button
-                                  key={opt.key}
-                                  onClick={() => setEventDensity(opt.key)}
-                                  title={`${opt.label} events — ${opt.key === 'full' ? 'everything shown, including the voting/editing footer' : 'same as Full, without the voting/editing footer'}`}
-                                  className={cn('flex-1 flex items-center justify-center gap-1 py-1 rounded text-[9px] font-bold uppercase tracking-wider transition-all', eventDensity === opt.key ? 'bg-gray-900 text-white' : 'text-gray-400 hover:text-gray-700')}
-                                >
-                                  {opt.icon}
-                                </button>
-                              ))}
-                            </div>
-                            {suggestions.some(s => s.status === 'open') && (
-                              <button
-                                onClick={() => setShowSuggestionQueue(v => !v)}
-                                className={cn('flex items-center gap-1 px-2 py-1.5 rounded-md text-[10px] font-bold transition-all border shrink-0', showSuggestionQueue ? 'bg-amber-500/10 text-amber-600 border-amber-500/30' : 'bg-white text-gray-400 border-gray-200 hover:text-amber-500')}
-                                title="Open suggestions for this game, sorted by score"
-                              >
-                                <Inbox className="w-3 h-3" />
-                                {suggestions.filter(s => s.status === 'open').length}
-                              </button>
-                            )}
-                            <button
-                              onClick={() => setSuggestFormState({ mode: 'add' })}
-                              className="flex items-center gap-1 px-2 py-1.5 rounded-md text-[10px] font-bold transition-all border bg-white text-gray-400 border-gray-200 hover:text-blue-500 hover:border-blue-300 shrink-0"
-                              title="Suggest a missing event"
-                            >
-                              <Plus className="w-3 h-3" />
-                            </button>
-                          </div>
-                          {showSuggestionQueue && (
-                            <div className="space-y-2 max-h-64 overflow-y-auto rounded-lg border border-amber-200 bg-amber-50/30 p-2">
-                              {suggestions.filter(s => s.status === 'open').sort((a, b) => b.score - a.score).map(sugg => (
-                                <SuggestionCard
-                                  key={sugg.id}
-                                  suggestion={sugg}
-                                  voterId={voterId}
-                                  canModerate={canModerate}
-                                  compact
-                                  playerName={(id) => { const p = allPlayers.find(pl => pl.id === id); return p ? `${p.firstName.charAt(0)}. ${p.lastName}` : undefined; }}
-                                  teamName={(id) => teams.find(tm => tm.id === id)?.name}
-                                  onVote={(isUp) => currentVideo && handleVoteOnSuggestion(currentVideo.gameId, sugg, isUp)}
-                                  onAccept={() => currentVideo && handleAcceptSuggestion(currentVideo.gameId, sugg)}
-                                  onReject={() => currentVideo && handleRejectSuggestion(currentVideo.gameId, sugg)}
-                                  onRemove={() => currentVideo && handleWithdrawSuggestion(currentVideo.gameId, sugg.id)}
-                                  onSeek={sugg.targetEventId ? () => {
-                                    const target = events.find(e => e.id === sugg.targetEventId);
-                                    if (target) player?.seekTo(target.videoTime);
-                                  } : undefined}
-                                />
-                              ))}
-                              {suggestions.filter(s => s.status === 'open').length === 0 && (
-                                <p className="text-xs text-gray-400 text-center py-4">No open suggestions.</p>
-                              )}
-                            </div>
-                          )}
-                          {canModerate && currentGame && (
-                            <div className="flex flex-col gap-1.5">
-                              <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400">Tracking Complete</p>
-                              {/* Completion is per team, so whoever tracked one side can publish that
-                                  side's stats without waiting for anyone to cover the other. Both rows
-                                  read the same left-to-right — team, then status — rather than
-                                  mirroring home/away, which just made the two harder to compare. */}
-                              <div className="flex flex-col gap-1">
-                                {(['home', 'away'] as const).map(side => {
-                                  const teamId = side === 'home' ? currentGame.homeTeamId : currentGame.awayTeamId;
-                                  const teamObj = teams.find(t => t.id === teamId);
-                                  const teamColor = side === 'home'
-                                    ? avoidWhite(teamObj?.colorPrimaryDark || teamObj?.colorPrimary || '#dc2626')
-                                    : avoidWhite(teamObj?.colorPrimaryLight || teamObj?.colorLight || '#2563eb');
-                                  const current = sideCompletion(currentGame, side);
-                                  return (
-                                    <div key={side} className="flex items-center gap-2 rounded-md border border-gray-200 bg-white pl-2.5 pr-1.5 py-1">
-                                      <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: teamColor }} />
-                                      <span
-                                        className="text-[10px] font-bold uppercase tracking-wider truncate"
-                                        style={{ color: teamColor }}
-                                        title={teamObj?.name || (side === 'home' ? 'Home' : 'Away')}
-                                      >
-                                        {teamObj?.nickname || teamObj?.name || (side === 'home' ? 'Home' : 'Away')}
-                                      </span>
-                                      <div className="ml-auto flex items-center gap-1">
-                                        {current !== 'none' && <ShieldCheck className="w-3 h-3 text-emerald-500 shrink-0" />}
-                                        <select
-                                          value={current}
-                                          onChange={e => handleSetTeamCompletion(currentGame.id, side, e.target.value as TeamCompletion)}
-                                          className={cn(
-                                            'text-[10px] font-bold bg-transparent outline-none cursor-pointer py-1 pl-1 pr-0.5 rounded',
-                                            current === 'none' ? 'text-gray-400' : 'text-emerald-600'
-                                          )}
-                                          title={`${teamObj?.name || side}: ${TEAM_COMPLETION_LABELS[current]}`}
-                                        >
-                                          {TEAM_COMPLETION_VALUES.map(value => (
-                                            <option key={value} value={value}>{TEAM_COMPLETION_LABELS[value]}</option>
-                                          ))}
-                                        </select>
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          )}
-                        </>
-                      )}
-                    </div>
-                    <div className="space-y-4">
-                    {(() => {
-                      const feedHomeTeamObj = teams.find(t => t.id === currentGame?.homeTeamId);
-                      const feedAwayTeamObj = teams.find(t => t.id === currentGame?.awayTeamId);
-                      const feedHomeColor = avoidWhite(feedHomeTeamObj?.colorPrimaryDark || feedHomeTeamObj?.colorPrimary || '#dc2626');
-                      const feedAwayColor = avoidWhite(feedAwayTeamObj?.colorPrimaryLight || feedAwayTeamObj?.colorLight || '#2563eb');
-                      const pinEvents = pins.filter(p => p.videoId === currentVideo?.id).map(p => ({
-                        id: p.id,
-                        type: `pin_${p.type}`,
-                        videoTime: p.time,
-                        gameTime: 0,
-                        teamId: null,
-                        playerId: null,
-                        status: 'recorded'
-                      } as any));
-                      let displayEvents = [...activeTrackingEvents, ...pinEvents].sort((a,b) => a.videoTime - b.videoTime);
-                      
-                      switch (eventsFilterSet) {
-                        case 'all_no_subs':
-                          displayEvents = displayEvents.filter(e => (e.type !== 'sub_in' && e.type !== 'sub_out') || e.type.startsWith('pin_'));
-                          break;
-                        case 'home_focused':
-                          displayEvents = displayEvents.filter(e => 
-                            e.type.startsWith('pin_') || 
-                            e.teamId === currentGame?.homeTeamId || 
-                            (e.teamId === currentGame?.awayTeamId && e.type === 'goal')
-                          );
-                          break;
-                        case 'away_focused':
-                          displayEvents = displayEvents.filter(e => 
-                            e.type.startsWith('pin_') || 
-                            e.teamId === currentGame?.awayTeamId || 
-                            (e.teamId === currentGame?.homeTeamId && e.type === 'goal')
-                          );
-                          break;
-                        case 'possession_scoring':
-                          displayEvents = displayEvents.filter(e => 
-                            e.type.startsWith('pin_') || 
-                            ['goal', 'assist', 'shot', 'attempt', 'miss_ko', 'turnover', 'control_change', 'control_start'].includes(e.type)
-                          );
-                          break;
-                        case 'all':
-                        default:
-                          // No additional filtering needed
-                          break;
-                      }
-
-                      // An assist is nested under (rendered inside) its goal's card whenever
-                      // that goal is also present in the current filtered view. Only one
-                      // assist per goal is nested; any others fall back to standalone cards.
-                      const nestedAssistByGoalId = new Map<string, any>();
-                      displayEvents.forEach(e => {
-                        if (e.type === 'assist' && e.relatedEventId && !nestedAssistByGoalId.has(e.relatedEventId)) {
-                          const goal = displayEvents.find(g => g.id === e.relatedEventId && g.type === 'goal');
-                          if (goal) nestedAssistByGoalId.set(goal.id, e);
-                        }
-                      });
-                      const nestedAssistIds = new Set(Array.from(nestedAssistByGoalId.values()).map((e: any) => e.id));
-
-                      const renderTrackingEventBody = (evt: any) => {
-                        const cfg = EVENT_CONFIG[evt.type as EventType] || { label: evt.type, icon: <AlertCircle className="w-4 h-4" />, color: 'bg-neutral-500' };
-                        const openSuggestionsForEvent = suggestions.filter(s => s.targetEventId === evt.id && s.status === 'open');
-                        const label = (evt.type === 'sub_in' && evt.position) ? `${evt.position} In` : (evt.type === 'sub_out' && evt.position) ? `${evt.position} Out` : (evt.type === 'card' && evt.color) ? `${evt.color} Card` : cfg.label;
-                        const cardIconColor = evt.type === 'card' && evt.color
-                          ? (evt.color === 'blue' ? 'bg-blue-500' : evt.color === 'yellow' ? 'bg-yellow-400' : evt.color === 'red' ? 'bg-red-500' : cfg.color)
-                          : cfg.color;
-                        return (
-                          <>
-                            <div className="flex items-start justify-between mb-2">
-                              <div className="flex items-center gap-2">
-                                <div className={cn("p-1.5 rounded-md", cardIconColor)}>
-                                  {React.cloneElement(cfg.icon as React.ReactElement<any>, { className: 'w-3 h-3' })}
-                                </div>
-                                <div className="flex flex-col items-center">
-                                  <p className="font-mono text-xs font-bold text-gray-800 w-12 text-center">{formatTime(evt.gameTime || 0)}</p>
-                                  <p className="font-mono text-[9px] text-gray-400 w-12 text-center">({formatTime(evt.videoTime)})</p>
-                                </div>
-                                <div className="flex flex-col justify-center gap-0.5 ml-1">
-                                  <div className="flex items-center gap-1.5">
-                                    <p className="text-sm font-bold capitalize">
-                                      {label}
-                                    </p>
-                                  </div>
-                                  {(evt.playerId || evt.teamId) && (
-                                    <div className="text-xs">
-                                      {evt.playerId ? (() => {
-                                        const p = allPlayers.find(pl => pl.id === evt.playerId);
-                                        return p ? (
-                                          <span
-                                            className="font-bold tracking-tight"
-                                            style={evt.teamId === currentGame?.homeTeamId ? { color: feedHomeColor } : evt.teamId === currentGame?.awayTeamId ? { color: feedAwayColor } : { color: '#374151' }}
-                                          >
-                                            {p.firstName.charAt(0)}. {p.lastName}
-                                          </span>
-                                        ) : 'Player';
-                                      })() : (() => {
-                                        const t = teams.find(tm => tm.id === evt.teamId);
-                                        return t ? (
-                                          <span
-                                            className="font-bold text-[9px] uppercase tracking-wider"
-                                            style={evt.teamId === currentGame?.homeTeamId ? { color: feedHomeColor } : evt.teamId === currentGame?.awayTeamId ? { color: feedAwayColor } : { color: '#6b7280' }}
-                                          >
-                                            {t.name}
-                                          </span>
-                                        ) : 'Team';
-                                      })()}
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <button
-                                  onClick={() => player?.seekTo(evt.videoTime)}
-                                  className="text-[10px] font-mono bg-gray-100 hover:bg-red-600 px-2 py-1 rounded transition-colors"
-                                >
-                                  Seek {formatTime(evt.videoTime)}
-                                </button>
-                              </div>
-                            </div>
-
-                            {eventDensity !== 'compact' && (
-                              <div className="flex items-center justify-between pt-2 border-t border-gray-200/50">
-                                {/* Net, then the vote counters. Events are valid as soon as they're
-                                    authored — there is no verification step here any more, so voting
-                                    is the whole accuracy story. */}
-                                <div className="flex items-center gap-3">
-                                  <span className={cn(
-                                    "text-xs font-bold",
-                                    evt.votes > 0 ? "text-green-500" : evt.votes < 0 ? "text-red-500" : "text-gray-400"
-                                  )}>
-                                    {evt.votes > 0 ? `+${evt.votes}` : evt.votes}
-                                  </span>
-                                  <span className="text-[10px] text-gray-300 uppercase font-bold tracking-tighter">Net</span>
-                                  <div className="h-3 w-px bg-gray-100 mx-1" />
-                                  <button
-                                    onClick={() => handleVote(evt.id, true)}
-                                    className={cn(
-                                      'flex items-center gap-1 px-1.5 py-1 rounded transition-all',
-                                      evt.upvoterIds?.includes(voterId)
-                                        ? 'bg-green-500/15 text-green-600 ring-1 ring-green-500/30'
-                                        : 'text-gray-400 hover:bg-green-500/10 hover:text-green-500'
-                                    )}
-                                    title="Mark accurate"
-                                  >
-                                    <CheckCircle2 className="w-3.5 h-3.5" />
-                                    <span className="text-xs font-bold">{evt.upvotes || 0}</span>
-                                  </button>
-                                  <button
-                                    onClick={() => handleVote(evt.id, false)}
-                                    className={cn(
-                                      'flex items-center gap-1 px-1.5 py-1 rounded transition-all',
-                                      evt.downvoterIds?.includes(voterId)
-                                        ? 'bg-red-500/15 text-red-600 ring-1 ring-red-500/30'
-                                        : 'text-gray-400 hover:bg-red-500/10 hover:text-red-500'
-                                    )}
-                                    title="Mark inaccurate"
-                                  >
-                                    <XCircle className="w-3.5 h-3.5" />
-                                    <span className="text-xs font-bold">{evt.downvotes || 0}</span>
-                                  </button>
-                                </div>
-
-                                {/* Every editing entry point lives here, in this order: edit, delete,
-                                    suggest a fix, suggest a removal. Nothing edit-related sits in the
-                                    header any more, so Compact can hide this one div and be done. */}
-                                <div className="flex items-center gap-1">
-                                  {(canModerate || (evt.userId === user?.uid && evt.status !== 'verified')) && (
-                                    <>
-                                      <button
-                                        onClick={() => handleEditRecordedEvent(evt.id)}
-                                        className="p-1 text-gray-400 hover:text-blue-500 hover:bg-blue-50 transition-colors rounded flex items-center justify-center border border-transparent hover:border-blue-100"
-                                        title="Edit Event"
-                                      >
-                                        <Edit2 className="w-3.5 h-3.5" />
-                                      </button>
-                                      <button
-                                        onClick={() => { if (window.confirm('Delete this event permanently?')) handleDeleteRecordedEvent(evt.id) }}
-                                        className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors rounded flex items-center justify-center border border-transparent hover:border-red-100"
-                                        title="Delete Event"
-                                      >
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                      </button>
-                                    </>
-                                  )}
-                                  <button
-                                    onClick={() => setSuggestFormState({ mode: 'edit', targetEvent: evt })}
-                                    className="p-1 text-gray-400 hover:text-amber-600 hover:bg-amber-50 transition-colors rounded flex items-center justify-center border border-transparent hover:border-amber-100"
-                                    title="Suggest a fix"
-                                  >
-                                    <MessageSquarePlus className="w-3.5 h-3.5" />
-                                  </button>
-                                  <button
-                                    onClick={() => setSuggestFormState({ mode: 'delete', targetEvent: evt })}
-                                    className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors rounded flex items-center justify-center border border-transparent hover:border-red-100"
-                                    title="Suggest this be removed"
-                                  >
-                                    <Ban className="w-3.5 h-3.5" />
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-
-                            {openSuggestionsForEvent.length > 0 && (
-                              <div className="mt-2 pt-2 border-t border-amber-200/60">
-                                <button
-                                  onClick={() => setExpandedSuggestionEventIds(prev => {
-                                    const next = new Set(prev);
-                                    if (next.has(evt.id)) next.delete(evt.id); else next.add(evt.id);
-                                    return next;
-                                  })}
-                                  className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-amber-600 hover:text-amber-700"
-                                >
-                                  {expandedSuggestionEventIds.has(evt.id) ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                                  {openSuggestionsForEvent.length} suggested fix{openSuggestionsForEvent.length === 1 ? '' : 'es'}
-                                </button>
-                                {expandedSuggestionEventIds.has(evt.id) && (
-                                  <div className="mt-2 space-y-2">
-                                    {openSuggestionsForEvent.map(sugg => (
-                                      <SuggestionCard
-                                        key={sugg.id}
-                                        suggestion={sugg}
-                                        voterId={voterId}
-                                        canModerate={canModerate}
-                                        playerName={(id) => { const p = allPlayers.find(pl => pl.id === id); return p ? `${p.firstName.charAt(0)}. ${p.lastName}` : undefined; }}
-                                        teamName={(id) => teams.find(tm => tm.id === id)?.name}
-                                        onVote={(isUp) => currentVideo && handleVoteOnSuggestion(currentVideo.gameId, sugg, isUp)}
-                                        onAccept={() => currentVideo && handleAcceptSuggestion(currentVideo.gameId, sugg)}
-                                        onReject={() => currentVideo && handleRejectSuggestion(currentVideo.gameId, sugg)}
-                                        onRemove={() => currentVideo && handleWithdrawSuggestion(currentVideo.gameId, sugg.id)}
-                                      />
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </>
-                        );
-                      };
-
-                      return displayEvents.length === 0 ? (
-                        <div className="h-full flex flex-col items-center justify-center text-gray-400 text-center p-8">
-                          <Clock className="w-12 h-12 mb-4 opacity-20" />
-                          <p>No events recorded yet.</p>
-                          <p className="text-sm">Be the first to track a goal!</p>
-                        </div>
-                      ) : (
-                        displayEvents.slice().reverse().map((event) => {
-                          const isPin = event.type.startsWith('pin_');
-                          if (isPin) {
-                            const pinType = event.type.replace('pin_', '');
-                            let colorClass = "bg-gray-400 text-white";
-                            let lineClass = "bg-gray-400";
-                            if (pinType === 'control') { colorClass = "bg-black text-white"; lineClass = "bg-black"; }
-                            else if (pinType === 'general') { colorClass = "bg-yellow-400 text-yellow-900"; lineClass = "bg-yellow-400"; }
-                            else if (pinType === 'possession') { colorClass = "bg-purple-600 text-white"; lineClass = "bg-purple-600"; }
-                            else if (pinType === 'sub') { colorClass = "bg-cyan-600 text-white"; lineClass = "bg-cyan-600"; }
-
-                            return (
-                              <div key={event.id} className="flex items-center gap-1.5 group w-full py-1 relative">
-                                <div className={`flex-1 h-[2px] ${lineClass} opacity-30 group-hover:opacity-100 transition-opacity`}></div>
-                                <button 
-                                  onClick={() => player?.seekTo(event.videoTime)}
-                                  className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider ${colorClass} hover:opacity-80 transition-opacity flex items-center gap-1 shadow-sm shrink-0`}
-                                >
-                                  <MapPin className="w-2.5 h-2.5" />
-                                  {pinType} @ {formatTime(event.videoTime)}
-                                </button>
-                                <button 
-                                  onClick={(e) => { e.stopPropagation(); setPins(prev => prev.filter(pin => pin.id !== event.id)); }} 
-                                  className="text-gray-400 hover:text-red-500 transition-colors p-0.5 opacity-0 group-hover:opacity-100 shrink-0" 
-                                  title="Dismiss Pin"
-                                >
-                                  <X className="w-3 h-3" />
-                                </button>
-                                <div className={`flex-1 h-[2px] ${lineClass} opacity-30 group-hover:opacity-100 transition-opacity`}></div>
-                              </div>
-                            );
-                          }
-
-                          if (nestedAssistIds.has(event.id)) {
-                            // Rendered nested inside its goal's card below instead.
-                            return null;
-                          }
-
-                          const nestedAssist = event.type === 'goal' ? nestedAssistByGoalId.get(event.id) : undefined;
-                          const hasOpenSuggestions = suggestions.some(s => s.targetEventId === event.id && s.status === 'open');
-
-                          // Home events hug the left edge, away events hug the right edge, and
-                          // team-less (neutral) events stay centered — alignment alone signals
-                          // which side an event belongs to, so cards are capped well under full
-                          // width instead of stretching edge to edge.
-                          const isHome = event.teamId === currentGame?.homeTeamId;
-                          const isAway = event.teamId === currentGame?.awayTeamId;
-                          return (
-                            <div
-                              key={event.id}
-                              className={cn(
-                                "flex w-full",
-                                isHome ? "justify-start" : isAway ? "justify-end" : "justify-center"
-                              )}
-                            >
-                              <div
-                                data-event-time={event.videoTime}
-                                className={cn(
-                                  "group border rounded-xl p-3 transition-all w-full max-w-[85%] sm:max-w-[75%]",
-                                  !event.teamId && "bg-white border-gray-200 hover:border-gray-300",
-                                  event.status === 'rejected' && "opacity-50 grayscale",
-                                  hasOpenSuggestions && "border-l-4"
-                                )}
-                                style={{
-                                  // A team-colored card sets borderColor (all four sides) via inline style, which
-                                  // would silently beat the amber Tailwind class below since inline style always
-                                  // wins over a class for the same property — so the amber override has to be
-                                  // merged in after, not left to CSS specificity.
-                                  ...(isHome ? { backgroundColor: hexToRgba(feedHomeColor, 0.06), borderColor: hexToRgba(feedHomeColor, 0.25) } :
-                                    isAway ? { backgroundColor: hexToRgba(feedAwayColor, 0.06), borderColor: hexToRgba(feedAwayColor, 0.25) } :
-                                      {}),
-                                  ...(hasOpenSuggestions ? { borderLeftColor: '#f59e0b', borderLeftWidth: '4px' } : {}),
-                                }}
-                              >
-                                {renderTrackingEventBody(event)}
-                                {nestedAssist && (
-                                  <>
-                                    <div className="flex items-center gap-2 my-2">
-                                      <div className="flex-1 border-t border-dashed border-gray-300" />
-                                      <CornerDownRight className="w-3.5 h-3.5 text-gray-300 shrink-0" />
-                                      <div className="flex-1 border-t border-dashed border-gray-300" />
-                                    </div>
-                                    {renderTrackingEventBody(nestedAssist)}
-                                  </>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })
-                      );
-                    })()}
-                    </div>
-                  </div>
-
-                  <div data-tour="record-panel" className={cn(isExpandedLayout ? "flex flex-col h-full relative" : "absolute inset-0", (rightPanelTab === 'record' || isExpandedLayout) ? "block" : "hidden", "overflow-y-auto custom-scrollbar p-4 bg-white")}>
-
-                    {/* Voice & NLP Event Logger (Hidden for production deploy) */}
-                    {/*
-                    <div className="bg-slate-900 text-white rounded-2xl p-4 mb-4 shadow-lg border border-slate-800 relative overflow-hidden transition-all duration-300 hover:shadow-emerald-950/20">
-                      <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/10 rounded-full blur-2xl pointer-events-none" />
-                      
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-2">
-                          <span className="flex h-2 w-2 relative">
-                            {isListening ? (
-                              <>
-                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-                                <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
-                              </>
-                            ) : (
-                              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400 animate-pulse"></span>
-                            )}
-                          </span>
-                          <h4 className="text-[11px] font-bold uppercase tracking-widest text-slate-300">Voice & NLP Event Logger</h4>
-                        </div>
-                        <button
-                          onClick={toggleSpeechRecognition}
-                          className={cn(
-                            "flex items-center justify-center p-2 rounded-xl transition-all duration-300 active:scale-95",
-                            isListening 
-                              ? "bg-red-500 text-white shadow-md shadow-red-500/30 animate-pulse" 
-                              : "bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-600/20 hover:scale-105"
-                          )}
-                          title="Click to dictate an event"
-                        >
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" />
-                          </svg>
-                        </button>
-                      </div>
-
-                      <form onSubmit={(e) => { e.preventDefault(); if (voiceCommandText.trim()) { parseNlpCommand(voiceCommandText); setVoiceCommandText(''); } }} className="flex gap-2">
-                        <input
-                          type="text"
-                          value={voiceCommandText}
-                          onChange={(e) => setVoiceCommandText(e.target.value)}
-                          placeholder='Try: "goal home 10, assist 5" or "sub 12 in for 8"'
-                          className="flex-1 bg-slate-800/90 text-white border border-slate-700/80 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500/50 transition-all font-medium placeholder-slate-500"
-                        />
-                        <button
-                          type="submit"
-                          className="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700/80 px-3 py-2 rounded-xl text-xs font-semibold hover:text-white transition-all active:scale-95 shadow-sm"
-                        >
-                          Send
-                        </button>
-                      </form>
-
-                      {voiceStatusMessage && (
-                        <div className="mt-2.5 text-[10px] font-medium text-slate-400 bg-slate-800/40 rounded-lg py-1.5 px-2.5 border border-slate-800/50 flex items-center gap-1.5 animate-pulse">
-                          <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
-                          <span>{voiceStatusMessage}</span>
-                        </div>
-                      )}
-                    </div>
-                    */}
-
-                    {/* Event Type Grid ALWAYS visible because Player Actions are now local popups */}
-                    <div data-tour="event-grid" className="flex flex-col gap-3 mb-2">
-                      {(() => {
-                        const chaserTypes = ['goal', 'shot', 'attempt', 'miss_ko', 'turnover'];
-                        const clockTypes = ['gameStart', 'gamePause', 'gameEnd'];
-
-                        return (
-                          <>
-                            <div data-tour="record-actions" className="flex flex-col gap-1.5 mb-2">
-                              <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Chaser Actions</span>
-                              <div className="grid grid-cols-5 gap-1.5">
-                                {chaserTypes.map(type => {
-                                  const config = EVENT_CONFIG[type as EventType];
-                                  if (!config) return null;
-                                  return (
-                                    <button
-                                      key={type}
-                                      onClick={() => handleCreateDraftEvent(type as EventType, null, null, null, null)}
-                                      className="flex flex-col items-center justify-center py-2 px-1 rounded-lg border border-gray-200 hover:border-gray-500 hover:bg-gray-50 transition-all active:scale-95 text-center bg-white shadow-sm"
-                                    >
-                                      <span className="text-[9px] uppercase font-bold tracking-tight text-gray-900 leading-tight">{config.label}</span>
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            </div>
-
-                            <div data-tour="record-clock" className="flex flex-col gap-1.5">
-                              <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Game Clock</span>
-                              <div className="grid grid-cols-3 gap-1.5">
-                                {clockTypes.map(type => {
-                                  const config = EVENT_CONFIG[type as EventType];
-                                  if (!config) return null;
-                                  return (
-                                    <button
-                                      key={type}
-                                      onClick={() => handleCreateDraftEvent(type as EventType, null, null, null, null)}
-                                      className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-gray-200 hover:border-gray-500 hover:bg-gray-50 transition-all active:scale-95 text-center bg-white shadow-sm"
-                                    >
-                                      <span className="text-[10px] uppercase font-bold tracking-tight text-gray-700 leading-tight">{config.label}</span>
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          </>
-                        );
-                      })()}
-
-                      {/* Control Change UI */}
-                      <div data-tour="record-control" className="flex flex-col gap-1.5 mt-1">
-                        <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Control Change</span>
-                        <div className="flex rounded-lg overflow-hidden border border-emerald-200 shadow-sm">
-                          <button
-                            onClick={() => handleCreateDraftEvent('control_change', currentGame?.homeTeamId || null, null, null, null)}
-                            className="flex-1 flex flex-col items-center justify-center py-1.5 px-1 bg-white hover:bg-emerald-50 active:bg-emerald-100 transition-all border-r border-emerald-100 group"
-                          >
-                            <span className="text-[10px] uppercase font-bold tracking-tight text-emerald-700 leading-tight group-hover:text-emerald-800">Home Control</span>
-                          </button>
-                          <button
-                            onClick={() => handleCreateDraftEvent('control_change', currentGame?.awayTeamId || null, null, null, null)}
-                            className="flex-1 flex flex-col items-center justify-center py-1.5 px-1 bg-white hover:bg-emerald-50 active:bg-emerald-100 transition-all group"
-                          >
-                            <span className="text-[10px] uppercase font-bold tracking-tight text-emerald-700 leading-tight group-hover:text-emerald-800">Away Control</span>
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Drop Pins UI */}
-                      {player && currentVideo && (
-                        <div data-tour="record-pins" className="flex flex-col gap-1.5 mt-1">
-                          <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Drop Pin</span>
-                          <div className="grid grid-cols-4 gap-1.5">
-                            <button onClick={() => setPins(prev => [...prev, { id: crypto.randomUUID(), videoId: currentVideo.id, time: player.getCurrentTime(), type: 'sub' }])} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-yellow-200 hover:border-yellow-500 hover:bg-yellow-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[9px] uppercase font-bold tracking-tight text-yellow-700">Sub Pin</span></button>
-                            <button onClick={() => setPins(prev => [...prev, { id: crypto.randomUUID(), videoId: currentVideo.id, time: player.getCurrentTime(), type: 'control' }])} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-yellow-200 hover:border-yellow-500 hover:bg-yellow-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[9px] uppercase font-bold tracking-tight text-yellow-700">Ctrl Pin</span></button>
-                            <button onClick={() => setPins(prev => [...prev, { id: crypto.randomUUID(), videoId: currentVideo.id, time: player.getCurrentTime(), type: 'possession' }])} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-yellow-200 hover:border-yellow-500 hover:bg-yellow-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[9px] uppercase font-bold tracking-tight text-yellow-700">Poss Pin</span></button>
-                            <button onClick={() => setPins(prev => [...prev, { id: crypto.randomUUID(), videoId: currentVideo.id, time: player.getCurrentTime(), type: 'general' }])} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-yellow-200 hover:border-yellow-500 hover:bg-yellow-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[9px] uppercase font-bold tracking-tight text-yellow-700">Gen Pin</span></button>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Cards UI */}
-                      <div className="flex flex-col gap-1.5 mt-1">
-                        <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Penalties</span>
-                        <div className="grid grid-cols-3 gap-1.5">
-                          <button onClick={() => { handleCreateDraftEvent('card', selectedTeamContext === 'home' ? currentGame?.homeTeamId || null : selectedTeamContext === 'away' ? currentGame?.awayTeamId || null : null, selectedPlayerId || null, null, null); setDraftEvents(d => { const last = d[0]; if (last) last.color = 'blue'; return [...d]; }); }} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-blue-200 hover:border-blue-500 hover:bg-blue-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[10px] uppercase font-bold tracking-tight text-blue-700">Blue Card</span></button>
-                          <button onClick={() => { handleCreateDraftEvent('card', selectedTeamContext === 'home' ? currentGame?.homeTeamId || null : selectedTeamContext === 'away' ? currentGame?.awayTeamId || null : null, selectedPlayerId || null, null, null); setDraftEvents(d => { const last = d[0]; if (last) last.color = 'yellow'; return [...d]; }); }} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-yellow-200 hover:border-yellow-500 hover:bg-yellow-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[10px] uppercase font-bold tracking-tight text-yellow-700">Yellow Card</span></button>
-                          <button onClick={() => { handleCreateDraftEvent('card', selectedTeamContext === 'home' ? currentGame?.homeTeamId || null : selectedTeamContext === 'away' ? currentGame?.awayTeamId || null : null, selectedPlayerId || null, null, null); setDraftEvents(d => { const last = d[0]; if (last) last.color = 'red'; return [...d]; }); }} className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border border-red-200 hover:border-red-500 hover:bg-red-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[10px] uppercase font-bold tracking-tight text-red-700">Red Card</span></button>
-                        </div>
-                      </div>
-
-                      {/* Game Phase Events */}
-                      <div className="flex flex-col gap-1.5 mt-1">
-                        <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest pl-1">Game Phase Events</span>
-                        <div className="grid grid-cols-4 gap-1.5">
-                          <button onClick={() => handleCreateDraftEvent('quadball_start', null, null, null, null)} className="flex flex-col items-center justify-center py-1.5 px-0.5 rounded-lg border border-gray-200 hover:border-red-500 hover:bg-red-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[8px] sm:text-[9px] uppercase font-bold tracking-tight text-gray-700 leading-tight text-center">Quadball Start</span></button>
-                          <button onClick={() => handleCreateDraftEvent('control_start', null, null, null, null)} className="flex flex-col items-center justify-center py-1.5 px-0.5 rounded-lg border border-gray-200 hover:border-emerald-500 hover:bg-emerald-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[8px] sm:text-[9px] uppercase font-bold tracking-tight text-emerald-800 leading-tight text-center">Control Start</span></button>
-                          <button onClick={() => handleCreateDraftEvent('flag_released', null, null, null, null)} className="flex flex-col items-center justify-center py-1.5 px-0.5 rounded-lg border border-gray-200 hover:border-purple-500 hover:bg-purple-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[8px] sm:text-[9px] uppercase font-bold tracking-tight text-purple-800 leading-tight text-center">Flag Released</span></button>
-                          <button onClick={() => handleCreateDraftEvent('flag_catch', selectedTeamContext === 'home' ? currentGame?.homeTeamId || null : currentGame?.awayTeamId || null, selectedPlayerId || null, null, null)} className="flex flex-col items-center justify-center py-1.5 px-0.5 rounded-lg border border-gray-200 hover:border-purple-500 hover:bg-purple-50 transition-all active:scale-95 bg-white shadow-sm"><span className="text-[8px] sm:text-[9px] uppercase font-bold tracking-tight text-purple-800 leading-tight text-center">Flag Catch</span></button>
-                        </div>
-                      </div>
-
-                      {/* Sub UI */}
-                      <div data-tour="record-subs" className="flex flex-col gap-1.5 mt-1 border border-gray-200 bg-gray-50 p-2 rounded-lg">
-                        <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest">Substitutions</span>
-                        <div className="flex gap-4">
-                          <div className="flex-1 flex flex-col gap-1">
-                            <span className="text-[9px] text-gray-500 font-bold uppercase truncate">{getScoreboardName(teams.find(t => t.id === currentGame?.homeTeamId))}</span>
-                            <div className="flex gap-1">
-                              <button onClick={() => handleCreateDraftEvent('sub_in', currentGame?.homeTeamId || null, null, null, null)} className="flex-1 py-1.5 bg-gray-800 hover:bg-gray-900 rounded text-white text-[9px] font-bold shadow-sm transition-all active:scale-95">IN</button>
-                              <button onClick={() => handleCreateDraftEvent('sub_out', currentGame?.homeTeamId || null, null, null, null)} className="flex-1 py-1.5 bg-gray-800 hover:bg-gray-900 rounded text-white text-[9px] font-bold shadow-sm transition-all active:scale-95">OUT</button>
-                            </div>
-                          </div>
-                          <div className="flex-1 flex flex-col gap-1">
-                            <span className="text-[9px] text-gray-500 font-bold uppercase truncate">{getScoreboardName(teams.find(t => t.id === currentGame?.awayTeamId))}</span>
-                            <div className="flex gap-1">
-                              <button onClick={() => handleCreateDraftEvent('sub_in', currentGame?.awayTeamId || null, null, null, null)} className="flex-1 py-1.5 bg-gray-800 hover:bg-gray-900 rounded text-white text-[9px] font-bold shadow-sm transition-all active:scale-95">IN</button>
-                              <button onClick={() => handleCreateDraftEvent('sub_out', currentGame?.awayTeamId || null, null, null, null)} className="flex-1 py-1.5 bg-gray-800 hover:bg-gray-900 rounded text-white text-[9px] font-bold shadow-sm transition-all active:scale-95">OUT</button>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* End Event Grid */}
-                    </div>
-                    {/* Draft Cards Pipeline */}
-                    <div data-tour="draft-queue" className="flex flex-col gap-4">
-                      {draftEvents.length > 0 ? (
-                        <div className="flex flex-col gap-3">
-                          <h4 className="text-[11px] font-bold uppercase tracking-widest text-emerald-600 border-b border-emerald-100 pb-2">Pending Events Queue ({draftEvents.length})</h4>
-                          {draftEvents.map(draft => (
-                            <div key={draft.id} className="p-2.5 bg-emerald-50/20 border border-emerald-200 rounded-lg shadow-sm flex flex-col gap-2 animate-in fade-in slide-in-from-top-2">
-                              {/* Header */}
-                              <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-1.5">
-                                  {/* -1s / +1s time adjusters */}
-                                  <button
-                                    onClick={() => setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, videoTime: Math.max(0, d.videoTime - 1) } : d))}
-                                    title="Shift timestamp back 1 second"
-                                    className="h-5 w-5 flex items-center justify-center rounded bg-gray-200 hover:bg-gray-300 active:scale-95 text-gray-700 text-[10px] font-bold transition-all select-none"
-                                  >−</button>
-                                  <div className="px-2 py-0.5 bg-gray-800 text-white rounded text-[10px] font-mono shadow-inner tracking-wider">
-                                    {formatTime(draft.videoTime)}
-                                  </div>
-                                  <button
-                                    onClick={() => setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, videoTime: d.videoTime + 1 } : d))}
-                                    title="Shift timestamp forward 1 second"
-                                    className="h-5 w-5 flex items-center justify-center rounded bg-gray-200 hover:bg-gray-300 active:scale-95 text-gray-700 text-[10px] font-bold transition-all select-none"
-                                  >+</button>
-                                  <span className="text-xs font-bold text-gray-600 ml-1">Pending Log</span>
-                                </div>
-                              </div>
-
-                              {/* Form Array */}
-                              <div className="flex flex-col gap-2">
-                                {/* Team & Player Selects (Hidden for Clock Events) */}
-                                {!['gameStart', 'gamePause', 'gameEnd'].includes(draft.type || '') ? (
-                                  <div className="flex items-center gap-1.5 w-full">
-                                    <select
-                                      value={draft.teamId === currentGame?.homeTeamId ? (draft.playerId || 'TEAM_ONLY') : ''}
-                                      onChange={(e) => {
-                                        const newPlr = e.target.value;
-                                        if (!newPlr) {
-                                          setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, teamId: null, playerId: null } : d));
-                                          return;
-                                        }
-                                        if (newPlr === 'TEAM_ONLY') {
-                                          setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, teamId: currentGame?.homeTeamId || null, playerId: null } : d));
-                                          return;
-                                        }
-                                        setDraftEvents(prev => prev.map(d => {
-                                          if (d.id !== draft.id) return d;
-                                          let updatedDraft = { ...d, teamId: currentGame?.homeTeamId || null, playerId: newPlr };
-                                          // Position is whatever it was already set to (defaulting to chaser the
-                                          // first time), never guessed from the newly-picked player's history —
-                                          // changing who's subbing in shouldn't silently change the position too.
-                                          if (d.type === 'sub_in' && !updatedDraft.position) {
-                                            updatedDraft.position = 'chaser';
-                                          }
-                                          return updatedDraft;
-                                        }));
-                                      }}
-                                      className={`flex-1 w-0 text-[10px] border rounded p-1.5 shadow-sm ${draft.teamId === currentGame?.homeTeamId ? 'bg-white border-gray-300' : 'bg-red-50 border-red-300 text-red-600 font-bold'}`}
-                                    >
-                                      <option value="" disabled>⚠ Home Team - Select Player</option>
-                                      <option value="TEAM_ONLY" className="font-bold text-gray-500">- {teams.find(t => t.id === currentGame?.homeTeamId)?.nickname || teams.find(t => t.id === currentGame?.homeTeamId)?.name || 'Team'} / No Player -</option>
-                                      {homeRosterPlayers
-                                        .filter(rp => {
-                                          if (draft.type === 'sub_in') return !activePlayerPositions.has(rp.playerId);
-                                          if (draft.type === 'sub_out') return activePlayerPositions.has(rp.playerId);
-                                          return true;
-                                        })
-                                        .sort((a, b) => {
-                                          if (draft.type === 'sub_in') {
-                                            return (a.player?.lastName || '').localeCompare(b.player?.lastName || '');
-                                          }
-                                          const aActive = activePlayerPositions.has(a.playerId);
-                                          const bActive = activePlayerPositions.has(b.playerId);
-                                          if (aActive !== bActive) return aActive ? -1 : 1;
-                                          if (aActive) {
-                                            const posA = activePlayerPositions.get(a.playerId) || 'chaser';
-                                            const posB = activePlayerPositions.get(b.playerId) || 'chaser';
-                                            const order = { chaser: 1, keeper: 2, beater: 3, seeker: 4 } as Record<string, number>;
-                                            return order[posA] - order[posB];
-                                          }
-                                          return (a.player?.lastName || '').localeCompare(b.player?.lastName || '');
-                                        })
-                                        .map(rp => (
-                                          <option key={rp.playerId} value={rp.playerId}>
-                                            {draft.type !== 'sub_in' ? `[${(activePlayerPositions.get(rp.playerId) || 'off').substring(0, 1).toUpperCase()}] ` : ''}
-                                            {getPlayerShortName(rp.player, homeRosterPlayers)}
-                                          </option>
-                                        ))}
-                                    </select>
-
-                                    <select
-                                      value={draft.type || ''}
-                                      onChange={(e) => {
-                                        const newType = e.target.value as EventType;
-                                        setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, type: newType } : d));
-                                      }}
-                                      className="w-20 text-[9px] font-bold text-gray-700 border border-gray-300 rounded p-1 bg-white shadow-sm outline-none shrink-0"
-                                    >
-                                      {!draft.type && <option value="">Type</option>}
-                                      {Object.entries(EVENT_CONFIG).map(([typeKey, config]) => (
-                                        <option key={typeKey} value={typeKey}>{config.label}</option>
-                                      ))}
-                                    </select>
-
-                                    <select
-                                      value={draft.teamId === currentGame?.awayTeamId ? (draft.playerId || 'TEAM_ONLY') : ''}
-                                      onChange={(e) => {
-                                        const newPlr = e.target.value;
-                                        if (!newPlr) {
-                                          setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, teamId: null, playerId: null } : d));
-                                          return;
-                                        }
-                                        if (newPlr === 'TEAM_ONLY') {
-                                          setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, teamId: currentGame?.awayTeamId || null, playerId: null } : d));
-                                          return;
-                                        }
-                                        setDraftEvents(prev => prev.map(d => {
-                                          if (d.id !== draft.id) return d;
-                                          let updatedDraft = { ...d, teamId: currentGame?.awayTeamId || null, playerId: newPlr };
-                                          // Position is whatever it was already set to (defaulting to chaser the
-                                          // first time), never guessed from the newly-picked player's history —
-                                          // changing who's subbing in shouldn't silently change the position too.
-                                          if (d.type === 'sub_in' && !updatedDraft.position) {
-                                            updatedDraft.position = 'chaser';
-                                          }
-                                          return updatedDraft;
-                                        }));
-                                      }}
-                                      className={`flex-1 w-0 text-[10px] border rounded p-1.5 shadow-sm ${draft.teamId === currentGame?.awayTeamId ? 'bg-white border-gray-300' : 'bg-red-50 border-red-300 text-red-600 font-bold'}`}
-                                    >
-                                      <option value="" disabled>⚠ Away Team - Select Player</option>
-                                      <option value="TEAM_ONLY" className="font-bold text-gray-500">- {teams.find(t => t.id === currentGame?.awayTeamId)?.nickname || teams.find(t => t.id === currentGame?.awayTeamId)?.name || 'Team'} / No Player -</option>
-                                      {awayRosterPlayers
-                                        .filter(rp => {
-                                          if (draft.type === 'sub_in') return !activePlayerPositions.has(rp.playerId);
-                                          if (draft.type === 'sub_out') return activePlayerPositions.has(rp.playerId);
-                                          return true;
-                                        })
-                                        .sort((a, b) => {
-                                          if (draft.type === 'sub_in') {
-                                            return (a.player?.lastName || '').localeCompare(b.player?.lastName || '');
-                                          }
-                                          const aActive = activePlayerPositions.has(a.playerId);
-                                          const bActive = activePlayerPositions.has(b.playerId);
-                                          if (aActive !== bActive) return aActive ? -1 : 1;
-                                          if (aActive) {
-                                            const posA = activePlayerPositions.get(a.playerId) || 'chaser';
-                                            const posB = activePlayerPositions.get(b.playerId) || 'chaser';
-                                            const order = { chaser: 1, keeper: 2, beater: 3, seeker: 4 } as Record<string, number>;
-                                            return order[posA] - order[posB];
-                                          }
-                                          return (a.player?.lastName || '').localeCompare(b.player?.lastName || '');
-                                        })
-                                        .map(rp => (
-                                          <option key={rp.playerId} value={rp.playerId}>
-                                            {draft.type !== 'sub_in' ? `[${(activePlayerPositions.get(rp.playerId) || 'off').substring(0, 1).toUpperCase()}] ` : ''}
-                                            {getPlayerShortName(rp.player, awayRosterPlayers)}
-                                          </option>
-                                        ))}
-                                    </select>
-                                  </div>
-                                ) : (
-                                  <div className="w-full text-center text-[10px] border border-gray-200 rounded p-1.5 bg-gray-50 text-gray-600 font-bold flex items-center justify-center gap-1.5 uppercase tracking-tight shadow-sm">
-                                    {EVENT_CONFIG[draft.type as EventType] ? React.cloneElement(EVENT_CONFIG[draft.type as EventType].icon as React.ReactElement<any>, { className: 'w-3 h-3' }) : null}
-                                    {EVENT_CONFIG[draft.type as EventType]?.label || 'Event'}
-                                  </div>
-                                )}
-
-                                    {draft.type === 'sub_in' && (
-                                      <select
-                                        value={draft.position || 'chaser'}
-                                        onChange={(e) => setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, position: e.target.value as PositionType } : d))}
-                                        className="text-xs border border-green-200 rounded p-1.5 bg-green-50 text-green-800 disabled:opacity-50 mt-1"
-                                      >
-                                        <option value="chaser">Chaser</option>
-                                        <option value="beater">Beater</option>
-                                        <option value="keeper">Keeper</option>
-                                        <option value="seeker">Seeker</option>
-                                      </select>
-                                    )}
-
-                                    {draft.type === 'sub_out' && (
-                                      <select
-                                        value={draft.subPlayerId || ''}
-                                        onChange={(e) => setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, subPlayerId: e.target.value } : d))}
-                                        className="text-xs border border-green-200 rounded p-1.5 bg-green-50 text-green-800 disabled:opacity-50 mt-1"
-                                        disabled={!draft.teamId}
-                                      >
-                                        <option value="">Sub In... (Optional)</option>
-                                        {draft.teamId && (draft.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)
-                                          .filter(rp => !activePlayerPositions.has(rp.playerId) && rp.playerId !== draft.playerId)
-                                          .sort((a, b) => (a.player?.lastName || '').localeCompare(b.player?.lastName || ''))
-                                          .map(rp => (
-                                            <option key={rp.playerId} value={rp.playerId}>
-                                              Sub in {getPlayerShortName(rp.player, draft.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)}
-                                            </option>
-                                          ))}
-                                      </select>
-                                    )}
-
-                                    {draft.type === 'card' && (
-                                      <div className="col-span-2 flex flex-col gap-1.5 mt-1">
-                                        <div className="flex rounded-lg overflow-hidden border border-gray-200 shadow-sm">
-                                          {(['blue', 'yellow', 'red'] as const).map(c => (
-                                            <button
-                                              key={c}
-                                              type="button"
-                                              onClick={() => setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, color: c } : d))}
-                                              className={cn(
-                                                "flex-1 py-1.5 text-[10px] font-bold uppercase tracking-tight capitalize transition-all",
-                                                draft.color === c
-                                                  ? c === 'blue' ? 'bg-blue-500 text-white' : c === 'yellow' ? 'bg-yellow-400 text-yellow-900' : 'bg-red-500 text-white'
-                                                  : 'bg-white text-gray-500 hover:bg-gray-50'
-                                              )}
-                                            >
-                                              {c} Card
-                                            </button>
-                                          ))}
-                                        </div>
-
-                                        {draft.playerId && activePlayerPositions.get(draft.playerId) === 'keeper' && (
-                                          <div className="flex flex-col gap-1 p-2 border border-indigo-200 bg-indigo-50 rounded-lg">
-                                            <span className="text-[9px] uppercase font-bold text-indigo-600 tracking-wider">Keeper Swap (optional)</span>
-                                            <select
-                                              value={draft.swapPlayerId || ''}
-                                              onChange={(e) => setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, swapPlayerId: e.target.value || null } : d))}
-                                              className="text-xs border border-indigo-200 rounded p-1.5 bg-white text-indigo-800"
-                                            >
-                                              <option value="">No swap</option>
-                                              {draft.teamId && (draft.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)
-                                                .filter(rp => rp.playerId !== draft.playerId && activePlayerPositions.has(rp.playerId))
-                                                .sort((a, b) => (a.player?.lastName || '').localeCompare(b.player?.lastName || ''))
-                                                .map(rp => (
-                                                  <option key={rp.playerId} value={rp.playerId}>
-                                                    Swap in [{(activePlayerPositions.get(rp.playerId) || 'chaser').substring(0, 1).toUpperCase()}] {getPlayerShortName(rp.player, draft.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)}
-                                                  </option>
-                                                ))}
-                                            </select>
-                                          </div>
-                                        )}
-                                      </div>
-                                    )}
-
-                                    {draft.type === 'goal' && (
-                                      <select
-                                        value={draft.assistedByPlayerId || ''}
-                                        onChange={(e) => setDraftEvents(prev => prev.map(d => d.id === draft.id ? { ...d, assistedByPlayerId: e.target.value } : d))}
-                                        className="col-span-2 text-xs border border-purple-200 rounded p-1.5 bg-purple-50 text-purple-800 disabled:opacity-50 mt-1"
-                                        disabled={!draft.teamId}
-                                      >
-                                        <option value="">No Assist Data</option>
-                                        {draft.teamId && (draft.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)
-                                          .filter(rp => rp.playerId !== draft.playerId)
-                                          .sort((a, b) => {
-                                            const aActive = activePlayerPositions.has(a.playerId);
-                                            const bActive = activePlayerPositions.has(b.playerId);
-                                            if (aActive !== bActive) return aActive ? -1 : 1;
-                                            if (aActive) {
-                                              const posA = activePlayerPositions.get(a.playerId) || 'chaser';
-                                              const posB = activePlayerPositions.get(b.playerId) || 'chaser';
-                                              const order = { chaser: 1, keeper: 2, beater: 3, seeker: 4 } as Record<string, number>;
-                                              return order[posA] - order[posB];
-                                            }
-                                            return (a.player?.lastName || '').localeCompare(b.player?.lastName || '');
-                                          })
-                                          .map(rp => (
-                                            <option key={rp.playerId} value={rp.playerId}>
-                                              Assist - [{(activePlayerPositions.get(rp.playerId) || 'off').substring(0, 1).toUpperCase()}] {getPlayerShortName(rp.player, draft.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)}
-                                            </option>
-                                          ))}
-                                      </select>
-                                    )}
-
-                              </div>
-
-                              <div className="flex gap-2 w-full mt-1">
-                                {draft.type === 'sub_out' || draft.type === 'sub_in' ? (
-                                  <div className="flex gap-1 flex-1">
-                                    <button
-                                      onClick={() => handleSaveDraftEvent(draft, false)}
-                                      className="flex-1 shrink-0 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] py-1.5 rounded-lg transition-colors shadow flex items-center justify-center gap-1 min-h-[32px] px-1"
-                                    >
-                                      <CheckCircle2 className="w-3.5 h-3.5" /> Save
-                                    </button>
-                                    <button
-                                      onClick={() => handleSaveDraftEvent(draft, true)}
-                                      className="flex-1 shrink-0 bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-[11px] py-1.5 rounded-lg transition-colors shadow flex items-center justify-center gap-1 min-h-[32px] px-1"
-                                    >
-                                      <CheckCircle2 className="w-3.5 h-3.5" /> + Next
-                                    </button>
-                                  </div>
-                                ) : (
-                                  <button
-                                    onClick={() => handleSaveDraftEvent(draft, false)}
-                                    className="flex-1 shrink-0 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] py-1.5 rounded-lg transition-colors shadow flex items-center justify-center gap-1.5 min-h-[32px]"
-                                  >
-                                    <CheckCircle2 className="w-3.5 h-3.5" /> Save to Timeline
-                                  </button>
-                                )}
-                                <button
-                                  onClick={() => handleDeleteDraftEvent(draft.id)}
-                                  className="w-10 shrink-0 bg-red-50 border border-red-100 hover:bg-red-100 text-red-500 font-bold p-1.5 text-[11px] rounded-lg transition-colors flex items-center justify-center min-h-[32px]"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="flex flex-col items-center justify-center text-center py-6 px-4 bg-gray-100 rounded-xl border border-dashed border-gray-300">
-                          <History className="w-8 h-8 text-gray-300 mb-2" />
-                          <p className="text-[11px] font-bold text-gray-400">No pending events.</p>
-                          <p className="text-[10px] text-gray-400 mt-0.5">Select an action above to draft an event at the current video timestamp.</p>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Vertical Event Thread Remapped to Screen Floor -> Empty placeholder rendering null as component was relocated natively globally component above! */}
-
-                  </div>
-
-                  <div data-tour="rosters-panel" className={cn(isExpandedLayout ? "flex flex-col h-full relative" : "absolute inset-0", (rightPanelTab === 'rosters' || isExpandedLayout) ? "block" : "hidden", "overflow-y-auto custom-scrollbar p-4 space-y-8 bg-gray-50")}>
-                    {(rightPanelTab === 'rosters' || isExpandedLayout) && (() => {
-                      const pastEvents = activeTrackingEvents.filter(e => e.videoTime <= currentTime);
-                      const liveStats = new Map<string, { g: number, a: number, plus: number, minus: number }>();
-
-                      const activePlayers = new Set<string>();
-                      const seenSubIn = new Set<string>();
-                      const sortedEvents = [...pastEvents].sort((a, b) => a.videoTime - b.videoTime);
-
-                      for (const e of sortedEvents) {
-                        if (!e.playerId) continue;
-                        if (!liveStats.has(e.playerId)) liveStats.set(e.playerId, { g: 0, a: 0, plus: 0, minus: 0 });
-
-                        if (e.type === 'sub_in') { seenSubIn.add(e.playerId); }
-                        else if (e.type === 'sub_out') { if (!seenSubIn.has(e.playerId)) activePlayers.add(e.playerId); }
-                        else { if (!seenSubIn.has(e.playerId)) activePlayers.add(e.playerId); }
-                      }
-
-                      const activeHomeTracking = new Set<string>();
-                      const activeAwayTracking = new Set<string>();
-                      for (const pid of activePlayers) {
-                        if (homeRosterPlayers.some(r => r.playerId === pid)) activeHomeTracking.add(pid);
-                        if (awayRosterPlayers.some(r => r.playerId === pid)) activeAwayTracking.add(pid);
-                      }
-
-                      for (const e of sortedEvents) {
-                        if (e.type === 'sub_in' && e.playerId) {
-                          if (homeRosterPlayers.some(r => r.playerId === e.playerId)) activeHomeTracking.add(e.playerId);
-                          if (awayRosterPlayers.some(r => r.playerId === e.playerId)) activeAwayTracking.add(e.playerId);
-                        }
-                        if (e.type === 'sub_out' && e.playerId) {
-                          activeHomeTracking.delete(e.playerId);
-                          activeAwayTracking.delete(e.playerId);
-                        }
-
-                        if (e.type === 'goal') {
-                          const isHomeGoal = e.teamId === currentGame?.homeTeamId;
-                          const isAwayGoal = e.teamId === currentGame?.awayTeamId;
-                          if (isHomeGoal || isAwayGoal) {
-                            for (const pid of activeHomeTracking) {
-                              if (!liveStats.has(pid)) liveStats.set(pid, { g: 0, a: 0, plus: 0, minus: 0 });
-                              if (isHomeGoal) liveStats.get(pid)!.plus++;
-                              if (isAwayGoal) liveStats.get(pid)!.minus++;
-                            }
-                            for (const pid of activeAwayTracking) {
-                              if (!liveStats.has(pid)) liveStats.set(pid, { g: 0, a: 0, plus: 0, minus: 0 });
-                              if (isAwayGoal) liveStats.get(pid)!.plus++;
-                              if (isHomeGoal) liveStats.get(pid)!.minus++;
-                            }
-                          }
-                        }
-
-                        if (e.playerId && e.type === 'goal') liveStats.get(e.playerId)!.g++;
-                        if (e.playerId && e.type === 'assist') liveStats.get(e.playerId)!.a++;
-                      }
-
-                      // Compute beater control time per player
-                      const controlPeriods = computeControlPeriods(sortedEvents);
-                      const beaterControlTime = new Map<string, { ctrlSec: number, totalSec: number }>();
-
-                      // Build stints for all beaters currently tracked
-                      const allBeaters = [...homeRosterPlayers, ...awayRosterPlayers]
-                        .filter(rp => activePlayerPositions.get(rp.playerId) === 'beater');
-
-                      for (const rp of allBeaters) {
-                        const pid = rp.playerId;
-                        const teamId = homeRosterPlayers.some(r => r.playerId === pid)
-                          ? currentGame?.homeTeamId : currentGame?.awayTeamId;
-
-                        // Build stints from events
-                        const stints: { start: number; end: number }[] = [];
-                        let onField = false;
-                        let stintStart = 0;
-
-                        for (const e of sortedEvents) {
-                          if (e.playerId !== pid) continue;
-                          if (e.type === 'sub_in' && e.position === 'beater') {
-                            if (!onField) { onField = true; stintStart = e.videoTime; }
-                          } else if (e.type === 'sub_out') {
-                            if (onField) { stints.push({ start: stintStart, end: e.videoTime }); onField = false; }
-                          }
-                        }
-                        if (onField) stints.push({ start: stintStart, end: currentTime });
-
-                        // If no sub_in events found, they might have been on from the start
-                        if (stints.length === 0 && activePlayerPositions.get(pid) === 'beater') {
-                          // check if they have any events at all
-                          const hasAnyEvent = sortedEvents.some(e => e.playerId === pid);
-                          if (hasAnyEvent) {
-                            const firstEvent = sortedEvents.find(e => e.playerId === pid);
-                            stints.push({ start: firstEvent?.videoTime || 0, end: currentTime });
-                          }
-                        }
-
-                        // Calculate control time across all stints
-                        let ctrlSec = 0;
-                        let totalSec = 0;
-                        for (const stint of stints) {
-                          totalSec += Math.max(0, stint.end - stint.start);
-                          for (const cp of controlPeriods) {
-                            if (cp.teamId !== teamId) continue;
-                            const overlapStart = Math.max(stint.start, cp.startTime);
-                            const overlapEnd = Math.min(stint.end, cp.endTime ?? currentTime);
-                            if (overlapEnd > overlapStart) ctrlSec += (overlapEnd - overlapStart);
-                          }
-                        }
-
-                        beaterControlTime.set(pid, { ctrlSec: Math.round(ctrlSec), totalSec: Math.round(totalSec) });
-                      }
-
-                      // Compute seeker total seeking time
-                      const seekerTime = new Map<string, number>();
-                      const allSeekers = [...homeRosterPlayers, ...awayRosterPlayers]
-                        .filter(rp => activePlayerPositions.get(rp.playerId) === 'seeker');
-
-                      for (const rp of allSeekers) {
-                        const pid = rp.playerId;
-                        let onField = false;
-                        let stintStart = 0;
-                        let totalSec = 0;
-
-                        for (const e of sortedEvents) {
-                          if (e.playerId !== pid) continue;
-                          if (e.type === 'sub_in' && e.position === 'seeker') {
-                            if (!onField) { onField = true; stintStart = e.videoTime; }
-                          } else if (e.type === 'sub_out') {
-                            if (onField) { totalSec += Math.max(0, e.videoTime - stintStart); onField = false; }
-                          }
-                        }
-                        if (onField) totalSec += Math.max(0, currentTime - stintStart);
-
-                        // If no sub_in events found, they might have been on from the start
-                        if (totalSec === 0 && activePlayerPositions.get(pid) === 'seeker') {
-                          const hasAnyEvent = sortedEvents.some(e => e.playerId === pid);
-                          if (hasAnyEvent) {
-                            const firstEvent = sortedEvents.find(e => e.playerId === pid);
-                            totalSec = Math.max(0, currentTime - (firstEvent?.videoTime || 0));
-                          }
-                        }
-                        seekerTime.set(pid, totalSec);
-                      }
-
-                      const isAuthToRecord = !!(user && (canModerate || (currentVideo as any)?.authorId === user.uid));
-                      return (
-                        <div className="flex flex-col gap-6 w-full max-w-full">
-                          <div className="grid grid-cols-2 gap-4 border-b border-gray-200 pb-2">
-                            <h4 className="text-xs font-bold uppercase tracking-widest text-[#FF4B4B] text-center truncate px-1" title={teams.find(t => t.id === currentGame?.homeTeamId)?.name}>
-                              {teams.find(t => t.id === currentGame?.homeTeamId)?.name || 'Home'}
-                            </h4>
-                            <h4 className="text-xs font-bold uppercase tracking-widest text-blue-500 text-center truncate px-1" title={teams.find(t => t.id === currentGame?.awayTeamId)?.name}>
-                              {teams.find(t => t.id === currentGame?.awayTeamId)?.name || 'Away'}
-                            </h4>
-                          </div>
-
-                          <div className="flex flex-col gap-4">
-                            {['chaser', 'keeper', 'beater', 'seeker'].map(pos => {
-                              const homePlrs = homeRosterPlayers.filter(rp => activePlayerPositions.has(rp.playerId) && activePlayerPositions.get(rp.playerId) === pos).sort((a, b) => (a.player?.lastName || '').localeCompare(b.player?.lastName || ''));
-                              const awayPlrs = awayRosterPlayers.filter(rp => activePlayerPositions.has(rp.playerId) && activePlayerPositions.get(rp.playerId) === pos).sort((a, b) => (a.player?.lastName || '').localeCompare(b.player?.lastName || ''));
-
-                              if (homePlrs.length === 0 && awayPlrs.length === 0) return null;
-
-                              homePlrs.sort((a, b) => (a.player?.lastName || '').localeCompare(b.player?.lastName || ''));
-                              awayPlrs.sort((a, b) => (a.player?.lastName || '').localeCompare(b.player?.lastName || ''));
-
-                              const maxRows = Math.max(homePlrs.length, awayPlrs.length);
-
-                              return (
-                                <div
-                                  key={pos}
-                                  className="flex flex-col gap-2 relative bg-transparent rounded-lg transition-colors min-h-[50px] p-1"
-                                  onDragOver={e => { e.preventDefault(); e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.05)'; }}
-                                  onDragLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; }}
-                                  onDrop={e => {
-                                    e.preventDefault();
-                                    e.currentTarget.style.backgroundColor = 'transparent';
-                                    if (!isAuthToRecord) return;
-                                    try {
-                                      const data = JSON.parse(e.dataTransfer.getData('text/plain'));
-                                      if (data.playerId && data.teamId) {
-                                        const eType = 'sub_in';
-                                        handleCreateDraftEvent(eType, data.teamId, data.playerId, null, pos as PositionType);
-                                      }
-                                    } catch (err) { }
-                                  }}
-                                >
-                                  <div className="text-[9px] uppercase font-bold text-gray-400 text-center tracking-widest bg-gray-100 py-0.5 rounded shadow-inner mb-1 pointer-events-none">
-                                    {pos}
-                                  </div>
-                                  {Array.from({ length: maxRows }).map((_, i) => {
-                                    const hp = homePlrs[i];
-                                    const ap = awayPlrs[i];
-
-                                    const renderPlayer = (rp: any | undefined, isBench = false) => {
-                                      if (!rp) return <div className="h-full" />;
-                                      const stats = liveStats.get(rp.playerId);
-                                      const plusMinus = (stats?.plus || 0) - (stats?.minus || 0);
-                                      const isBeater = pos === 'beater';
-                                      const isSeeker = pos === 'seeker';
-                                      const bCtrl = beaterControlTime.get(rp.playerId);
-                                      const sTime = seekerTime.get(rp.playerId) || 0;
-                                      return (
-                                        <div
-                                          draggable={isAuthToRecord}
-                                          onDragStart={(e) => {
-                                            if (!isAuthToRecord) { e.preventDefault(); return; }
-                                            e.dataTransfer.setData('text/plain', JSON.stringify({ playerId: rp.playerId, teamId: rp.teamId, source: isBench ? 'bench' : 'active' }))
-                                          }}
-                                          onClick={() => {
-                                            if (!isAuthToRecord) return;
-                                            if (!isBench) {
-                                              if (selectedPlayerId === rp.playerId) {
-                                                setSelectedPlayerId(null);
-                                              } else {
-                                                setSelectedPlayerId(rp.playerId);
-                                                setPopupTimeOffset(0);
-                                              }
-                                            }
-                                          }}
-                                          className={cn(
-                                            "flex flex-col p-2 rounded border shadow-sm w-full transition-all relative z-0",
-                                            !isBench
-                                              ? (isAuthToRecord ? "cursor-pointer active:scale-95 cursor-grab active:cursor-grabbing" : "cursor-default")
-                                              : cn("opacity-60 grayscale-[0.3]", isAuthToRecord ? "cursor-grab active:cursor-grabbing" : "cursor-default"),
-                                            selectedPlayerId === rp.playerId
-                                              ? "bg-slate-900 border-slate-700 shadow-xl"
-                                              : "bg-white/80 border-gray-200 hover:border-gray-400"
-                                          )}
-                                        >
-                                          <div className="overflow-hidden">
-                                            <span className={cn("text-xs font-bold truncate block", selectedPlayerId === rp.playerId ? "text-slate-200" : "text-gray-800")} title={getPlayerShortName(rp.player, rp.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)}>
-                                              {getPlayerShortName(rp.player, rp.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)}
-                                            </span>
-                                          </div>
-                                          <div className={cn("flex items-center gap-1.5 mt-1 text-[9px] font-mono justify-between overflow-hidden", selectedPlayerId === rp.playerId ? "text-slate-400" : "text-gray-500")}>
-                                            {isBeater ? (
-                                              <>
-                                                <span>CTRL {Math.floor((bCtrl?.ctrlSec || 0) / 60)}:{String(Math.round((bCtrl?.ctrlSec || 0) % 60)).padStart(2, '0')}</span>
-                                                <span className={cn("font-bold px-1 rounded-sm",
-                                                  bCtrl && bCtrl.totalSec > 0 && (bCtrl.ctrlSec / bCtrl.totalSec) >= 0.5 ? (selectedPlayerId === rp.playerId ? "text-emerald-400 bg-emerald-900/30" : "text-emerald-600 bg-emerald-50") :
-                                                    bCtrl && bCtrl.totalSec > 0 && (bCtrl.ctrlSec / bCtrl.totalSec) < 0.4 ? (selectedPlayerId === rp.playerId ? "text-red-400 bg-red-900/30" : "text-red-500 bg-red-50") : (selectedPlayerId === rp.playerId ? "text-slate-500" : "text-gray-400")
-                                                )}>
-                                                  {bCtrl && bCtrl.totalSec > 0 ? `${Math.round((bCtrl.ctrlSec / bCtrl.totalSec) * 100)}%` : '—'}
-                                                </span>
-                                              </>
-                                            ) : isSeeker ? (
-                                              <>
-                                                <span>SEEKING {Math.floor(sTime / 60)}:{String(Math.round(sTime % 60)).padStart(2, '0')}</span>
-                                                <span className="text-transparent">—</span>
-                                              </>
-                                            ) : (
-                                              <>
-                                                <div className="flex items-center gap-1.5 shrink-0">
-                                                  <span>{stats?.g || 0}G</span>
-                                                  <span>{stats?.a || 0}A</span>
-                                                </div>
-                                                <span className={cn("font-bold px-1 rounded-sm shrink-0", plusMinus > 0 ? (selectedPlayerId === rp.playerId ? "text-emerald-400 bg-emerald-900/30" : "text-emerald-600 bg-emerald-50") : plusMinus < 0 ? (selectedPlayerId === rp.playerId ? "text-red-400 bg-red-900/30" : "text-red-500 bg-red-50") : (selectedPlayerId === rp.playerId ? "text-slate-500" : "text-gray-400"))}>
-                                                  {plusMinus > 0 ? '+' : ''}{plusMinus}
-                                                </span>
-                                              </>
-                                            )}
-                                          </div>
-
-                                          {selectedPlayerId === rp.playerId && !isBench && (
-                                            <div className="mt-2 pt-2 border-t border-slate-700/50 animate-in slide-in-from-top-2 fade-in" onClick={(e) => e.stopPropagation()}>
-                                              <div className="flex items-center justify-between bg-slate-800 rounded p-1 mb-1.5 shadow-inner">
-                                                <button onClick={(e) => { e.stopPropagation(); setPopupTimeOffset(p => p - 1); }} className="w-5 h-5 flex items-center justify-center bg-slate-700 hover:bg-slate-600 rounded text-slate-300 text-xs font-bold transition-all active:scale-95">-1</button>
-                                                <span className="text-[10px] font-bold text-emerald-400 font-mono tracking-wider tabular-nums">
-                                                  {formatTime(Math.max(0, (player ? player.getCurrentTime() : 0) + popupTimeOffset))}
-                                                </span>
-                                                <button onClick={(e) => { e.stopPropagation(); setPopupTimeOffset(p => p + 1); }} className="w-5 h-5 flex items-center justify-center bg-slate-700 hover:bg-slate-600 rounded text-slate-300 text-xs font-bold transition-all active:scale-95">+1</button>
-                                              </div>
-                                              <div className="flex flex-col gap-1">
-                                                {(!isBeater && !isSeeker) && (
-                                                  <div className="flex gap-1 items-stretch">
-                                                    <button onClick={(e) => { e.stopPropagation(); handleCreateDraftEvent('goal', rp.teamId, rp.playerId, null, null, Math.max(0, (player ? (function(){try{return player.getCurrentTime()}catch(e){return 0}})() : 0) + popupTimeOffset)); setSelectedPlayerId(null); }} className="flex-[1.5] py-1 bg-emerald-500 hover:bg-emerald-400 text-white rounded-lg font-black tracking-widest text-[10px] shadow-[0_2px_0_theme(colors.emerald.700)] active:shadow-none active:translate-y-[2px] transition-all">GOAL</button>
-                                                    <button onClick={(e) => { e.stopPropagation(); handleCreateDraftEvent('shot', rp.teamId, rp.playerId, null, null, Math.max(0, (player ? (function(){try{return player.getCurrentTime()}catch(e){return 0}})() : 0) + popupTimeOffset)); setSelectedPlayerId(null); }} className="flex-1 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg font-bold text-[9px] border border-slate-700 transition-colors">SHOT</button>
-                                                    <button onClick={(e) => { e.stopPropagation(); handleCreateDraftEvent('attempt', rp.teamId, rp.playerId, null, null, Math.max(0, (player ? (function(){try{return player.getCurrentTime()}catch(e){return 0}})() : 0) + popupTimeOffset)); setSelectedPlayerId(null); }} className="flex-1 py-1 bg-slate-800 hover:bg-violet-900/40 text-violet-400 rounded-lg font-bold text-[8px] border border-slate-700 transition-colors">ATTEMPT</button>
-                                                    <button onClick={(e) => { e.stopPropagation(); handleCreateDraftEvent('miss_ko', rp.teamId, rp.playerId, null, null, Math.max(0, (player ? (function(){try{return player.getCurrentTime()}catch(e){return 0}})() : 0) + popupTimeOffset)); setSelectedPlayerId(null); }} className="flex-1 py-1 bg-slate-800 hover:bg-fuchsia-900/40 text-fuchsia-400 rounded-lg font-bold text-[8px] border border-slate-700 transition-colors">MISS (KO)</button>
-                                                  </div>
-                                                )}
-                                                <div className="flex gap-1 border-t border-slate-700/50 pt-1">
-                                                  <button onClick={(e) => { e.stopPropagation(); handleCreateDraftEvent('sub_out', rp.teamId, rp.playerId, null, null, Math.max(0, (player ? (function(){try{return player.getCurrentTime()}catch(e){return 0}})() : 0) + popupTimeOffset)); setSelectedPlayerId(null); }} className="flex-1 py-1.5 bg-slate-800 hover:bg-red-900/40 text-red-400 rounded-lg font-bold text-[8px] border border-slate-700 transition-colors">SUB OUT</button>
-                                                  <button onClick={(e) => { e.stopPropagation(); handleCreateDraftEvent('sub_in', rp.teamId, rp.playerId, null, null, Math.max(0, (player ? (function(){try{return player.getCurrentTime()}catch(e){return 0}})() : 0) + popupTimeOffset)); setSelectedPlayerId(null); }} className="flex-1 py-1.5 bg-slate-800 hover:bg-blue-900/40 text-blue-400 rounded-lg font-bold text-[8px] border border-slate-700 transition-colors">SUB IN</button>
-                                                </div>
-                                              </div>
-                                            </div>
-                                          )}
-                                        </div>
-                                      );
-                                    };
-
-                                    return (
-                                      <div key={i} className="grid grid-cols-2 gap-4">
-                                        {renderPlayer(hp)}
-                                        {renderPlayer(ap)}
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              );
-                            })}
-                            {/* Bench Section */}
-                            {(() => {
-                              const homeBench = homeRosterPlayers.filter(rp => !activePlayerPositions.has(rp.playerId)).sort((a, b) => (a.player?.lastName || '').localeCompare(b.player?.lastName || ''));
-                              const awayBench = awayRosterPlayers.filter(rp => !activePlayerPositions.has(rp.playerId)).sort((a, b) => (a.player?.lastName || '').localeCompare(b.player?.lastName || ''));
-
-                              if (homeBench.length === 0 && awayBench.length === 0) return null;
-
-                              const maxBenchRows = Math.max(homeBench.length, awayBench.length);
-
-                              const renderBenchPlayer = (rp: any | undefined) => {
-                                if (!rp) return <div className="h-full" />;
-                                const stats = liveStats.get(rp.playerId);
-                                const plusMinus = (stats?.plus || 0) - (stats?.minus || 0);
-
-                                return (
-                                  <div
-                                    draggable={isAuthToRecord}
-                                    onDragStart={(e) => {
-                                      if (!isAuthToRecord) { e.preventDefault(); return; }
-                                      e.dataTransfer.setData('text/plain', JSON.stringify({ playerId: rp.playerId, teamId: rp.teamId, source: 'bench' }))
-                                    }}
-                                    className={cn("flex flex-col p-2 bg-gray-50/50 rounded border border-gray-200 shadow-sm w-full overflow-hidden opacity-60 hover:bg-gray-100/50 transition-colors", isAuthToRecord ? "cursor-grab active:cursor-grabbing" : "cursor-default")}
-                                  >
-                                    <span className="text-[10px] font-bold truncate text-gray-500" title={getPlayerShortName(rp.player, rp.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)}>
-                                      {getPlayerShortName(rp.player, rp.teamId === currentGame?.homeTeamId ? homeRosterPlayers : awayRosterPlayers)}
-                                    </span>
-                                    <div className="flex items-center gap-1.5 mt-0.5 text-[8px] font-mono text-gray-400 justify-between">
-                                      <div className="flex items-center gap-1.5">
-                                        <span>{stats?.g || 0}G</span>
-                                        <span>{stats?.a || 0}A</span>
-                                      </div>
-                                      <span>{plusMinus > 0 ? '+' : ''}{plusMinus}</span>
-                                    </div>
-                                  </div>
-                                );
-                              };
-
-                              return (
-                                <div
-                                  className="flex flex-col gap-2 relative mt-4 bg-transparent rounded-lg transition-colors p-1"
-                                  onDragOver={e => { e.preventDefault(); e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.05)'; }}
-                                  onDragLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; }}
-                                  onDrop={e => {
-                                    e.preventDefault();
-                                    e.currentTarget.style.backgroundColor = 'transparent';
-                                    if (!isAuthToRecord) return;
-                                    try {
-                                      const data = JSON.parse(e.dataTransfer.getData('text/plain'));
-                                      if (data.playerId && data.teamId && data.source === 'active') {
-                                        handleCreateDraftEvent('sub_out', data.teamId, data.playerId, null, null);
-                                      }
-                                    } catch (err) { }
-                                  }}
-                                >
-                                  <div className="text-[9px] uppercase font-bold text-gray-400 text-center tracking-widest bg-gray-100 py-0.5 rounded shadow-inner mb-1 pointer-events-none">
-                                    Bench (Drag Here to Sub Out)
-                                  </div>
-                                  {Array.from({ length: maxBenchRows }).map((_, i) => (
-                                    <div key={i} className="grid grid-cols-2 gap-4">
-                                      {renderBenchPlayer(homeBench[i])}
-                                      {renderBenchPlayer(awayBench[i])}
-                                    </div>
-                                  ))}
-                                </div>
-                              );
-                            })()}
-
-                            {activePlayerPositions.size === 0 && (
-                              <div className="text-center py-8 text-gray-400 text-sm font-medium italic">
-                                No players currently checked in.
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })()}
-                  </div>
-
-                  <div data-tour="momentum-panel" className={cn(isExpandedLayout ? "flex flex-col h-full relative" : "absolute inset-0", (rightPanelTab === 'momentum' || isExpandedLayout) ? "block" : "hidden", "overflow-y-auto custom-scrollbar bg-white")}>
-                    {(rightPanelTab === 'momentum' || isExpandedLayout) && <MatchMomentumView events={enrichedEvents} teams={teams} homeTeamId={currentGame?.homeTeamId || ''} awayTeamId={currentGame?.awayTeamId || ''} currentTime={player?.getCurrentTime() || 0} onSeek={(t) => player?.seekTo(t, true)} />}
-                  </div>
-                </div>
-
-                <div data-tour="switch-video" className="px-3 py-2 bg-white border-t border-gray-200 shrink-0">
-                  <button
-                    onClick={() => setCurrentVideo(null)}
-                    className="w-full py-1 text-xs font-bold uppercase tracking-wider text-gray-400 hover:text-gray-900 flex items-center justify-center gap-2 transition-colors"
-                  >
-                    <ChevronLeft className="w-3.5 h-3.5" />
-                    Switch Video
-                  </button>
-                </div>
               </div>
             </div>
+
+            {/* ---- Ungrouped views, in the order they were popped out ---- */}
+            {outWatchPanels.map(key => {
+              const meta = watchPanelMeta(key);
+              const bothHalvesOut = outWatchPanels.includes('roster_home') && outWatchPanels.includes('roster_away');
+              return (
+                <div
+                  key={key}
+                  style={{ '--panel-w': `${WATCH_PANEL_WIDTH[key]}px` } as React.CSSProperties}
+                  className="shrink-0 w-full lg:w-[var(--panel-w)] h-[70vh] lg:h-full min-h-0 bg-white border border-gray-200 rounded-2xl overflow-hidden flex flex-col"
+                >
+                  <div className="px-2 py-1.5 border-b border-gray-200 bg-gray-50/50 flex items-center gap-1 shrink-0">
+                    <span className="flex items-center gap-1.5 min-w-0 flex-1 text-[11px] font-bold uppercase tracking-wider text-gray-600" title={meta.label}>
+                      {meta.icon}
+                      <span className="truncate">{meta.label}</span>
+                      {key === 'record' && draftEvents.length > 0 && (
+                        <span className="flex min-w-4 h-4 items-center justify-center bg-emerald-500 text-white text-[9px] font-bold rounded-full px-1 shrink-0">{draftEvents.length}</span>
+                      )}
+                    </span>
+                    {key === 'rosters' && (
+                      <button onClick={splitRosterPanel} title="Split into one view per team" className="p-1 rounded text-gray-400 hover:text-gray-800 hover:bg-gray-200/70 transition-colors shrink-0">
+                        <Columns2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                    {(key === 'roster_home' || key === 'roster_away') && bothHalvesOut && (
+                      <button onClick={mergeRosterPanels} title="Merge both teams back into one view" className="p-1 rounded text-gray-400 hover:text-gray-800 hover:bg-gray-200/70 transition-colors shrink-0">
+                        <Merge className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                    <button onClick={() => regroupWatchPanel(key)} title="Move back into the tab group" className="p-1 rounded text-gray-400 hover:text-gray-800 hover:bg-gray-200/70 transition-colors shrink-0">
+                      <Minimize2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <div className="flex-1 min-h-0 relative">
+                    {renderWatchPanelBody(key)}
+                  </div>
+                </div>
+              );
+            })}
+
+            {/* ---- The tab group. Sized to its widest member so switching tabs
+                    never moves anything. ---- */}
+            {groupedWatchTabs.length > 0 && (
+              <div
+                style={{ '--panel-w': `${watchGroupWidth}px` } as React.CSSProperties}
+                className="shrink-0 w-full lg:w-[var(--panel-w)] h-[70vh] lg:h-full min-h-0 bg-white border border-gray-200 rounded-2xl overflow-hidden flex flex-col"
+              >
+                <div className="border-b border-gray-200 bg-gray-50/50 shrink-0">
+                  <div data-tour="panel-tabs" className="flex w-full">
+                    {groupedWatchTabs.map(t => {
+                      const isActive = activeWatchTab === t.key;
+                      return (
+                        <div
+                          key={t.key}
+                          data-tour={t.tour}
+                          onClick={() => setRightPanelTab(t.key)}
+                          className={cn(
+                            "group relative flex-1 min-w-0 px-2 py-2.5 text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer select-none transition-colors border-b-2",
+                            isActive ? cn("bg-white", t.activeClass) : "border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                          )}
+                        >
+                          {t.icon}
+                          <span className="truncate">{t.key === 'rosters' && groupedRosterSides.length === 1 ? watchPanelMeta(groupedRosterSides[0] === 'home' ? 'roster_home' : 'roster_away').label : t.label}</span>
+                          {t.key === 'record' && draftEvents.length > 0 && (
+                            <span className="flex min-w-4 h-4 items-center justify-center bg-emerald-500 text-white text-[9px] font-bold rounded-full px-1 shrink-0">{draftEvents.length}</span>
+                          )}
+                          <button
+                            onClick={(e) => { e.stopPropagation(); ungroupWatchTab(t.key); }}
+                            title="Give this panel its own view"
+                            className={cn(
+                              "absolute top-0 right-0 p-1 rounded text-gray-300 hover:text-gray-800 hover:bg-gray-200/70 transition-all group-hover:opacity-100",
+                              isActive ? "opacity-60" : "opacity-0"
+                            )}
+                          >
+                            <PanelRightOpen className="w-3 h-3" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div className="flex-1 min-h-0 relative">
+                  {activeWatchTab === 'live_events' && renderEventsBody()}
+                  {activeWatchTab === 'record' && renderRecordBody()}
+                  {activeWatchTab === 'rosters' && renderRostersBody(groupedRosterSides)}
+                  {activeWatchTab === 'momentum' && renderMomentumBody()}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </main>
