@@ -23,6 +23,13 @@ Seekers are dedicated to catching the flag (snitch). Their stats are focused ent
 
 *   **Flag View**: A single, comprehensive view detailing games played, flag catches, opponent catches, catch percentage, average time on pitch before a catch, time from flag release, team bludger control during their shifts, and game-winning catches.
 
+## Win Shares (All Positions)
+A cross-position accounting metric that divides each team's inferred wins among its players. Unlike every view above, it draws only on *pristine* games — both sides complete **with substitutions** — and ignores the situational (bludger control / flag state) filters, because a slice of a game does not add back up to a win. Full derivation in [`docs/win-shares.md`](../../docs/win-shares.md).
+
+*   **Leaders**: The cross-position leaderboard — WS, OWS, DWS, WS/20, and the minutes split across chaser/keeper, beater and seeker time. Filterable by position group, since WS/20 is only comparable within one.
+*   **Production**: The model's internals — points produced, possessions used, marginal offense and defense, flag catches for and against, and the pace-adjusted points-per-win used for that player's team.
+*   **Team**: Inferred W-L records, points for/against, pace, expected wins from point differential, and the calibration check (team Win Shares minus actual wins).
+
 ## Standard UI Components
 To ensure consistency across all views, the following components (located in `src/components/ui/StatsTable.tsx`) should be re-used:
 *   `SortHeader`: Standardized column headers with sorting chevrons.

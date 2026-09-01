@@ -117,6 +117,7 @@ import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import QuadballStatsView from './components/QuadballStatsView';
 import BeaterStatsView from './components/BeaterStatsView';
 import SeekerStatsView from './components/SeekerStatsView';
+import WinSharesView from './components/WinSharesView';
 import MatchMomentumView from './components/MatchMomentumView';
 import PlayerProfileView from './components/PlayerProfileView';
 import TeamProfileView from './components/TeamProfileView';
@@ -5991,7 +5992,7 @@ export default function App() {
   };
 
   // Stats Filter State
-  const [statsSubView, setStatsSubView] = useState<'quadball' | 'beaters' | 'seekers' | 'gamecast'>((initialParams.get('sport') as any) || 'quadball');
+  const [statsSubView, setStatsSubView] = useState<'quadball' | 'beaters' | 'seekers' | 'winshares' | 'gamecast'>((initialParams.get('sport') as any) || 'quadball');
   const [statsFilter, setStatsFilter] = useState<CompletionScope>(parseScopeParam(initialParams.get('scope') || initialParams.get('verify')));
   const [statsTeamIds, setStatsTeamIds] = useState<string[]>(splitParam(initialParams, 'teams'));
   const [statsSearch, setStatsSearch] = useState<string>(initialParams.get('q') || '');
@@ -11067,6 +11068,7 @@ export default function App() {
                 <StatsTabButton isFirst active={statsSubView === 'quadball'} onClick={() => setStatsSubView('quadball')} label="Quadball" activeClass="bg-emerald-600 text-white" />
                 <StatsTabButton active={statsSubView === 'beaters'} onClick={() => setStatsSubView('beaters')} label="Dodgeball" activeClass="bg-neutral-900 text-white" />
                 <StatsTabButton active={statsSubView === 'seekers'} onClick={() => setStatsSubView('seekers')} label="Flag" activeClass="bg-yellow-400 text-black" />
+                <StatsTabButton active={statsSubView === 'winshares'} onClick={() => setStatsSubView('winshares')} label="Win Shares" activeClass="bg-indigo-600 text-white" />
               </StatsTabSelector>
               {/* With Partial = every game with at least one side complete, counting only the
                   complete side. Complete = both sides done. */}
@@ -11120,7 +11122,7 @@ export default function App() {
                 tall enough to bury the table below the fold before they've even used it. */}
             {statsFiltersExpanded && (
               <StatsFilters
-                viewType={statsSubView as 'quadball' | 'beaters' | 'seekers'}
+                viewType={statsSubView as 'quadball' | 'beaters' | 'seekers' | 'winshares'}
                 leagueDivisions={statsLeagueDivs} onLeagueDivisionChange={setStatsLeagueDivs}
                 leagues={leagues}
                 years={statsSelectedYears} onYearChange={setStatsSelectedYears}
@@ -11194,6 +11196,22 @@ export default function App() {
                 bludgerControlMode={bludgerControlMode}
                 flagFilter={statsFlagFilter}
                 onPlayerSelect={handlePlayerProfileClick}
+              />
+            ) : statsSubView === 'winshares' ? (
+              <WinSharesView
+                players={statsPlayers}
+                events={dashboardEvents}
+                teams={statsTeams}
+                games={dashboardGames}
+                seasons={statsSeasons}
+                statsFilter={statsFilter}
+                teamIds={statsTeamIds}
+                search={statsSearch}
+                minGames={statsMinGames}
+                bludgerControlMode={bludgerControlMode}
+                flagFilter={statsFlagFilter}
+                onPlayerSelect={handlePlayerProfileClick}
+                onTeamSelect={handleTeamProfileClick}
               />
             ) : null}
           </div>

@@ -35,7 +35,7 @@ export interface StatsFiltersProps {
   teams: { id: string; name: string; division?: string }[];
   
   // View identifier to customize options if needed
-  viewType: 'quadball' | 'beaters' | 'seekers';
+  viewType: 'quadball' | 'beaters' | 'seekers' | 'winshares';
 }
 
 const selectBase = 'appearance-none pl-3 pr-7 py-1.5 rounded-lg text-xs font-medium outline-none cursor-pointer transition-all duration-150 bg-white text-gray-700 border border-gray-200 hover:border-gray-300 focus:ring-1 focus:ring-red-500/50 focus:border-red-500/50';

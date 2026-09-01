@@ -76,7 +76,7 @@ function isPlaceholderId(pid: string): boolean {
   return PLACEHOLDER_ID_LOWER.has(pid.trim().toLowerCase());
 }
 
-function isValidPlayerId(pid: string | undefined | null): boolean {
+export function isValidPlayerId(pid: string | undefined | null): boolean {
   if (!pid) return false;
   const trimmed = pid.trim();
   return trimmed.length > 0 && !isPlaceholderId(trimmed);
@@ -350,7 +350,7 @@ export interface AdvancedPlayerStats {
   points: number;
 }
 
-interface StintRecord {
+export interface StintRecord {
   playerId: string;
   teamId: string;
   startTime: number;
@@ -403,7 +403,7 @@ export function computeGameClockIntervals(gameEvents: GameEvent[]): [number, num
  * Get total game-clock seconds within a [start, end] video-time window,
  * accounting for pauses.
  */
-function getGameMinutesInWindow(
+export function getGameMinutesInWindow(
   clockIntervals: [number, number][],
   windowStart: number,
   windowEnd: number
@@ -490,7 +490,7 @@ function getFilteredSecondsInWindow(
  * Determine which players are "on field" at a given video time,
  * by checking the computed stint records.
  */
-function getActivePlayersAtTime(
+export function getActivePlayersAtTime(
   stints: StintRecord[],
   videoTime: number,
   positionFilter?: string
@@ -509,7 +509,7 @@ function getActivePlayersAtTime(
  * Build stint records for each player in a game — periods when they were on field.
  * Each stint has a start and end video time. Infers game starters from events.
  */
-function computePlayerStints(
+export function computePlayerStints(
   gameEvents: GameEvent[],
   teamId: string,
   allTeamPlayerIds: Set<string>,
