@@ -57,7 +57,11 @@ import {
   Columns2,
   Merge,
   Layers,
-  PanelRightOpen
+  PanelRightOpen,
+  Archive,
+  Youtube,
+  ExternalLink,
+  Users
 } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
 import {
@@ -228,6 +232,73 @@ function getSeasonDisplayName(
   if (season.year) parts.push(season.year);
   
   return parts.length > 0 ? parts.join(' ') : (season.name || season.id);
+}
+
+/** Format a tournament for display: "<year> - <name> - <division?>"
+ *  e.g. "2024 - US Quadball Cup - Club". Tournament names repeat year over year
+ *  (the same Cup, Regionals, etc.), so year (and division, when set) disambiguate them. */
+function getTournamentDisplayName(t: Pick<Tournament, 'name' | 'year' | 'division'>): string {
+  const parts: string[] = [];
+  if (t.year) parts.push(t.year);
+  parts.push(t.name);
+  if (t.division) parts.push(t.division);
+  return parts.join(' - ');
+}
+
+/** A game can be associated with a tournament and/or a season directly. Where both are set and
+ *  disagree, the game's own season wins — the tournament's season is only ever a backup for
+ *  when the game doesn't carry one itself. Everything that needs "the" season for a game
+ *  (roster lookups, year derivation, completeness checks) should resolve it through here rather
+ *  than reading game.seasonId directly, so they all agree with each other. */
+function resolveGameSeasonId(
+  game: Pick<Game, 'seasonId' | 'tournamentId'>,
+  tournaments: Tournament[]
+): string | undefined {
+  if (game.seasonId) return game.seasonId;
+  if (game.tournamentId) {
+    const t = tournaments.find(tt => tt.id === game.tournamentId);
+    if (t?.seasonId) return t.seasonId;
+  }
+  return undefined;
+}
+
+/** Resolve a game's year: its own date first, then its resolved season's year (see
+ *  resolveGameSeasonId), then its tournament's own year/startDate for a tournament that isn't
+ *  linked to any season doc at all. Returns null if nothing resolves. */
+function deriveGameYear(
+  game: Pick<Game, 'date' | 'tournamentId' | 'seasonId'>,
+  seasons: Season[],
+  tournaments: Tournament[]
+): number | null {
+  if (game.date) {
+    const y = new Date(game.date).getFullYear();
+    if (!Number.isNaN(y)) return y;
+  }
+  const effectiveSeasonId = resolveGameSeasonId(game, tournaments);
+  if (effectiveSeasonId) {
+    const s = seasons.find(ss => ss.id === effectiveSeasonId);
+    const sy = s?.year ? parseInt(s.year, 10) : NaN;
+    if (!Number.isNaN(sy)) return sy;
+  }
+  if (game.tournamentId) {
+    const t = tournaments.find(tt => tt.id === game.tournamentId);
+    const ty = t?.year ? parseInt(t.year, 10) : (t?.startDate ? new Date(t.startDate).getFullYear() : NaN);
+    if (!Number.isNaN(ty)) return ty;
+  }
+  return null;
+}
+
+/** Games from before the 2020 rules overhaul are "legacy" — kept out of public stats and
+ *  visible only through an admin's Legacy Mode (see legacyMode / effectiveLegacyMode). A game
+ *  whose year can't be resolved at all is treated as legacy too — every such game found so far
+ *  was a placeholder left by the old bulk import, never a live-tracked game merely missing a date. */
+function isLegacyGame(
+  game: Pick<Game, 'date' | 'tournamentId' | 'seasonId'>,
+  seasons: Season[],
+  tournaments: Tournament[]
+): boolean {
+  const year = deriveGameYear(game, seasons, tournaments);
+  return year === null || year < 2020;
 }
 
 interface Roster {
@@ -885,8 +956,8 @@ interface ManagementViewProps {
   onAddLeague: (name: string, divisions?: string[]) => Promise<string | void | null>;
   onEditLeague: (id: string, newName: string, newDivisions?: string[]) => Promise<void>;
   onDeleteLeague: (id: string) => void;
-  onAddTournament: (name: string, leagueId?: string, division?: string, year?: string, startDate?: string, endDate?: string, location?: string) => Promise<string | void | null>;
-  onEditTournament: (id: string, name: string, leagueId?: string, division?: string, year?: string, startDate?: string, endDate?: string, location?: string) => Promise<void>;
+  onAddTournament: (name: string, seasonId: string, startDate?: string, endDate?: string, location?: string) => Promise<string | void | null>;
+  onEditTournament: (id: string, newName: string, newSeasonId: string, newStartDate?: string, newEndDate?: string, newLocation?: string) => Promise<void>;
   onDeleteTournament: (id: string) => void;
   onAddTeam: (name: string, leagueId?: string, division?: string) => Promise<string | void | null>;
   onAddSeason: (name: string, leagueId: string, division: string | undefined, year: string, description: string) => Promise<string | void | null>;
@@ -898,6 +969,8 @@ interface ManagementViewProps {
   onDeleteTeam: (id: string) => void;
   onDeleteGame: (id: string, tag?: string | null) => void;
   onDeleteVideo: (id: string) => void;
+  onEditVideo: (id: string, newTitle: string, newYoutubeId: string) => Promise<void>;
+  onAddVideo: (youtubeUrlOrId: string, title: string, gameId: string) => Promise<string | null>;
   onDeleteSeason: (id: string) => void;
   onEditSeason: (id: string, newName: string, newLeagueId: string, newDivision: string | undefined, newYear: string, newDescription: string) => Promise<void>;
   onDeletePlayer: (id: string) => void;
@@ -915,8 +988,8 @@ interface ManagementViewProps {
   setActiveTab?: (tab: 'leagues' | 'tournaments' | 'search' | 'teams' | 'seasons' | 'players' | 'rosters' | 'games' | 'videos' | 'roles' | 'events' | 'import' | 'merge') => void;
 }
 
-function GameEditRow({ game: g, seasons, teams, videos, leagues, tournaments, onDeleteGame, onRefreshData, isAdmin }: {
-  game: any; seasons: any[]; teams: any[]; videos: any[]; leagues?: any[]; tournaments?: any[];
+function GameEditRow({ game: g, seasons, teams, videos, leagues, tournaments, rosters, onDeleteGame, onRefreshData, isAdmin }: {
+  game: any; seasons: any[]; teams: any[]; videos: any[]; leagues?: any[]; tournaments?: any[]; rosters?: any[];
   onDeleteGame: (id: string, tag?: string | null) => void;
   onRefreshData?: () => void;
   isAdmin?: boolean;
@@ -935,35 +1008,41 @@ function GameEditRow({ game: g, seasons, teams, videos, leagues, tournaments, on
   const handleTournamentChange = (tId: string) => {
     setTournamentId(tId);
     if (!tId) return;
+    // Convenience pre-fill only — the Season field stays independently editable, and this
+    // never gets saved unless the admin leaves it selected. Read straight off the tournament's
+    // own seasonId link, which is the authoritative source (see resolveGameSeasonId), not a
+    // league+year+division guess that could match the wrong season.
     const t = tournaments?.find(x => x.id === tId);
-    if (t) {
-      if (t.leagueId) setLeagueId(t.leagueId);
-      if (t.division) setDivision(t.division);
-      const matchedSeason = seasons.find(s => s.leagueId === t.leagueId && s.year === t.year && s.division === t.division);
-      if (matchedSeason) setSeasonId(matchedSeason.id);
-    }
+    if (t?.seasonId) setSeasonId(t.seasonId);
   };
 
   const hasChanges = seasonId !== g.seasonId || leagueId !== (g.leagueId || '') || division !== (g.division || '') || tournamentId !== (g.tournamentId || '') || homeTeamId !== g.homeTeamId || awayTeamId !== g.awayTeamId || tag !== (g.tag || '') || date !== (g.date || '');
 
+  // A game can carry both a Tournament and a Season at once — where they disagree, the game's
+  // own season wins and the tournament's is only ever a backup (see resolveGameSeasonId).
+  // Rosters are looked up by exact (teamId, seasonId), so this is also what decides whether one
+  // can ever be found.
+  const effectiveSeasonId = resolveGameSeasonId({ seasonId, tournamentId }, tournaments || []);
+  const hasHomeRoster = !!effectiveSeasonId && !!rosters?.some(r => r.teamId === homeTeamId && r.seasonId === effectiveSeasonId);
+  const hasAwayRoster = !!effectiveSeasonId && !!rosters?.some(r => r.teamId === awayTeamId && r.seasonId === effectiveSeasonId);
+
   const handleSave = async () => {
     setSaving(true);
     try {
-      // 1. Update the individual game document
+      // 1. Update the individual game document. Season and Tournament are independent — a game
+      // can have either, both, or neither. League/Division are only a bare-metadata fallback for
+      // when neither is set; once a Season or Tournament is chosen those become redundant (the
+      // season/tournament is the authority on league+division) so they're cleared.
       const updatePayload: any = {
-        homeTeamId, awayTeamId, tag: tag || null, date: date || null, tournamentId: tournamentId || null
+        homeTeamId, awayTeamId, tag: tag || null, date: date || null,
+        tournamentId: tournamentId || null,
+        seasonId: seasonId || null,
       };
-      
-      if (tournamentId) {
-         updatePayload.seasonId = deleteField();
-         updatePayload.leagueId = deleteField();
-         updatePayload.division = deleteField();
-      } else if (seasonId) {
-         updatePayload.seasonId = seasonId;
+
+      if (seasonId || tournamentId) {
          updatePayload.leagueId = deleteField();
          updatePayload.division = deleteField();
       } else {
-         updatePayload.seasonId = deleteField();
          updatePayload.leagueId = leagueId || null;
          updatePayload.division = division || null;
       }
@@ -977,17 +1056,11 @@ function GameEditRow({ game: g, seasons, teams, videos, leagues, tournaments, on
         const aggData = aggSnap.data().data || [];
         const updatedAgg = aggData.map((entry: any) => {
           if (entry.id !== g.id) return entry;
-          const newEntry = { ...entry, homeTeamId, awayTeamId, tag: tag || null, date: date || null, tournamentId: tournamentId || null };
-          if (tournamentId) {
-             delete newEntry.seasonId;
-             delete newEntry.leagueId;
-             delete newEntry.division;
-          } else if (seasonId) {
-             newEntry.seasonId = seasonId;
+          const newEntry = { ...entry, homeTeamId, awayTeamId, tag: tag || null, date: date || null, tournamentId: tournamentId || null, seasonId: seasonId || null };
+          if (seasonId || tournamentId) {
              delete newEntry.leagueId;
              delete newEntry.division;
           } else {
-             delete newEntry.seasonId;
              newEntry.leagueId = leagueId || null;
              newEntry.division = division || null;
           }
@@ -1013,9 +1086,38 @@ function GameEditRow({ game: g, seasons, teams, videos, leagues, tournaments, on
           <span className="font-mono text-xs bg-gray-100 px-2 py-1 rounded border border-gray-200 text-gray-600">
             {g.id}
           </span>
-          <span className="text-[10px] text-gray-400 bg-gray-50 px-2 py-1 rounded border border-gray-200 hidden md:block">YT: {matchedVideo?.youtubeId || 'No URL attached'}</span>
+          {matchedVideo?.youtubeId ? (
+            <a
+              href={`https://www.youtube.com/watch?v=${matchedVideo.youtubeId}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[10px] text-red-600 hover:text-red-700 bg-red-50 px-2 py-1 rounded border border-red-200 hidden md:flex items-center gap-1 font-bold transition-colors"
+            >
+              <Youtube className="w-3 h-3" /> Watch <ExternalLink className="w-2.5 h-2.5" />
+            </a>
+          ) : (
+            <span className="text-[10px] text-gray-400 bg-gray-50 px-2 py-1 rounded border border-gray-200 hidden md:block">No video attached</span>
+          )}
           {isAdmin && matchedVideo && (
             <span className="text-[10px] text-amber-500 bg-amber-50 px-2 py-1 rounded border border-amber-200 hidden md:block font-mono">VID: {matchedVideo.id}</span>
+          )}
+          {rosters && (
+            <span
+              className={cn(
+                'text-[10px] px-2 py-1 rounded border font-bold hidden md:flex items-center gap-1',
+                !effectiveSeasonId ? 'bg-gray-50 text-gray-400 border-gray-200' :
+                  (hasHomeRoster && hasAwayRoster) ? 'bg-emerald-50 text-emerald-600 border-emerald-200' :
+                    'bg-red-50 text-red-500 border-red-200'
+              )}
+              title={!effectiveSeasonId
+                ? (tournamentId
+                    ? 'Tournament-linked games have no Season ID saved, so a roster can never match — pick a Season instead if you need rosters to resolve.'
+                    : 'No Season selected — rosters can’t be matched without one.')
+                : 'Rosters are matched by exact Team + Season, and only found when tracking a video for this game.'}
+            >
+              <Users className="w-3 h-3" />
+              {!effectiveSeasonId ? 'No Season — Rosters Won’t Match' : `Roster: Home ${hasHomeRoster ? '✓' : '✗'} · Away ${hasAwayRoster ? '✓' : '✗'}`}
+            </span>
           )}
         </div>
         <div className="flex items-center gap-2">
@@ -1046,21 +1148,24 @@ function GameEditRow({ game: g, seasons, teams, videos, leagues, tournaments, on
             className={cn("bg-white border rounded p-1.5 text-xs outline-none focus:border-red-500", tournamentId !== (g.tournamentId || '') ? 'border-amber-400 bg-amber-50/30' : 'border-gray-200')}
           >
             <option value="">None</option>
-            {tournaments?.map((t: any) => <option key={t.id} value={t.id}>{t.division ? `(${t.division}) ` : ''}{t.name}</option>)}
+            {tournaments?.map((t: any) => <option key={t.id} value={t.id}>{getTournamentDisplayName(t)}</option>)}
           </select>
         </div>
-        {!tournamentId && (
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] uppercase font-bold text-gray-400">
+            Season {tournamentId && !seasonId && <span className="text-gray-300 normal-case font-normal">(falls back to tournament's)</span>}
+          </label>
+          <select
+            value={seasonId || ''}
+            onChange={(e) => setSeasonId(e.target.value)}
+            className={cn("bg-white border rounded p-1.5 text-xs outline-none focus:border-red-500", seasonId !== g.seasonId ? 'border-amber-400 bg-amber-50/30' : 'border-gray-200')}
+          >
+            <option value="">None</option>
+            {seasons.map((s: any) => <option key={s.id} value={s.id}>{getSeasonDisplayName(s, leagues)}</option>)}
+          </select>
+        </div>
+        {!tournamentId && !seasonId && (
           <>
-            <div className="flex flex-col gap-1">
-              <label className="text-[10px] uppercase font-bold text-gray-400">Season</label>
-              <select
-                value={seasonId}
-                onChange={(e) => setSeasonId(e.target.value)}
-                className={cn("bg-white border rounded p-1.5 text-xs outline-none focus:border-red-500", seasonId !== g.seasonId ? 'border-amber-400 bg-amber-50/30' : 'border-gray-200')}
-              >
-                {seasons.map((s: any) => <option key={s.id} value={s.id}>{getSeasonDisplayName(s, leagues)}</option>)}
-              </select>
-            </div>
             <div className="flex flex-col gap-1">
               <label className="text-[10px] uppercase font-bold text-gray-400 pl-1">League</label>
               <select
@@ -1297,7 +1402,7 @@ function SeasonEditRow({ season: s, leagues, tournaments, onEditSeason, onDelete
           <label className="text-[10px] uppercase font-bold text-gray-400">Championship Tournament</label>
           <select value={tournamentId} onChange={(e) => setTournamentId(e.target.value)} className={cn("bg-white border rounded p-1.5 text-xs outline-none focus:border-red-500", tournamentId !== (s.tournamentId || '') ? 'border-amber-400 bg-amber-50/30' : 'border-gray-200')}>
             <option value="">None</option>
-            {tournaments?.map((t: any) => <option key={t.id} value={t.id}>{t.division ? `(${t.division}) ` : ''}{t.name}</option>)}
+            {tournaments?.map((t: any) => <option key={t.id} value={t.id}>{getTournamentDisplayName(t)}</option>)}
           </select>
         </div>
         <div className="flex flex-col gap-1">
@@ -1317,6 +1422,223 @@ function SeasonEditRow({ season: s, leagues, tournaments, onEditSeason, onDelete
             <option value="">None</option>
             {leagues.find((l: any) => l.id === leagueId)?.divisions?.map((d: string) => <option key={d} value={d}>{d}</option>)}
           </select>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TabSearchBox({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder: string }) {
+  return (
+    <div className="relative">
+      <Search className="w-3.5 h-3.5 text-gray-300 absolute left-3 top-1/2 -translate-y-1/2" />
+      <input
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="w-full bg-white border border-gray-200 rounded-lg pl-9 pr-8 py-2 text-sm outline-none focus:border-red-500"
+      />
+      {value && (
+        <button
+          onClick={() => onChange('')}
+          title="Clear search"
+          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-600 transition-colors"
+        >
+          <XCircle className="w-4 h-4" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function LeagueEditRow({ league: l, onEditLeague, onDeleteLeague }: {
+  league: League;
+  onEditLeague: (id: string, newName: string, newDivisions?: string[]) => void;
+  onDeleteLeague: (id: string) => void;
+}) {
+  const [name, setName] = useState(l.name || '');
+  const [divisionsStr, setDivisionsStr] = useState((l.divisions || []).join(', '));
+  const [saving, setSaving] = useState(false);
+
+  const originalDivisionsStr = (l.divisions || []).join(', ');
+  const hasChanges = name !== (l.name || '') || divisionsStr !== originalDivisionsStr;
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const divs = divisionsStr.split(',').map(d => d.trim()).filter(Boolean);
+      await onEditLeague(l.id, name, divs.length > 0 ? divs : undefined);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="p-4 flex flex-col gap-3 hover:bg-gray-50/50 transition-colors group border-b border-gray-100 last:border-0">
+      <div className="flex items-center justify-between border-b border-gray-200/50 pb-2">
+        <span className="font-mono text-xs bg-gray-100 px-2 py-1 rounded border border-gray-200 text-gray-600">{l.id}</span>
+        <div className="flex items-center gap-2">
+          {hasChanges && (
+            <button onClick={handleSave} disabled={saving} className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-md transition-all shadow-sm flex items-center gap-1.5 text-[10px] uppercase font-bold disabled:opacity-50">
+              <CheckCircle2 className="w-3 h-3" /> {saving ? 'Saving...' : 'Save'}
+            </button>
+          )}
+          <button onClick={() => { if (confirm(`Delete league ${l.name}?`)) onDeleteLeague(l.id); }} className="px-2 py-1 bg-white border border-gray-200 text-gray-400 hover:text-red-500 hover:border-red-500 hover:bg-red-50 rounded-md transition-all shadow-sm flex items-center gap-1 text-[10px] uppercase font-bold">
+            <Trash2 className="w-3 h-3" /> Delete
+          </button>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] uppercase font-bold text-gray-400">Name</label>
+          <input type="text" value={name} onChange={e => setName(e.target.value)} className={cn("bg-white border rounded p-1.5 text-xs outline-none focus:border-red-500 font-medium", name !== (l.name || '') ? 'border-amber-400 bg-amber-50/30' : 'border-gray-200')} />
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] uppercase font-bold text-gray-400">Divisions <span className="text-gray-300 normal-case font-normal">(comma separated)</span></label>
+          <input type="text" placeholder="e.g. Club, College" value={divisionsStr} onChange={e => setDivisionsStr(e.target.value)} className={cn("bg-white border rounded p-1.5 text-xs outline-none focus:border-red-500 font-medium", divisionsStr !== originalDivisionsStr ? 'border-amber-400 bg-amber-50/30' : 'border-gray-200')} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TournamentEditRow({ tournament: t, seasons, leagues, onEditTournament, onDeleteTournament }: {
+  tournament: Tournament;
+  seasons: Season[];
+  leagues: League[];
+  onEditTournament: (id: string, newName: string, newSeasonId: string, newStartDate?: string, newEndDate?: string, newLocation?: string) => void;
+  onDeleteTournament: (id: string) => void;
+}) {
+  const [name, setName] = useState(t.name || '');
+  const [seasonId, setSeasonId] = useState(t.seasonId || '');
+  const [startDate, setStartDate] = useState(t.startDate || '');
+  const [endDate, setEndDate] = useState(t.endDate || '');
+  const [location, setLocation] = useState(t.location || '');
+  const [saving, setSaving] = useState(false);
+
+  const hasChanges = name !== (t.name || '') || seasonId !== (t.seasonId || '') || startDate !== (t.startDate || '') || endDate !== (t.endDate || '') || location !== (t.location || '');
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await onEditTournament(t.id, name, seasonId, startDate || undefined, endDate || undefined, location || undefined);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="p-4 flex flex-col gap-3 hover:bg-gray-50/50 transition-colors group border-b border-gray-100 last:border-0">
+      <div className="flex items-center justify-between border-b border-gray-200/50 pb-2">
+        <span className="font-mono text-xs bg-gray-100 px-2 py-1 rounded border border-gray-200 text-gray-600">{t.id}</span>
+        <div className="flex items-center gap-2">
+          {hasChanges && (
+            <button onClick={handleSave} disabled={saving} className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-md transition-all shadow-sm flex items-center gap-1.5 text-[10px] uppercase font-bold disabled:opacity-50">
+              <CheckCircle2 className="w-3 h-3" /> {saving ? 'Saving...' : 'Save'}
+            </button>
+          )}
+          <button onClick={() => { if (confirm(`Delete tournament ${t.name}?`)) onDeleteTournament(t.id); }} className="px-2 py-1 bg-white border border-gray-200 text-gray-400 hover:text-red-500 hover:border-red-500 hover:bg-red-50 rounded-md transition-all shadow-sm flex items-center gap-1 text-[10px] uppercase font-bold">
+            <Trash2 className="w-3 h-3" /> Delete
+          </button>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+        <div className="flex flex-col gap-1 md:col-span-2">
+          <label className="text-[10px] uppercase font-bold text-gray-400">Name</label>
+          <input type="text" value={name} onChange={e => setName(e.target.value)} className={cn("bg-white border rounded p-1.5 text-xs outline-none focus:border-red-500 font-medium", name !== (t.name || '') ? 'border-amber-400 bg-amber-50/30' : 'border-gray-200')} />
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] uppercase font-bold text-gray-400">Season</label>
+          <select value={seasonId} onChange={e => setSeasonId(e.target.value)} className={cn("bg-white border rounded p-1.5 text-xs outline-none focus:border-red-500", seasonId !== (t.seasonId || '') ? 'border-amber-400 bg-amber-50/30' : 'border-gray-200')}>
+            <option value="">None</option>
+            {seasons.map(s => <option key={s.id} value={s.id}>{getSeasonDisplayName(s, leagues)}</option>)}
+          </select>
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] uppercase font-bold text-gray-400">Start Date</label>
+          <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className={cn("bg-white border rounded p-1.5 text-xs outline-none focus:border-red-500", startDate !== (t.startDate || '') ? 'border-amber-400 bg-amber-50/30' : 'border-gray-200')} />
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] uppercase font-bold text-gray-400">End Date</label>
+          <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className={cn("bg-white border rounded p-1.5 text-xs outline-none focus:border-red-500", endDate !== (t.endDate || '') ? 'border-amber-400 bg-amber-50/30' : 'border-gray-200')} />
+        </div>
+      </div>
+      <div className="flex flex-col gap-1">
+        <label className="text-[10px] uppercase font-bold text-gray-400">Location</label>
+        <input type="text" placeholder="e.g. Round Rock, TX" value={location} onChange={e => setLocation(e.target.value)} className={cn("bg-white border rounded p-1.5 text-xs outline-none focus:border-red-500 font-medium w-full", location !== (t.location || '') ? 'border-amber-400 bg-amber-50/30' : 'border-gray-200')} />
+      </div>
+    </div>
+  );
+}
+
+function VideoEditRow({ video: v, games, teams, onEditVideo, onDeleteVideo }: {
+  video: Video;
+  games: Game[];
+  teams: Team[];
+  onEditVideo: (id: string, newTitle: string, newYoutubeId: string) => void;
+  onDeleteVideo: (id: string) => void;
+}) {
+  const [title, setTitle] = useState(v.title || '');
+  const [youtubeId, setYoutubeId] = useState(v.youtubeId || '');
+  const [saving, setSaving] = useState(false);
+
+  const hasChanges = title !== (v.title || '') || youtubeId !== (v.youtubeId || '');
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await onEditVideo(v.id, title, youtubeId);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const game = games.find(g => g.id === v.gameId);
+  const homeTeam = game ? teams.find(t => t.id === game.homeTeamId) : undefined;
+  const awayTeam = game ? teams.find(t => t.id === game.awayTeamId) : undefined;
+  const gameLabel = game ? `${homeTeam?.name || game.homeTeamId} vs ${awayTeam?.name || game.awayTeamId}` : 'No matching game found';
+
+  return (
+    <div className="p-4 flex flex-col gap-3 hover:bg-gray-200/50 transition-colors group border-b border-gray-100 last:border-0">
+      <div className="flex items-center justify-between border-b border-gray-200/50 pb-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="font-mono text-[10px] bg-gray-100 px-2 py-1 rounded border border-gray-200 text-gray-600">ID: {v.id}</span>
+          {youtubeId ? (
+            <a
+              href={`https://www.youtube.com/watch?v=${youtubeId}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[10px] text-red-600 hover:text-red-700 bg-red-50 px-2 py-1 rounded border border-red-200 flex items-center gap-1 font-bold transition-colors"
+            >
+              <Youtube className="w-3 h-3" /> Watch <ExternalLink className="w-2.5 h-2.5" />
+            </a>
+          ) : (
+            <span className="text-[10px] text-gray-400 bg-gray-50 px-2 py-1 rounded border border-gray-200">No YouTube ID</span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {hasChanges && (
+            <button onClick={handleSave} disabled={saving} className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-md transition-all shadow-sm flex items-center gap-1.5 text-[10px] uppercase font-bold disabled:opacity-50">
+              <CheckCircle2 className="w-3 h-3" /> {saving ? 'Saving...' : 'Save'}
+            </button>
+          )}
+          <button onClick={() => onDeleteVideo(v.id)} className="px-2 py-1 bg-white border border-gray-200 text-gray-400 hover:text-red-500 hover:border-red-500 hover:bg-red-50 rounded-md transition-all shadow-sm flex items-center gap-1 text-[10px] uppercase font-bold">
+            <Trash2 className="w-3 h-3" /> Delete
+          </button>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] uppercase font-bold text-gray-400">Title</label>
+          <input type="text" value={title} onChange={e => setTitle(e.target.value)} className={cn("bg-white border rounded p-1.5 text-xs outline-none focus:border-red-500 font-medium", title !== (v.title || '') ? 'border-amber-400 bg-amber-50/30' : 'border-gray-200')} />
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] uppercase font-bold text-gray-400">YouTube ID</label>
+          <input type="text" value={youtubeId} onChange={e => setYoutubeId(e.target.value)} className={cn("bg-white border rounded p-1.5 text-xs outline-none focus:border-red-500 font-mono", youtubeId !== (v.youtubeId || '') ? 'border-amber-400 bg-amber-50/30' : 'border-gray-200')} />
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] uppercase font-bold text-gray-400">Attached Game</label>
+          <p className="text-gray-600 truncate p-1.5" title={v.gameId}>{gameLabel} <span className="text-gray-400 font-mono">({v.gameId})</span></p>
         </div>
       </div>
     </div>
@@ -1818,7 +2140,13 @@ function UnifiedRosterEditor({
 }
 
 // === EventsManagementTab ===
-function EventsManagementTab({ games, teams, players, videos }: { games: Game[]; teams: Team[]; players: Player[]; videos: Video[] }) {
+function EventsManagementTab({ games, teams, players, videos, seasons, leagues, tournaments, onDeleteGame, onRefreshData, isAdmin }: {
+  games: Game[]; teams: Team[]; players: Player[]; videos: Video[];
+  seasons: Season[]; leagues: League[]; tournaments: Tournament[];
+  onDeleteGame: (id: string, tag?: string | null) => void;
+  onRefreshData?: () => void;
+  isAdmin?: boolean;
+}) {
   const [allGameDocs, setAllGameDocs] = useState<{ gameId: string; events: GameEvent[] }[]>([]);
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -1832,6 +2160,12 @@ function EventsManagementTab({ games, teams, players, videos }: { games: Game[];
   const [batchField, setBatchField] = useState<'teamId' | 'playerId' | 'type' | 'position' | 'status'>('teamId');
   const [batchValue, setBatchValue] = useState('');
   const [saving, setSaving] = useState(false);
+
+  // --- Legacy Salvage Finder state ---
+  const [salvageMode, setSalvageMode] = useState(false);
+  const [minEvents, setMinEvents] = useState(50);
+  const [legacyOnly, setLegacyOnly] = useState(true);
+  const [hideComplete, setHideComplete] = useState(true);
 
   const loadEvents = async () => {
     setLoading(true);
@@ -1892,6 +2226,49 @@ function EventsManagementTab({ games, teams, players, videos }: { games: Game[];
     return evs;
   }, [flatEvents, filterGameId, filterTeamId, filterType, filterMissing, sortField, sortAsc]);
 
+  // A game counts as having real season/league info only if seasonId resolves to an actual
+  // Season doc (many legacy imports stamped a bare year like "2015" into seasonId, which isn't
+  // a real doc reference — see games ported via the old CSV importer).
+  const salvageCandidates = useMemo(() => {
+    if (!loaded) return [];
+    const isUnknownTeam = (id?: string) => !id || id === 'unknown' || !teams.some(t => t.id === id);
+
+    const rows = allGameDocs.map(d => {
+      const game = games.find(g => g.id === d.gameId) || null;
+      const eventCount = d.events.length;
+      const matchedVideo = videos.find(v => v.gameId === d.gameId) || null;
+      const rawEventVideoId = d.events.find(e => e.videoId)?.videoId;
+      const youtubeId = matchedVideo?.youtubeId || matchedVideo?.videoId || rawEventVideoId || null;
+
+      const year = game ? deriveGameYear(game, seasons, tournaments) : null;
+
+      const missing: string[] = [];
+      if (!game) {
+        missing.push('Game Record');
+      } else {
+        const effectiveSeasonId = resolveGameSeasonId(game, tournaments);
+        const hasRealSeason = !!effectiveSeasonId && seasons.some(s => s.id === effectiveSeasonId);
+        const hasLeague = !!game.leagueId;
+        const hasTournament = !!game.tournamentId;
+        if (!hasRealSeason && !hasLeague && !hasTournament) missing.push('Season/League');
+        if (isUnknownTeam(game.homeTeamId)) missing.push('Home Team');
+        if (isUnknownTeam(game.awayTeamId)) missing.push('Away Team');
+        if (!game.date) missing.push('Date');
+      }
+      if (!youtubeId) missing.push('Video Link');
+
+      const isLegacyEra = year === null || year < 2020;
+
+      return { gameId: d.gameId, game, eventCount, youtubeId, year, missing, isLegacyEra };
+    });
+
+    return rows
+      .filter(r => r.eventCount >= minEvents)
+      .filter(r => !legacyOnly || r.isLegacyEra)
+      .filter(r => !hideComplete || r.missing.length > 0)
+      .sort((a, b) => b.eventCount - a.eventCount);
+  }, [allGameDocs, games, videos, seasons, tournaments, teams, minEvents, legacyOnly, hideComplete, loaded]);
+
   const toggleSelect = (id: string) => setSelectedIds(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   const selectAll = () => setSelectedIds(new Set(filteredEvents.map(e => e.id)));
   const clearSel = () => setSelectedIds(new Set());
@@ -1937,15 +2314,33 @@ function EventsManagementTab({ games, teams, players, videos }: { games: Game[];
       <div className="bg-gray-50 border border-gray-200 rounded-2xl p-6">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h3 className="text-xl font-bold text-gray-900">Event Manager</h3>
-            <p className="text-sm text-gray-500 mt-0.5">Browse, filter, and batch-update events across all games.</p>
+            <h3 className="text-xl font-bold text-gray-900">{salvageMode ? 'Legacy Salvage Finder' : 'Event Manager'}</h3>
+            <p className="text-sm text-gray-500 mt-0.5">
+              {salvageMode
+                ? 'Games with a lot of recorded events, sorted by size — the best candidates for brushing up and keeping.'
+                : 'Browse, filter, and batch-update events across all games.'}
+            </p>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={() => { loadEvents(); setFilterMissing('no_valid_video'); }} disabled={loading}
-              className="flex items-center gap-2 px-4 py-2 bg-yellow-600 hover:bg-yellow-700 text-white font-bold rounded-xl text-sm transition-all disabled:opacity-50"
-              title="Loads events that have a gameId/videoId but lack a corresponding Video document">
-              Find Orphaned Stats
-            </button>
+            {salvageMode ? (
+              <button onClick={() => setSalvageMode(false)}
+                className="flex items-center gap-2 px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold rounded-xl text-sm transition-all">
+                ← Back to Event Browser
+              </button>
+            ) : (
+              <>
+                <button onClick={() => { loadEvents(); setSalvageMode(true); }} disabled={loading}
+                  className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-sm transition-all disabled:opacity-50"
+                  title="Finds games with a lot of recorded events that are missing key metadata (season, league, teams, date, or a linked video) — the ones worth brushing up">
+                  <Archive className="w-4 h-4" /> Find Salvage Candidates
+                </button>
+                <button onClick={() => { loadEvents(); setFilterMissing('no_valid_video'); }} disabled={loading}
+                  className="flex items-center gap-2 px-4 py-2 bg-yellow-600 hover:bg-yellow-700 text-white font-bold rounded-xl text-sm transition-all disabled:opacity-50"
+                  title="Loads events that have a gameId/videoId but lack a corresponding Video document">
+                  Find Orphaned Stats
+                </button>
+              </>
+            )}
             <button onClick={loadEvents} disabled={loading}
               className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl text-sm transition-all disabled:opacity-50">
               {loading ? 'Loading…' : loaded ? '↻ Reload' : 'Load All Events'}
@@ -1955,139 +2350,265 @@ function EventsManagementTab({ games, teams, players, videos }: { games: Game[];
 
         {loaded && <p className="text-xs text-gray-400 mb-4">{flatEvents.length.toLocaleString()} events across {allGameDocs.length} game documents.</p>}
 
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
-          <div>
-            <label className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1 block">Game / Video ID</label>
-            <input value={filterGameId} onChange={e => setFilterGameId(e.target.value)}
-              placeholder="Search ID contains…"
-              className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-red-500" />
-          </div>
-          <div>
-            <label className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1 block">Team ID</label>
-            <input value={filterTeamId} onChange={e => setFilterTeamId(e.target.value)}
-              placeholder="Search Team ID…"
-              className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-red-500" />
-          </div>
-          <div>
-            <label className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1 block">Event Type</label>
-            <select value={filterType} onChange={e => setFilterType(e.target.value)}
-              className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-red-500">
-              <option value="">All Types</option>
-              {EVENT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1 block">Missing Data</label>
-            <select value={filterMissing} onChange={e => setFilterMissing(e.target.value as any)}
-              className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-red-500">
-              <option value="all">Show All</option>
-              <option value="no_player">Missing Player</option>
-              <option value="no_team">Missing Team</option>
-              <option value="no_type">Missing Type</option>
-              <option value="no_game">Missing Game ID</option>
-              <option value="no_video">Missing Video ID</option>
-              <option value="no_valid_video">Orphaned Stats (No DB Video)</option>
-            </select>
-          </div>
-          <div>
-            <label className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1 block">Sort By</label>
-            <div className="flex gap-1">
-              <select value={sortField} onChange={e => setSortField(e.target.value as any)}
-                className="flex-1 bg-white border border-gray-200 rounded-lg px-2 py-2 text-sm outline-none focus:border-red-500">
-                <option value="gameId">Game ID</option>
-                <option value="videoTime">Time</option>
-                <option value="type">Type</option>
-              </select>
-              <button onClick={() => setSortAsc(!sortAsc)}
-                className="px-2 py-2 bg-white border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 text-sm font-bold">
-                {sortAsc ? '↑' : '↓'}
-              </button>
+        {salvageMode ? (
+          <>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1 block">Minimum Events</label>
+                <input type="number" min={0} value={minEvents}
+                  onChange={e => setMinEvents(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                  className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500" />
+              </div>
+              <label className="flex items-center gap-2 self-end pb-2.5 text-xs font-bold text-gray-600 cursor-pointer">
+                <input type="checkbox" checked={legacyOnly} onChange={e => setLegacyOnly(e.target.checked)} className="rounded" />
+                Legacy era only (pre-2020 or unknown)
+              </label>
+              <label className="flex items-center gap-2 self-end pb-2.5 text-xs font-bold text-gray-600 cursor-pointer">
+                <input type="checkbox" checked={hideComplete} onChange={e => setHideComplete(e.target.checked)} className="rounded" />
+                Hide fully-tagged games
+              </label>
+              <div className="self-end pb-2.5 text-xs font-bold text-indigo-600">
+                {salvageCandidates.length.toLocaleString()} candidate{salvageCandidates.length === 1 ? '' : 's'} found
+              </div>
             </div>
-          </div>
-        </div>
 
-        {loaded && (
-          <div className="flex flex-wrap items-center gap-2 mb-4 bg-amber-50 border border-amber-200 rounded-xl p-3">
-            <span className="text-xs font-bold text-amber-700 whitespace-nowrap uppercase tracking-wider shrink-0">Batch Update ({selectedIds.size} selected)</span>
-            <select value={batchField} onChange={e => setBatchField(e.target.value as any)}
-              className="bg-white border border-amber-200 rounded-lg px-2 py-1.5 text-sm outline-none">
-              <option value="teamId">Team ID</option>
-              <option value="playerId">Player ID</option>
-              <option value="type">Event Type</option>
-              <option value="position">Position</option>
-              <option value="status">Status</option>
-            </select>
-            <input value={batchValue} onChange={e => setBatchValue(e.target.value)}
-              placeholder={batchField === 'type' ? 'e.g. goal' : batchField === 'status' ? 'verified / unverified' : 'value or "null" to clear'}
-              className="flex-1 min-w-[140px] bg-white border border-amber-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-amber-400" />
-            <button onClick={selectAll} className="text-xs font-bold px-2 py-1.5 bg-gray-700 hover:bg-gray-800 text-white rounded-lg transition-colors">All ({filteredEvents.length})</button>
-            <button onClick={clearSel} className="text-xs font-bold px-2 py-1.5 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg transition-colors">Clear</button>
-            <button onClick={handleBatchUpdate} disabled={saving || selectedIds.size === 0}
-              className="text-xs font-bold px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg transition-colors disabled:opacity-50">
-              {saving ? 'Saving…' : 'Apply'}
-            </button>
-          </div>
-        )}
-
-        {!loaded ? (
-          <div className="text-center py-16 text-gray-400">
-            <Database className="w-12 h-12 mx-auto mb-3 text-gray-200" />
-            <p className="font-bold">Click "Load All Events" to begin</p>
-          </div>
+            {!loaded ? (
+              <div className="text-center py-16 text-gray-400">
+                <Archive className="w-12 h-12 mx-auto mb-3 text-gray-200" />
+                <p className="font-bold">Loading events…</p>
+              </div>
+            ) : salvageCandidates.length === 0 ? (
+              <div className="py-16 text-center text-gray-400">No candidates match the current filters — try lowering the minimum event count.</div>
+            ) : (
+              <div className="space-y-3 max-h-[720px] overflow-y-auto custom-scrollbar pr-1">
+                {salvageCandidates.slice(0, 200).map(c => (
+                  <SalvageCandidateCard
+                    key={c.gameId}
+                    candidate={c}
+                    seasons={seasons}
+                    teams={teams}
+                    videos={videos}
+                    leagues={leagues}
+                    tournaments={tournaments}
+                    onDeleteGame={onDeleteGame}
+                    onRefreshData={onRefreshData}
+                    isAdmin={isAdmin}
+                  />
+                ))}
+                {salvageCandidates.length > 200 && (
+                  <p className="text-center py-3 text-xs text-gray-400">Showing top 200 of {salvageCandidates.length.toLocaleString()} by event count — raise the minimum to narrow down.</p>
+                )}
+              </div>
+            )}
+          </>
         ) : (
-          <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-            <div className="max-h-[600px] overflow-y-auto custom-scrollbar">
-              <table className="w-full text-xs">
-                <thead className="sticky top-0 bg-gray-50 border-b border-gray-200 z-10">
-                  <tr>
-                    <th className="p-2 w-8"><input type="checkbox" checked={selectedIds.size > 0 && selectedIds.size === filteredEvents.length} onChange={e => e.target.checked ? selectAll() : clearSel()} className="rounded" /></th>
-                    <th className="p-2 text-left text-[10px] uppercase tracking-wider text-gray-400 font-bold">Game ID</th>
-                    <th className="p-2 text-left text-[10px] uppercase tracking-wider text-gray-400 font-bold">Video ID</th>
-                    <th className="p-2 text-left text-[10px] uppercase tracking-wider text-gray-400 font-bold">Type</th>
-                    <th className="p-2 text-left text-[10px] uppercase tracking-wider text-gray-400 font-bold">Time</th>
-                    <th className="p-2 text-left text-[10px] uppercase tracking-wider text-gray-400 font-bold">Team</th>
-                    <th className="p-2 text-left text-[10px] uppercase tracking-wider text-gray-400 font-bold">Player</th>
-                    <th className="p-2 text-left text-[10px] uppercase tracking-wider text-gray-400 font-bold">Pos</th>
-                    <th className="p-2 text-left text-[10px] uppercase tracking-wider text-gray-400 font-bold">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {filteredEvents.slice(0, 500).map(ev => {
-                    const hasIssue = !ev.playerId || !ev.teamId;
-                    const isSel = selectedIds.has(ev.id);
-                    const vt = typeof ev.videoTime === 'number' ? `${Math.floor(ev.videoTime / 60)}:${String(Math.floor(ev.videoTime % 60)).padStart(2, '0')}` : '—';
-                    return (
-                      <tr key={ev.id} onClick={() => toggleSelect(ev.id)}
-                        className={cn('cursor-pointer transition-colors', isSel ? 'bg-amber-50 hover:bg-amber-100' : hasIssue ? 'bg-red-50/30 hover:bg-red-50' : 'hover:bg-gray-50')}>
-                        <td className="p-2 text-center"><input type="checkbox" checked={isSel} onChange={() => toggleSelect(ev.id)} onClick={e => e.stopPropagation()} className="rounded" /></td>
-                        <td className="p-2 font-mono text-gray-500 max-w-[120px] truncate" title={ev.gameId}>{ev.gameId}</td>
-                        <td className="p-2 font-mono text-gray-400 max-w-[120px] truncate" title={ev.videoId}>{ev.videoId || '—'}</td>
-                        <td className="p-2">
-                          <span className={cn('px-1.5 py-0.5 rounded font-bold text-[10px] uppercase',
-                            !ev.type ? 'bg-red-100 text-red-500' :
-                              ev.type === 'goal' ? 'bg-green-100 text-green-700' :
-                                ev.type.startsWith('sub') ? 'bg-blue-100 text-blue-700' :
-                                  ev.type.includes('control') ? 'bg-emerald-100 text-emerald-700' :
-                                    ev.type.includes('flag') ? 'bg-yellow-100 text-yellow-700' :
-                                      'bg-gray-100 text-gray-600'
-                          )}>{ev.type || 'MISSING'}</span>
-                        </td>
-                        <td className="p-2 font-mono text-gray-500">{vt}</td>
-                        <td className={cn('p-2 truncate max-w-[90px]', !ev.teamId ? 'text-red-400' : 'text-gray-700')} title={ev.teamId || ''}>{getTeamName(ev.teamId) || <span className="italic">—</span>}</td>
-                        <td className={cn('p-2 truncate max-w-[90px]', !ev.playerId ? 'text-red-400' : 'text-gray-700')} title={ev.playerId || ''}>{getPlayerName(ev.playerId) || <span className="italic">—</span>}</td>
-                        <td className="p-2 text-gray-400">{ev.position || '—'}</td>
-                        <td className="p-2">{ev.status === 'verified' ? <span className="text-amber-500 font-bold">✓</span> : <span className="text-gray-300">—</span>}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-              {filteredEvents.length > 500 && <p className="text-center py-3 text-xs text-gray-400 border-t">Showing first 500 of {filteredEvents.length.toLocaleString()} — use filters to narrow down.</p>}
-              {filteredEvents.length === 0 && <div className="py-16 text-center text-gray-400">No events match the current filters.</div>}
+          <>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1 block">Game / Video ID</label>
+                <input value={filterGameId} onChange={e => setFilterGameId(e.target.value)}
+                  placeholder="Search ID contains…"
+                  className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-red-500" />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1 block">Team ID</label>
+                <input value={filterTeamId} onChange={e => setFilterTeamId(e.target.value)}
+                  placeholder="Search Team ID…"
+                  className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-red-500" />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1 block">Event Type</label>
+                <select value={filterType} onChange={e => setFilterType(e.target.value)}
+                  className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-red-500">
+                  <option value="">All Types</option>
+                  {EVENT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1 block">Missing Data</label>
+                <select value={filterMissing} onChange={e => setFilterMissing(e.target.value as any)}
+                  className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-red-500">
+                  <option value="all">Show All</option>
+                  <option value="no_player">Missing Player</option>
+                  <option value="no_team">Missing Team</option>
+                  <option value="no_type">Missing Type</option>
+                  <option value="no_game">Missing Game ID</option>
+                  <option value="no_video">Missing Video ID</option>
+                  <option value="no_valid_video">Orphaned Stats (No DB Video)</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1 block">Sort By</label>
+                <div className="flex gap-1">
+                  <select value={sortField} onChange={e => setSortField(e.target.value as any)}
+                    className="flex-1 bg-white border border-gray-200 rounded-lg px-2 py-2 text-sm outline-none focus:border-red-500">
+                    <option value="gameId">Game ID</option>
+                    <option value="videoTime">Time</option>
+                    <option value="type">Type</option>
+                  </select>
+                  <button onClick={() => setSortAsc(!sortAsc)}
+                    className="px-2 py-2 bg-white border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 text-sm font-bold">
+                    {sortAsc ? '↑' : '↓'}
+                  </button>
+                </div>
+              </div>
             </div>
-          </div>
+
+            {loaded && (
+              <div className="flex flex-wrap items-center gap-2 mb-4 bg-amber-50 border border-amber-200 rounded-xl p-3">
+                <span className="text-xs font-bold text-amber-700 whitespace-nowrap uppercase tracking-wider shrink-0">Batch Update ({selectedIds.size} selected)</span>
+                <select value={batchField} onChange={e => setBatchField(e.target.value as any)}
+                  className="bg-white border border-amber-200 rounded-lg px-2 py-1.5 text-sm outline-none">
+                  <option value="teamId">Team ID</option>
+                  <option value="playerId">Player ID</option>
+                  <option value="type">Event Type</option>
+                  <option value="position">Position</option>
+                  <option value="status">Status</option>
+                </select>
+                <input value={batchValue} onChange={e => setBatchValue(e.target.value)}
+                  placeholder={batchField === 'type' ? 'e.g. goal' : batchField === 'status' ? 'verified / unverified' : 'value or "null" to clear'}
+                  className="flex-1 min-w-[140px] bg-white border border-amber-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-amber-400" />
+                <button onClick={selectAll} className="text-xs font-bold px-2 py-1.5 bg-gray-700 hover:bg-gray-800 text-white rounded-lg transition-colors">All ({filteredEvents.length})</button>
+                <button onClick={clearSel} className="text-xs font-bold px-2 py-1.5 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg transition-colors">Clear</button>
+                <button onClick={handleBatchUpdate} disabled={saving || selectedIds.size === 0}
+                  className="text-xs font-bold px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg transition-colors disabled:opacity-50">
+                  {saving ? 'Saving…' : 'Apply'}
+                </button>
+              </div>
+            )}
+
+            {!loaded ? (
+              <div className="text-center py-16 text-gray-400">
+                <Database className="w-12 h-12 mx-auto mb-3 text-gray-200" />
+                <p className="font-bold">Click "Load All Events" to begin</p>
+              </div>
+            ) : (
+              <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+                <div className="max-h-[600px] overflow-y-auto custom-scrollbar">
+                  <table className="w-full text-xs">
+                    <thead className="sticky top-0 bg-gray-50 border-b border-gray-200 z-10">
+                      <tr>
+                        <th className="p-2 w-8"><input type="checkbox" checked={selectedIds.size > 0 && selectedIds.size === filteredEvents.length} onChange={e => e.target.checked ? selectAll() : clearSel()} className="rounded" /></th>
+                        <th className="p-2 text-left text-[10px] uppercase tracking-wider text-gray-400 font-bold">Game ID</th>
+                        <th className="p-2 text-left text-[10px] uppercase tracking-wider text-gray-400 font-bold">Video ID</th>
+                        <th className="p-2 text-left text-[10px] uppercase tracking-wider text-gray-400 font-bold">Type</th>
+                        <th className="p-2 text-left text-[10px] uppercase tracking-wider text-gray-400 font-bold">Time</th>
+                        <th className="p-2 text-left text-[10px] uppercase tracking-wider text-gray-400 font-bold">Team</th>
+                        <th className="p-2 text-left text-[10px] uppercase tracking-wider text-gray-400 font-bold">Player</th>
+                        <th className="p-2 text-left text-[10px] uppercase tracking-wider text-gray-400 font-bold">Pos</th>
+                        <th className="p-2 text-left text-[10px] uppercase tracking-wider text-gray-400 font-bold">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {filteredEvents.slice(0, 500).map(ev => {
+                        const hasIssue = !ev.playerId || !ev.teamId;
+                        const isSel = selectedIds.has(ev.id);
+                        const vt = typeof ev.videoTime === 'number' ? `${Math.floor(ev.videoTime / 60)}:${String(Math.floor(ev.videoTime % 60)).padStart(2, '0')}` : '—';
+                        return (
+                          <tr key={ev.id} onClick={() => toggleSelect(ev.id)}
+                            className={cn('cursor-pointer transition-colors', isSel ? 'bg-amber-50 hover:bg-amber-100' : hasIssue ? 'bg-red-50/30 hover:bg-red-50' : 'hover:bg-gray-50')}>
+                            <td className="p-2 text-center"><input type="checkbox" checked={isSel} onChange={() => toggleSelect(ev.id)} onClick={e => e.stopPropagation()} className="rounded" /></td>
+                            <td className="p-2 font-mono text-gray-500 max-w-[120px] truncate" title={ev.gameId}>{ev.gameId}</td>
+                            <td className="p-2 font-mono text-gray-400 max-w-[120px] truncate" title={ev.videoId}>{ev.videoId || '—'}</td>
+                            <td className="p-2">
+                              <span className={cn('px-1.5 py-0.5 rounded font-bold text-[10px] uppercase',
+                                !ev.type ? 'bg-red-100 text-red-500' :
+                                  ev.type === 'goal' ? 'bg-green-100 text-green-700' :
+                                    ev.type.startsWith('sub') ? 'bg-blue-100 text-blue-700' :
+                                      ev.type.includes('control') ? 'bg-emerald-100 text-emerald-700' :
+                                        ev.type.includes('flag') ? 'bg-yellow-100 text-yellow-700' :
+                                          'bg-gray-100 text-gray-600'
+                              )}>{ev.type || 'MISSING'}</span>
+                            </td>
+                            <td className="p-2 font-mono text-gray-500">{vt}</td>
+                            <td className={cn('p-2 truncate max-w-[90px]', !ev.teamId ? 'text-red-400' : 'text-gray-700')} title={ev.teamId || ''}>{getTeamName(ev.teamId) || <span className="italic">—</span>}</td>
+                            <td className={cn('p-2 truncate max-w-[90px]', !ev.playerId ? 'text-red-400' : 'text-gray-700')} title={ev.playerId || ''}>{getPlayerName(ev.playerId) || <span className="italic">—</span>}</td>
+                            <td className="p-2 text-gray-400">{ev.position || '—'}</td>
+                            <td className="p-2">{ev.status === 'verified' ? <span className="text-amber-500 font-bold">✓</span> : <span className="text-gray-300">—</span>}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  {filteredEvents.length > 500 && <p className="text-center py-3 text-xs text-gray-400 border-t">Showing first 500 of {filteredEvents.length.toLocaleString()} — use filters to narrow down.</p>}
+                  {filteredEvents.length === 0 && <div className="py-16 text-center text-gray-400">No events match the current filters.</div>}
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
+    </div>
+  );
+}
+
+type SalvageCandidate = {
+  gameId: string;
+  game: Game | null;
+  eventCount: number;
+  youtubeId: string | null;
+  year: number | null;
+  missing: string[];
+  isLegacyEra: boolean;
+};
+
+function SalvageCandidateCard({ candidate, seasons, teams, videos, leagues, tournaments, onDeleteGame, onRefreshData, isAdmin }: {
+  candidate: SalvageCandidate;
+  seasons: Season[]; teams: Team[]; videos: Video[]; leagues: League[]; tournaments: Tournament[];
+  onDeleteGame: (id: string, tag?: string | null) => void;
+  onRefreshData?: () => void;
+  isAdmin?: boolean;
+}) {
+  const { game, gameId, eventCount, youtubeId, year, missing, isLegacyEra } = candidate;
+  return (
+    <div className="border border-gray-200 rounded-xl bg-white overflow-hidden shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 bg-gray-50 border-b border-gray-200">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="flex items-center gap-1 px-2 py-1 rounded-lg bg-gray-900 text-white text-[10px] font-bold uppercase tracking-wide">
+            <Activity className="w-3 h-3" /> {eventCount.toLocaleString()} events
+          </span>
+          <span className={cn('px-2 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wide',
+            year === null ? 'bg-purple-100 text-purple-700' : isLegacyEra ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-500')}>
+            {year === null ? 'Legacy · Unknown Era' : isLegacyEra ? `Legacy · ${year}` : `${year}`}
+          </span>
+          {missing.map(m => (
+            <span key={m} className="px-2 py-1 rounded-lg bg-red-50 text-red-600 border border-red-200 text-[10px] font-bold uppercase tracking-wide">
+              {m} missing
+            </span>
+          ))}
+          {missing.length === 0 && (
+            <span className="px-2 py-1 rounded-lg bg-emerald-50 text-emerald-600 border border-emerald-200 text-[10px] font-bold uppercase tracking-wide">
+              Fully tagged
+            </span>
+          )}
+        </div>
+        {youtubeId ? (
+          <a href={`https://www.youtube.com/watch?v=${youtubeId}`} target="_blank" rel="noopener noreferrer"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-lg transition-colors shrink-0">
+            <Youtube className="w-3.5 h-3.5" /> Watch on YouTube <ExternalLink className="w-3 h-3" />
+          </a>
+        ) : (
+          <span className="text-[10px] text-gray-400 italic shrink-0">No video linked</span>
+        )}
+      </div>
+      {game ? (
+        <GameEditRow
+          game={game}
+          seasons={seasons}
+          teams={teams}
+          videos={videos}
+          leagues={leagues}
+          tournaments={tournaments}
+          onDeleteGame={onDeleteGame}
+          onRefreshData={onRefreshData}
+          isAdmin={isAdmin}
+        />
+      ) : (
+        <div className="p-4 text-sm text-red-500">
+          No <code className="font-mono text-xs bg-red-50 px-1 py-0.5 rounded">games</code> document found for ID{' '}
+          <span className="font-mono">{gameId}</span> — {eventCount.toLocaleString()} events exist under this ID with nothing to attach them to.
+        </div>
+      )}
     </div>
   );
 }
@@ -2492,6 +3013,8 @@ function ManagementView({
   onDeleteTeam,
   onDeleteGame,
   onDeleteVideo,
+  onEditVideo,
+  onAddVideo,
   onDeleteSeason,
   onEditSeason,
   onDeletePlayer,
@@ -2583,6 +3106,22 @@ function ManagementView({
   const [dbSearchResults, setDbSearchResults] = useState<{collection: string, id: string, data: any}[]>([]);
   const [isSearchingDB, setIsSearchingDB] = useState(false);
 
+  // Games Tab Search State
+  const [gamesSearchText, setGamesSearchText] = useState('');
+
+  // Search state for the other simple list tabs
+  const [leaguesSearchText, setLeaguesSearchText] = useState('');
+  const [tournamentsSearchText, setTournamentsSearchText] = useState('');
+  const [teamsListSearchText, setTeamsListSearchText] = useState('');
+  const [seasonsSearchText, setSeasonsSearchText] = useState('');
+  const [videosSearchText, setVideosSearchText] = useState('');
+
+  // Add Video form state
+  const [newVideoUrl, setNewVideoUrl] = useState('');
+  const [newVideoTitle, setNewVideoTitle] = useState('');
+  const [newVideoGameId, setNewVideoGameId] = useState('');
+  const [isAddingVideo, setIsAddingVideo] = useState(false);
+
   useEffect(() => {
     const q = query(collection(db, 'rosters'));
     return onSnapshot(q, (snap) => {
@@ -2623,6 +3162,82 @@ function ManagementView({
     if (!p) return 'Unknown Player';
     return `${p.firstName} ${p.lastName}`;
   };
+
+  const filteredGames = useMemo(() => {
+    const q = gamesSearchText.trim().toLowerCase();
+    if (!q) return games;
+    return games.filter(g => {
+      const homeTeam = teams.find(t => t.id === g.homeTeamId);
+      const awayTeam = teams.find(t => t.id === g.awayTeamId);
+      const effectiveSeasonId = resolveGameSeasonId(g, tournaments);
+      const season = effectiveSeasonId ? seasons.find(s => s.id === effectiveSeasonId) : undefined;
+      const league = g.leagueId ? leagues.find(l => l.id === g.leagueId) : undefined;
+      const tournament = g.tournamentId ? tournaments.find(t => t.id === g.tournamentId) : undefined;
+      const haystack = [
+        g.id,
+        g.tag,
+        g.date,
+        homeTeam?.name,
+        homeTeam?.nickname,
+        awayTeam?.name,
+        awayTeam?.nickname,
+        season ? getSeasonDisplayName(season, leagues) : undefined,
+        league?.name,
+        g.division,
+        tournament ? getTournamentDisplayName(tournament) : undefined,
+      ].filter(Boolean).join(' ').toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [games, gamesSearchText, teams, seasons, leagues, tournaments]);
+
+  const filteredLeagues = useMemo(() => {
+    const q = leaguesSearchText.trim().toLowerCase();
+    if (!q) return leagues;
+    return leagues.filter(l => [l.id, l.name, ...(l.divisions || [])].filter(Boolean).join(' ').toLowerCase().includes(q));
+  }, [leagues, leaguesSearchText]);
+
+  const filteredTournaments = useMemo(() => {
+    const q = tournamentsSearchText.trim().toLowerCase();
+    if (!q) return tournaments;
+    return tournaments.filter(t => {
+      const league = t.leagueId ? leagues.find(l => l.id === t.leagueId) : undefined;
+      const season = t.seasonId ? seasons.find(s => s.id === t.seasonId) : undefined;
+      const haystack = [t.id, t.name, t.division, t.year, t.location, league?.name, season ? getSeasonDisplayName(season, leagues) : undefined]
+        .filter(Boolean).join(' ').toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [tournaments, tournamentsSearchText, leagues, seasons]);
+
+  const filteredTeamsList = useMemo(() => {
+    const q = teamsListSearchText.trim().toLowerCase();
+    if (!q) return teams;
+    return teams.filter(t => {
+      const league = t.leagueId ? leagues.find(l => l.id === t.leagueId) : undefined;
+      return [t.id, t.name, t.nickname, t.division, league?.name].filter(Boolean).join(' ').toLowerCase().includes(q);
+    });
+  }, [teams, teamsListSearchText, leagues]);
+
+  const filteredSeasons = useMemo(() => {
+    const q = seasonsSearchText.trim().toLowerCase();
+    if (!q) return seasons;
+    return seasons.filter(s => {
+      const league = s.leagueId ? leagues.find(l => l.id === s.leagueId) : undefined;
+      return [s.id, s.name, s.division, s.year, league?.name, getSeasonDisplayName(s, leagues)]
+        .filter(Boolean).join(' ').toLowerCase().includes(q);
+    });
+  }, [seasons, seasonsSearchText, leagues]);
+
+  const filteredVideos = useMemo(() => {
+    const q = videosSearchText.trim().toLowerCase();
+    if (!q) return videos;
+    return videos.filter(v => {
+      const game = games.find(g => g.id === v.gameId);
+      const homeTeam = game ? teams.find(t => t.id === game.homeTeamId) : undefined;
+      const awayTeam = game ? teams.find(t => t.id === game.awayTeamId) : undefined;
+      return [v.id, v.videoId, v.youtubeId, v.title, v.gameId, homeTeam?.name, awayTeam?.name]
+        .filter(Boolean).join(' ').toLowerCase().includes(q);
+    });
+  }, [videos, videosSearchText, games, teams]);
 
   return (
     <div className="space-y-8">
@@ -2690,7 +3305,18 @@ function ManagementView({
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {activeTab === 'events' ? (
-          <EventsManagementTab games={games} teams={teams} players={players} videos={videos} />
+          <EventsManagementTab
+            games={games}
+            teams={teams}
+            players={players}
+            videos={videos}
+            seasons={seasons}
+            leagues={leagues}
+            tournaments={tournaments}
+            onDeleteGame={onDeleteGame}
+            onRefreshData={onRefreshData}
+            isAdmin={isAdmin}
+          />
         ) : activeTab === 'import' ? (
           <div className="lg:col-span-3 space-y-6">
             <div className="bg-gray-50 border border-gray-200 rounded-2xl p-8">
@@ -4818,7 +5444,7 @@ function ManagementView({
                           onChange={e => setNewSeasonTournamentId(e.target.value)}
                         >
                           <option value="">-- Championship Tournament (Optional) --</option>
-                          {tournaments.map((t: any) => <option key={t.id} value={t.id}>{t.division ? `(${t.division}) ` : ''}{t.name}</option>)}
+                          {tournaments.map((t: any) => <option key={t.id} value={t.id}>{getTournamentDisplayName(t)}</option>)}
                         </select>
                       </>
                     ) : activeTab === 'teams' ? (
@@ -4879,17 +5505,23 @@ function ManagementView({
                           {seasons.map(s => <option key={s.id} value={s.id}>{getSeasonDisplayName(s, leagues)}</option>)}
                         </select>
                       </>
-                    ) : (
-                      <input
-                        type="text"
-                        placeholder={`${activeTab.slice(0, -1)} Name...`}
-                        className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500"
-                        value={newItemFirstName}
-                        onChange={e => setNewItemFirstName(e.target.value)}
-                      />
-                    )}
+                    ) : activeTab === 'videos' ? (
+                      <>
+                        <input type="text" placeholder="YouTube URL or Video ID..." className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500 mb-2" value={newVideoUrl} onChange={e => setNewVideoUrl(e.target.value)} />
+                        <input type="text" placeholder="Title (Optional — defaults to team matchup)..." className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500 mb-2" value={newVideoTitle} onChange={e => setNewVideoTitle(e.target.value)} />
+                        <select className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-red-500" value={newVideoGameId} onChange={e => setNewVideoGameId(e.target.value)}>
+                          <option value="">-- Select Game to Attach To --</option>
+                          {[...games].sort((a, b) => new Date(serializeTimestamp(b.createdAt)).getTime() - new Date(serializeTimestamp(a.createdAt)).getTime()).map(g => {
+                            const home = teams.find(t => t.id === g.homeTeamId);
+                            const away = teams.find(t => t.id === g.awayTeamId);
+                            return <option key={g.id} value={g.id}>{home?.name || g.homeTeamId} vs {away?.name || g.awayTeamId}{g.date ? ` (${g.date})` : ''}</option>;
+                          })}
+                        </select>
+                        <p className="text-xs text-gray-400 mt-2">Need a new game instead of attaching to an existing one? Return to the <strong className="text-gray-700 font-bold">Tracker</strong> view and click <strong className="text-red-500 font-bold">Create New Game Link</strong>.</p>
+                      </>
+                    ) : null}
                     <button
-                      onClick={() => {
+                      onClick={async () => {
                         if (activeTab === 'seasons') {
                           if (!newSeasonLeague || !newSeasonYear) return;
                           const selectedLeagueName = leagues.find(l => l.id === newSeasonLeague)?.name || 'Unknown';
@@ -4916,13 +5548,25 @@ function ManagementView({
                           onAddLeague(newLeagueName, divs.length > 0 ? divs : undefined);
                           setNewLeagueName('');
                           setNewLeagueDivisionsStr('');
+                        } else if (activeTab === 'videos') {
+                          if (!newVideoUrl || !newVideoGameId) return;
+                          setIsAddingVideo(true);
+                          const id = await onAddVideo(newVideoUrl, newVideoTitle, newVideoGameId);
+                          setIsAddingVideo(false);
+                          if (id) {
+                            setNewVideoUrl('');
+                            setNewVideoTitle('');
+                            setNewVideoGameId('');
+                          }
                         } else {
                           if (!newItemFirstName) return;
                           setNewItemFirstName('');
                         }
                       }}
-                      className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-xl transition-all"
+                      disabled={activeTab === 'videos' && isAddingVideo}
+                      className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-xl transition-all disabled:opacity-50"
                     >
+                      {activeTab === 'videos' ? (isAddingVideo ? 'Adding…' : 'Add Video') : `Create ${activeTab.slice(0, -1)}`}
                     </button>
                   </div>
                 )}
@@ -4932,95 +5576,53 @@ function ManagementView({
             {/* List View */}
             <div className="lg:col-span-2 space-y-4">
               <div className="bg-gray-50 border border-gray-200 rounded-2xl overflow-hidden">
-                <div className="p-4 border-b border-gray-200 bg-gray-50/50 flex items-center justify-between">
-                  <h3 className="font-bold capitalize">{activeTab} List</h3>
-                  <span className="text-xs text-gray-400">
-                    {activeTab === 'leagues' && leagues.length}
-                    {activeTab === 'tournaments' && tournaments.length}
-                    {activeTab === 'teams' && teams.length}
-                    {activeTab === 'seasons' && seasons.length}
-                    {activeTab === 'games' && games.length}
-                    {activeTab === 'videos' && videos.length}
-                    {' items'}
-                  </span>
+                <div className="p-4 border-b border-gray-200 bg-gray-50/50 flex flex-col gap-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-bold capitalize">{activeTab} List</h3>
+                    <span className="text-xs text-gray-400">
+                      {activeTab === 'leagues' && (leaguesSearchText.trim() ? `${filteredLeagues.length} of ${leagues.length}` : leagues.length)}
+                      {activeTab === 'tournaments' && (tournamentsSearchText.trim() ? `${filteredTournaments.length} of ${tournaments.length}` : tournaments.length)}
+                      {activeTab === 'teams' && (teamsListSearchText.trim() ? `${filteredTeamsList.length} of ${teams.length}` : teams.length)}
+                      {activeTab === 'seasons' && (seasonsSearchText.trim() ? `${filteredSeasons.length} of ${seasons.length}` : seasons.length)}
+                      {activeTab === 'games' && (gamesSearchText.trim() ? `${filteredGames.length} of ${games.length}` : games.length)}
+                      {activeTab === 'videos' && (videosSearchText.trim() ? `${filteredVideos.length} of ${videos.length}` : videos.length)}
+                      {' items'}
+                    </span>
+                  </div>
+                  {activeTab === 'leagues' && (
+                    <TabSearchBox value={leaguesSearchText} onChange={setLeaguesSearchText} placeholder="Search by league name, ID, or division…" />
+                  )}
+                  {activeTab === 'tournaments' && (
+                    <TabSearchBox value={tournamentsSearchText} onChange={setTournamentsSearchText} placeholder="Search by tournament name, season, league, division, year, or location…" />
+                  )}
+                  {activeTab === 'teams' && (
+                    <TabSearchBox value={teamsListSearchText} onChange={setTeamsListSearchText} placeholder="Search by team name, nickname, league, or division…" />
+                  )}
+                  {activeTab === 'seasons' && (
+                    <TabSearchBox value={seasonsSearchText} onChange={setSeasonsSearchText} placeholder="Search by season name, league, division, or year…" />
+                  )}
+                  {activeTab === 'games' && (
+                    <TabSearchBox value={gamesSearchText} onChange={setGamesSearchText} placeholder="Search by team, season, league, tournament, tag, date, or game ID…" />
+                  )}
+                  {activeTab === 'videos' && (
+                    <TabSearchBox value={videosSearchText} onChange={setVideosSearchText} placeholder="Search by title, YouTube ID, game ID, or matchup…" />
+                  )}
                 </div>
 
                 <div className="divide-y divide-neutral-800 max-h-[600px] overflow-y-auto custom-scrollbar">
-                  {activeTab === 'leagues' && leagues.map(l => (
-                    <div key={l.id} className="p-4 flex items-center justify-between hover:bg-gray-200/50 transition-colors group border-b border-gray-100 last:border-0">
-                      <div>
-                        <p className="font-bold">{l.name}</p>
-                        <p className="text-[10px] text-gray-400 uppercase">Divisions: {l.divisions?.join(', ') || 'None'} | ID: {l.id}</p>
-                      </div>
-                      <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-all">
-                        <button
-                          onClick={() => {
-                            const newName = prompt(`Edit Name for ${l.name}:`, `${l.name}`);
-                            if (!newName) return;
-                            const newDivs = prompt(`Edit Divisions (comma separated):`, `${l.divisions?.join(', ') || ''}`);
-                            if (newDivs === null) return;
-                            const divArr = newDivs.split(',').map(d => d.trim()).filter(Boolean);
-                            onEditLeague(l.id, newName, divArr.length > 0 ? divArr : undefined);
-                          }}
-                          className="p-2 text-gray-400 hover:text-amber-500 rounded-full hover:bg-white"
-                          title="Edit League"
-                        >
-                          <Edit2 className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => { if (confirm(`Delete league ${l.name}?`)) onDeleteLeague(l.id); }}
-                          className="p-2 text-gray-400 hover:text-red-500 rounded-full hover:bg-white"
-                          title="Delete League"
-                        >
-                          <XCircle className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
+                  {activeTab === 'leagues' && filteredLeagues.map(l => (
+                    <LeagueEditRow key={l.id} league={l} onEditLeague={onEditLeague} onDeleteLeague={onDeleteLeague} />
                   ))}
-                  {activeTab === 'tournaments' && tournaments.map(t => (
-                    <div key={t.id} className="p-4 flex items-center justify-between hover:bg-gray-200/50 transition-colors group border-b border-gray-100 last:border-0">
-                      <div>
-                        <p className="font-bold">{t.name}</p>
-                        <p className="text-[10px] text-gray-400 uppercase">Year: {t.year || 'N/A'} | League: {t.leagueId ? leagues.find(l => l.id === t.leagueId)?.name : 'None'} | Div: {t.division || 'None'} | ID: {t.id}</p>
-                      </div>
-                      <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-all">
-                        <button
-                          onClick={() => {
-                            const newName = prompt(`Edit Name for ${t.name}:`, `${t.name}`);
-                            if (!newName) return;
-                            
-                            // Native prompt doesn't easily support dropdowns, so we'll leave it simple for now,
-                            // or allow them to paste the season ID, but practically, we should find a better UI later.
-                            // For now, prompt for the exact Season ID (since they can copy it from the UI or just use the Add form).
-                            const currentSeasonStr = seasons.find(s => s.id === t.seasonId)?.name || 'None';
-                            const newSeasonName = prompt(`Edit Season for ${t.name} (Type exact Season Name below or cancel to keep ${currentSeasonStr}):`, `${currentSeasonStr}`);
-                            
-                            let newSeasonId = t.seasonId;
-                            if (newSeasonName && newSeasonName !== currentSeasonStr) {
-                               const matched = seasons.find(s => s.name.toLowerCase() === newSeasonName.toLowerCase());
-                               if (matched) newSeasonId = matched.id;
-                               else {
-                                  alert(`Could not find a season perfectly matching "${newSeasonName}". Season unchanged.`);
-                               }
-                            }
-                            onEditTournament(t.id, newName, newSeasonId || '');
-                          }}
-                          className="p-2 text-gray-400 hover:text-amber-500 rounded-full hover:bg-white"
-                          title="Edit Tournament"
-                        >
-                          <Edit2 className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => { if (confirm(`Delete tournament ${t.name}?`)) onDeleteTournament(t.id); }}
-                          className="p-2 text-gray-400 hover:text-red-500 rounded-full hover:bg-white"
-                          title="Delete Tournament"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
+                  {activeTab === 'leagues' && filteredLeagues.length === 0 && (
+                    <div className="p-10 text-center text-gray-400 text-sm">No leagues match "{leaguesSearchText}".</div>
+                  )}
+                  {activeTab === 'tournaments' && filteredTournaments.map(t => (
+                    <TournamentEditRow key={t.id} tournament={t} seasons={seasons} leagues={leagues} onEditTournament={onEditTournament} onDeleteTournament={onDeleteTournament} />
                   ))}
-                  {activeTab === 'teams' && teams.map(t => (
+                  {activeTab === 'tournaments' && filteredTournaments.length === 0 && (
+                    <div className="p-10 text-center text-gray-400 text-sm">No tournaments match "{tournamentsSearchText}".</div>
+                  )}
+                  {activeTab === 'teams' && filteredTeamsList.map(t => (
                     <TeamEditRow
                       key={t.id}
                       team={t}
@@ -5028,16 +5630,23 @@ function ManagementView({
                       onRefreshData={onRefreshData}
                     />
                   ))}
-                  {activeTab === 'seasons' && seasons.map(s => (
+                  {activeTab === 'teams' && filteredTeamsList.length === 0 && (
+                    <div className="p-10 text-center text-gray-400 text-sm">No teams match "{teamsListSearchText}".</div>
+                  )}
+                  {activeTab === 'seasons' && filteredSeasons.length === 0 && (
+                    <div className="p-10 text-center text-gray-400 text-sm">No seasons match "{seasonsSearchText}".</div>
+                  )}
+                  {activeTab === 'seasons' && filteredSeasons.map(s => (
                     <SeasonEditRow
                       key={s.id}
                       season={s}
                       leagues={leagues}
+                      tournaments={tournaments}
                       onEditSeason={onEditSeason}
                       onDeleteSeason={onDeleteSeason}
                     />
                   ))}
-                  {activeTab === 'games' && [...games].sort((a, b) => new Date(serializeTimestamp(b.createdAt)).getTime() - new Date(serializeTimestamp(a.createdAt)).getTime()).map(g => (
+                  {activeTab === 'games' && [...filteredGames].sort((a, b) => new Date(serializeTimestamp(b.createdAt)).getTime() - new Date(serializeTimestamp(a.createdAt)).getTime()).map(g => (
                     <GameEditRow
                       key={g.id}
                       game={g}
@@ -5046,42 +5655,22 @@ function ManagementView({
                       videos={videos}
                       leagues={leagues}
                       tournaments={tournaments}
+                      rosters={rosters}
                       onDeleteGame={onDeleteGame}
                       onRefreshData={onRefreshData}
                       isAdmin={isAdmin}
                     />
                   ))}
+                  {activeTab === 'games' && filteredGames.length === 0 && (
+                    <div className="p-10 text-center text-gray-400 text-sm">No games match "{gamesSearchText}".</div>
+                  )}
 
-                  {activeTab === 'videos' && [...videos].sort((a, b) => new Date(serializeTimestamp(b.createdAt)).getTime() - new Date(serializeTimestamp(a.createdAt)).getTime()).map(v => (
-                    <div key={v.id} className="p-4 flex flex-col gap-3 hover:bg-gray-200/50 transition-colors group border-b border-gray-100 last:border-0">
-                      <div className="flex items-center justify-between border-b border-gray-200/50 pb-2">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-mono text-[10px] bg-gray-100 px-2 py-1 rounded border border-gray-200 text-gray-600">
-                            ID: {v.id}
-                          </span>
-                          <span className="font-mono text-[10px] bg-red-50 text-red-600 font-bold px-2 py-1 rounded border border-red-200">
-                            YT: {v.youtubeId}
-                          </span>
-                        </div>
-                        <button
-                          onClick={() => onDeleteVideo(v.id)}
-                          className="px-2 py-1 bg-white border border-gray-200 text-gray-400 hover:text-red-500 hover:border-red-500 hover:bg-red-50 rounded-md transition-all shadow-sm flex items-center gap-1 text-[10px] uppercase font-bold"
-                        >
-                          <Trash2 className="w-3 h-3" /> Delete
-                        </button>
-                      </div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-                        <div className="flex flex-col">
-                           <span className="text-gray-400 uppercase font-bold text-[10px]">Title</span>
-                           <span className="text-gray-900 font-medium">{v.title}</span>
-                        </div>
-                        <div className="flex flex-col">
-                           <span className="text-gray-400 uppercase font-bold text-[10px]">Attached Game ID</span>
-                           <span className="font-mono text-gray-600 break-all">{v.gameId}</span>
-                        </div>
-                      </div>
-                    </div>
+                  {activeTab === 'videos' && [...filteredVideos].sort((a, b) => new Date(serializeTimestamp(b.createdAt)).getTime() - new Date(serializeTimestamp(a.createdAt)).getTime()).map(v => (
+                    <VideoEditRow key={v.id} video={v} games={games} teams={teams} onEditVideo={onEditVideo} onDeleteVideo={onDeleteVideo} />
                   ))}
+                  {activeTab === 'videos' && filteredVideos.length === 0 && (
+                    <div className="p-10 text-center text-gray-400 text-sm">No videos match "{videosSearchText}".</div>
+                  )}
                 </div>
               </div>
             </div>
@@ -5730,7 +6319,7 @@ function CreateView({
                 className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 focus:border-red-500 outline-none"
               >
                 <option value="">Select Season (Optional)...</option>
-                {seasons.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                {seasons.map((s: any) => <option key={s.id} value={s.id}>{getSeasonDisplayName(s, leagues)}</option>)}
               </select>
               
               <select
@@ -5741,7 +6330,7 @@ function CreateView({
                 <option value="">Select Tournament (Optional)...</option>
                 {tournaments.map((t: any) => (
                   <option key={t.id} value={t.id}>
-                    {t.year ? `${t.year} ` : ''}{t.name}{t.division ? ` (${t.division})` : ''}
+                    {getTournamentDisplayName(t)}
                   </option>
                 ))}
               </select>
@@ -6002,6 +6591,10 @@ export default function App() {
   const [statsSelectedYears, setStatsSelectedYears] = useState<string[]>(splitParam(initialParams, 'years'));
   const [statsLeagueDivs, setStatsLeagueDivs] = useState<string[]>(splitParam(initialParams, 'leagues'));
   const [statsTournamentIds, setStatsTournamentIds] = useState<string[]>(splitParam(initialParams, 'events'));
+  // Admin-only lens swapping every stats/watch surface to pre-2020 legacy games instead of
+  // excluding them. Gated on isAdmin at the point of use (effectiveLegacyMode below), not here,
+  // so losing admin mid-session can't leave this stuck on.
+  const [legacyMode, setLegacyMode] = useState(false);
 
   // URL Deep Linking / Routing Sync
   useEffect(() => {
@@ -6113,6 +6706,10 @@ export default function App() {
 
   const isAdmin = effectiveRole === 'admin';
   const canModerate = effectiveRole === 'admin' || effectiveRole === 'moderator';
+  // Legacy Mode only ever takes effect for a real admin — simulating a lower role (or losing
+  // admin) falls straight back to the normal, legacy-excluded view, even if the toggle is
+  // still flipped on underneath.
+  const effectiveLegacyMode = isAdmin && legacyMode;
 
   // The Stats filter bar (league/year/team chips, position/control/flag selects, search) is
   // tall enough to push the actual table below the fold, especially for a signed-out viewer
@@ -6193,20 +6790,25 @@ export default function App() {
   // Resolve which data to use for stats: demo data takes priority
   const statsPlayers = demoData ? demoData.players : allPlayers;
   const statsEventsRaw = demoData ? demoData.events : allEvents;
+  // Resolve each game's effective season the same way everywhere (see resolveGameSeasonId):
+  // its own seasonId first, the linked tournament's seasonId as backup. League/division are
+  // read off whichever season that resolves to, since the season is the authority on those —
+  // a tournament's own leagueId/division (for one with no season link at all) is the last resort.
   const statsGamesRaw = useMemo(() => {
     const rawGames = demoData ? demoData.games : games;
     return rawGames.map(g => {
+      const effectiveSeasonId = resolveGameSeasonId(g, tournaments);
+      if (effectiveSeasonId) {
+        const s = seasons.find(x => x.id === effectiveSeasonId);
+        if (s) {
+          return { ...g, leagueId: s.leagueId || undefined, division: s.division || undefined, seasonId: effectiveSeasonId };
+        }
+      }
       if (g.tournamentId) {
-         const t = tournaments.find(x => x.id === g.tournamentId);
-         if (t) {
-            const matchedSeason = seasons.find(s => s.leagueId === t.leagueId && s.year === t.year && s.division === t.division);
-            return { ...g, leagueId: t.leagueId || undefined, division: t.division || undefined, seasonId: matchedSeason ? matchedSeason.id : (g.seasonId || undefined) };
-         }
-      } else if (g.seasonId) {
-         const s = seasons.find(x => x.id === g.seasonId);
-         if (s) {
-            return { ...g, leagueId: s.leagueId || undefined, division: s.division || undefined };
-         }
+        const t = tournaments.find(x => x.id === g.tournamentId);
+        if (t && (t.leagueId || t.division)) {
+          return { ...g, leagueId: t.leagueId || undefined, division: t.division || undefined };
+        }
       }
       return g;
     });
@@ -6219,7 +6821,7 @@ export default function App() {
       .filter(sea => {
         const yearMatch = sea.name?.match(/\d{4}/) || sea.year?.match(/\d{4}/);
         if (!yearMatch) return true;
-        return parseInt(yearMatch[0], 10) > 2020;
+        return parseInt(yearMatch[0], 10) >= 2020;
       })
       .sort((a,b) => (b.description || b.name).localeCompare(a.description || a.name));
   }, [demoData, seasons]);
@@ -6232,7 +6834,7 @@ export default function App() {
     return new Set(s.filter(sea => {
       const yearMatch = sea.name?.match(/\d{4}/) || sea.year?.match(/\d{4}/);
       if (!yearMatch) return false;
-      return parseInt(yearMatch[0], 10) <= 2020;
+      return parseInt(yearMatch[0], 10) < 2020;
     }).map(sea => sea.id));
   }, [demoData, seasons]);
 
@@ -6253,9 +6855,13 @@ export default function App() {
     return Array.from(ySet).sort((a, b) => b.localeCompare(a));
   }, [statsSeasons, legacySeasonIds]);
 
+  // Everyone gets modern (2020+) games; a real admin in Legacy Mode gets the inverse — only
+  // legacy games — so the same Stats/Watch surfaces double as the legacy review tool, with no
+  // separate data path to keep in sync. Game-level (not just season-level) so it also catches
+  // the old bulk-imported games whose seasonId is a bare year string with no real Season doc.
   const statsGames = useMemo(() => {
-    return statsGamesRaw.filter(g => !legacySeasonIds.has(g.seasonId));
-  }, [statsGamesRaw, legacySeasonIds]);
+    return statsGamesRaw.filter(g => isLegacyGame(g, seasons, tournaments) === effectiveLegacyMode);
+  }, [statsGamesRaw, seasons, tournaments, effectiveLegacyMode]);
 
   // Every authored event is valid — there is no verification gate any more. Accuracy is
   // settled by voting, and a downvoted event gets corrected rather than hidden. What data
@@ -6455,22 +7061,13 @@ export default function App() {
 
 
 
-      const gListRaw = (gamesSnap.data()?.data || []) as Game[];
-      const gList = gListRaw.map(g => {
-        if (g.tournamentId) {
-           const t = tourneyList.find(x => x.id === g.tournamentId);
-           if (t) {
-              const matchedSeason = sList.find(s => s.leagueId === t.leagueId && s.year === t.year && s.division === t.division);
-              return { ...g, leagueId: t.leagueId || undefined, division: t.division || undefined, seasonId: matchedSeason ? matchedSeason.id : (g.seasonId || undefined) };
-           }
-        } else if (g.seasonId) {
-           const s = sList.find(x => x.id === g.seasonId);
-           if (s) {
-              return { ...g, leagueId: s.leagueId || undefined, division: s.division || undefined };
-           }
-        }
-        return g;
-      });
+      // Keep games exactly as stored — no inferring/overwriting seasonId or league/division here.
+      // This is the raw state GameEditRow edits against, so baking a tournament-derived guess
+      // into it would make an untouched Season dropdown look "set" and risk that guess getting
+      // silently written back as fact on the next save. Anywhere that needs a game's *effective*
+      // season (stats, rosters, year) resolves it on demand via resolveGameSeasonId instead —
+      // see statsGamesRaw.
+      const gList = (gamesSnap.data()?.data || []) as Game[];
       setGames(gList.sort((a, b) => new Date(serializeTimestamp(b.createdAt)).getTime() - new Date(serializeTimestamp(a.createdAt)).getTime()));
 
       const vList = (videosSnap.data()?.data || []) as Video[];
@@ -6651,7 +7248,11 @@ export default function App() {
   useEffect(() => {
     if (!currentVideo || !currentGame || !allPlayers.length) return;
 
-    const fetchRoster = async (teamId: string, seasonId: string, setRoster: any) => {
+    const fetchRoster = async (teamId: string, seasonId: string | undefined, setRoster: any) => {
+      if (!seasonId) {
+        setRoster([]);
+        return;
+      }
       const q = query(collection(db, 'rosters'), where('teamId', '==', teamId), where('seasonId', '==', seasonId));
       const snapshot = await getDocs(q);
       if (snapshot.empty) {
@@ -6672,9 +7273,15 @@ export default function App() {
     let unsubHome: any;
     let unsubAway: any;
 
+    // A game linked through a tournament rather than a direct season would otherwise never
+    // resolve a roster — rosters are matched by exact (teamId, seasonId), and the game's own
+    // seasonId is empty in that case. Resolve the same way the rest of the app does (game's own
+    // season first, tournament's season as backup) so rosters actually show up.
+    const effectiveSeasonId = resolveGameSeasonId(currentGame, tournaments);
+
     const setup = async () => {
-      unsubHome = await fetchRoster(currentGame.homeTeamId, currentGame.seasonId, setHomeRosterPlayers);
-      unsubAway = await fetchRoster(currentGame.awayTeamId, currentGame.seasonId, setAwayRosterPlayers);
+      unsubHome = await fetchRoster(currentGame.homeTeamId, effectiveSeasonId, setHomeRosterPlayers);
+      unsubAway = await fetchRoster(currentGame.awayTeamId, effectiveSeasonId, setAwayRosterPlayers);
     };
 
     setup();
@@ -6683,7 +7290,7 @@ export default function App() {
       if (unsubHome) unsubHome();
       if (unsubAway) unsubAway();
     };
-  }, [currentVideo, currentGame, allPlayers]);
+  }, [currentVideo, currentGame, allPlayers, tournaments]);
 
   // Active Players tracking (from events)
   useEffect(() => {
@@ -8062,6 +8669,61 @@ export default function App() {
     } catch (error) { handleFirestoreError(error, OperationType.DELETE, 'videos'); }
   };
 
+  const handleEditVideo = async (id: string, newTitle: string, newYoutubeId: string) => {
+    const v = videos.find(vv => vv.id === id);
+    if (!v) return;
+    try {
+      await updateDoc(doc(db, 'videos', id), { title: newTitle, youtubeId: newYoutubeId });
+
+      const oldAgg = { id: v.id, gameId: v.gameId, videoId: v.videoId, youtubeId: v.youtubeId || '', title: v.title || '', createdAt: serializeTimestamp(v.createdAt) };
+      const newAgg = { ...oldAgg, title: newTitle, youtubeId: newYoutubeId };
+      await updateDoc(doc(db, 'aggregated', 'videos'), { data: arrayRemove(oldAgg) }).catch(() => { });
+      await updateDoc(doc(db, 'aggregated', 'videos'), { data: arrayUnion(newAgg) }).catch(() => { });
+
+      setVideos(prev => prev.map(vv => vv.id === id ? { ...vv, title: newTitle, youtubeId: newYoutubeId } : vv));
+      toast.success('Video updated');
+    } catch (error) { handleFirestoreError(error, OperationType.WRITE, 'videos'); }
+  };
+
+  // Attaches a new recording to an EXISTING game only — a bare Video doc with no game to
+  // belong to isn't meaningful here, and creating games is deliberately left to the Tracker's
+  // "Create New Game Link" flow (handleSearchVideo), which also sets up rosters/season context.
+  const handleAddVideo = async (youtubeUrlOrId: string, title: string, gameId: string) => {
+    if (!gameId) {
+      toast.error('Select a game to attach this video to.');
+      return null;
+    }
+    const extractYoutubeId = (url: string) => {
+      if (/^[a-zA-Z0-9_-]{11}$/.test(url)) return url;
+      const match = url.match(/(?:v=|\/v\/|embed\/|youtu\.be\/|shorts\/|\/u\/\w\/|watch\?v=)([^#&?]*)/);
+      return match && match[1] && match[1].length === 11 ? match[1] : null;
+    };
+    const youtubeId = extractYoutubeId(youtubeUrlOrId.trim());
+    if (!youtubeId) {
+      toast.error('Enter a valid YouTube URL or 11-character video ID.');
+      return null;
+    }
+
+    const game = games.find(g => g.id === gameId);
+    const homeTeam = game ? teams.find(t => t.id === game.homeTeamId) : undefined;
+    const awayTeam = game ? teams.find(t => t.id === game.awayTeamId) : undefined;
+    const finalTitle = title.trim() || (homeTeam && awayTeam ? `${homeTeam.name} vs ${awayTeam.name}` : `Recording for ${gameId}`);
+
+    try {
+      const vId = crypto.randomUUID();
+      await setDoc(doc(db, 'videos', vId), { youtubeId, videoId: vId, gameId, title: finalTitle, createdAt: serverTimestamp() });
+      await updateDoc(doc(db, 'aggregated', 'videos'), {
+        data: arrayUnion({ id: vId, videoId: vId, youtubeId, gameId, title: finalTitle, createdAt: new Date().toISOString() })
+      }).catch(() => { });
+      setVideos(prev => [...prev, { id: vId, videoId: vId, youtubeId, gameId, title: finalTitle, createdAt: new Date() } as Video]);
+      toast.success('Video added');
+      return vId;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'videos');
+      return null;
+    }
+  };
+
   const handleDeleteSeason = async (id: string) => {
     try {
       const deletedSeason = seasons.find(s => s.id === id);
@@ -8545,7 +9207,10 @@ export default function App() {
     const gId = newVideoData.gameId?.trim() || `game_${crypto.randomUUID()}`;
     const vId = crypto.randomUUID();
 
-    const normalizedSeasonId = tournamentId ? null : seasonId || null;
+    // A game can carry both a Tournament and a Season — the Season is never cleared just
+    // because a Tournament was also picked (see resolveGameSeasonId). League/Division are only
+    // a bare-metadata fallback for when neither is set.
+    const normalizedSeasonId = seasonId || null;
     const normalizedLeagueId = (tournamentId || seasonId) ? null : leagueId || null;
     const normalizedDivision = (tournamentId || seasonId) ? null : division || null;
 
@@ -10983,6 +11648,8 @@ export default function App() {
             onDeleteTeam={handleDeleteTeam}
             onDeleteGame={handleDeleteGame}
             onDeleteVideo={handleDeleteVideo}
+            onEditVideo={handleEditVideo}
+            onAddVideo={handleAddVideo}
             onDeleteSeason={handleDeleteSeason}
             onEditSeason={handleEditSeason}
             onDeletePlayer={handleDeletePlayer}
@@ -11004,7 +11671,7 @@ export default function App() {
           />
         ) : view === 'create' && canUseCreateTools ? (
           <CreateView
-            events={statsEventsRaw}
+            events={statsEvents}
             moderatorUids={moderatorUids}
             onMakeModerator={isAdmin ? handleAddRole : undefined}
             teams={teams}
@@ -11012,7 +11679,7 @@ export default function App() {
             players={allPlayers}
             leagues={leagues}
             tournaments={tournaments}
-            games={games}
+            games={statsGames}
             onOpenGame={handleOpenGameForReview}
             searchQuery={searchQuery}
             setSearchQuery={setSearchQuery}
@@ -11068,6 +11735,18 @@ export default function App() {
                 <StatsTabButton active={statsSubView === 'beaters'} onClick={() => setStatsSubView('beaters')} label="Dodgeball" activeClass="bg-neutral-900 text-white" />
                 <StatsTabButton active={statsSubView === 'seekers'} onClick={() => setStatsSubView('seekers')} label="Flag" activeClass="bg-yellow-400 text-black" />
               </StatsTabSelector>
+              {isAdmin && (
+                <button
+                  onClick={() => setLegacyMode(v => !v)}
+                  title="Admin only: swap every stats/watch list to pre-2020 legacy games instead of hiding them, so you can review and fix them up."
+                  className={cn(
+                    'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-all',
+                    legacyMode ? 'bg-purple-600 border-purple-600 text-white shadow-sm' : 'bg-gray-50 border-gray-200 text-gray-500 hover:bg-white hover:border-gray-300'
+                  )}
+                >
+                  <Archive className="w-3.5 h-3.5" /> Legacy Only
+                </button>
+              )}
               {/* With Partial = every game with at least one side complete, counting only the
                   complete side. Complete = both sides done. */}
               <div className="flex border rounded-lg bg-gray-50 overflow-hidden text-xs font-bold shadow-sm">
@@ -11136,6 +11815,16 @@ export default function App() {
                 positionFilter={statsSubView === 'quadball' ? statsPositionFilter : undefined}
                 onPositionFilterChange={statsSubView === 'quadball' ? setStatsPositionFilter : undefined}
               />
+            )}
+
+            {effectiveLegacyMode && (
+              <div className="bg-purple-50 border border-purple-200 rounded-xl p-3 text-xs text-purple-800 flex items-center justify-between gap-3 shadow-sm mb-4">
+                <div className="flex items-center">
+                  <Archive className="w-5 h-5 text-purple-500 mr-3 flex-shrink-0" />
+                  <div><span className="font-bold">Legacy Mode.</span> Showing only pre-2020 games, hidden from everyone else — use this to review them and see what still needs fixing.</div>
+                </div>
+                <button onClick={() => setLegacyMode(false)} className="font-bold text-purple-600 hover:text-purple-800 whitespace-nowrap shrink-0">Exit Legacy Mode</button>
+              </div>
             )}
 
             {!hasPrivilegedStatsAccess && currentSeasonId && (
@@ -11247,6 +11936,32 @@ export default function App() {
           />
         ) : !currentVideo ? (
           <div className="mx-auto mt-8 px-6 pb-16">
+
+            {isAdmin && (
+              <div className={cn(
+                'flex items-center justify-between gap-3 rounded-xl p-3 text-xs shadow-sm mb-6 border',
+                legacyMode ? 'bg-purple-50 border-purple-200 text-purple-800' : 'bg-gray-50 border-gray-200 text-gray-500'
+              )}>
+                <div className="flex items-center">
+                  <Archive className={cn('w-5 h-5 mr-3 flex-shrink-0', legacyMode ? 'text-purple-500' : 'text-gray-400')} />
+                  <div>
+                    <span className="font-bold">Legacy Mode.</span>{' '}
+                    {legacyMode
+                      ? 'Showing only pre-2020 games below, hidden from everyone else — click through to the video to see what still needs fixing.'
+                      : 'Admin only: switch these lists to pre-2020 legacy games instead of the normal ones.'}
+                  </div>
+                </div>
+                <button
+                  onClick={() => setLegacyMode(v => !v)}
+                  className={cn(
+                    'font-bold whitespace-nowrap shrink-0 px-3 py-1.5 rounded-lg border transition-all',
+                    legacyMode ? 'text-purple-600 hover:text-purple-800 border-purple-300 bg-white' : 'text-gray-600 hover:text-gray-900 border-gray-200 bg-white hover:border-gray-300'
+                  )}
+                >
+                  {legacyMode ? 'Exit Legacy Mode' : 'Enter Legacy Mode'}
+                </button>
+              </div>
+            )}
 
             <div className="flex flex-col xl:flex-row gap-6 w-full items-start">
 

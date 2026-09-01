@@ -162,7 +162,8 @@ export default function StatsFilters({
   const teamOptions = teams.map(t => ({ value: t.id, label: t.name }));
   const yearOptions = availableYears.map(y => ({ value: y, label: y }));
   
-  // Tournament label: "<division>? <name> <year>"
+  // Tournament names repeat year over year (the same Cup, Regionals, etc.), so disambiguate
+  // with year and division: "<year>? - <name> - <division>?"
   const tournamentOptions = tournaments
     .filter(t => {
       if (leagueDivisions.length > 0) {
@@ -175,10 +176,10 @@ export default function StatsFilters({
     })
     .map(t => {
       const parts: string[] = [];
-      if (t.division) parts.push(t.division);
-      parts.push(t.name);
       if (t.year) parts.push(t.year);
-      return { value: t.id, label: parts.join(' ') };
+      parts.push(t.name);
+      if (t.division) parts.push(t.division);
+      return { value: t.id, label: parts.join(' - ') };
     });
 
   return (
