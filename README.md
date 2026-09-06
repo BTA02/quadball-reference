@@ -47,3 +47,23 @@ each column and locks sorting to best-first, so a casual league's stats page isn
 also a public list of who is worst. Off by default; turned on per-release with the
 `LEADERS_ONLY` repository variable. Implementation and rationale live in
 [`src/lib/leadersOnly.ts`](src/lib/leadersOnly.ts).
+
+### Trying it locally
+
+Two things keep it invisible by default, and you usually have to clear both:
+
+1. **It's off unless the build says otherwise.** Put `VITE_LEADERS_ONLY=true` in
+   `.env.local` and restart the dev server — Vite only reads env files at startup.
+2. **Moderators and admins are exempt**, so a signed-in moderator still sees the
+   full tables. Use the *View as public* toggle at the top of the Create tab, or
+   sign out.
+
+Or skip both with **`?leaders=on`** on any page (`http://localhost:3000/?leaders=on`).
+That forces the mode on for one page load whatever your role, which is also the way
+to check the public view on a deployed build. It only ever turns the mode *on* —
+`?leaders=off` does nothing, on purpose.
+
+The frosted panel only appears when players are actually being hidden: it needs
+more than 10 ranked players in the current filter (10 is the floor on published
+rows), and it sits at the foot of the **last** page. The Team tabs are never
+trimmed, so check Quadball → Box Score rather than Quadball → Team.

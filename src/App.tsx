@@ -124,7 +124,7 @@ import ListsView from './components/ListsView';
 import GameBoxScoreView from './components/GameBoxScoreView';
 import StatsFilters from './components/StatsFilters';
 import {
-  LEADERS_ONLY_ENABLED, LEADERS_ONLY_PREVIEW_KEY,
+  LEADERS_ONLY_ENABLED, LEADERS_ONLY_FORCED, LEADERS_ONLY_PREVIEW_KEY,
   LEADERS_TOP_FRACTION, LEADERS_MIN_ROWS,
 } from './lib/leadersOnly';
 import LandingHero from './components/LandingHero';
@@ -6184,7 +6184,9 @@ export default function App() {
       return next;
     });
   };
-  const leadersOnly = LEADERS_ONLY_ENABLED && (!canModerate || leadersOnlyPreview);
+  // `?leaders=on` overrides the moderator exemption too, so a moderator can check
+  // the public view without flipping the Create toggle for their whole session.
+  const leadersOnly = LEADERS_ONLY_FORCED || (LEADERS_ONLY_ENABLED && (!canModerate || leadersOnlyPreview));
   // The Info page is long, so jump to the Leaders Only section rather than the top
   // of it. The timeout lets the view finish switching before we look for the anchor.
   const showLeadersOnlyInfo = () => {

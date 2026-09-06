@@ -29,10 +29,27 @@ export const LEADERS_MIN_ROWS = 10;
 const TRUTHY = new Set(['1', 'true', 'on', 'yes']);
 
 /**
+ * `?leaders=on` forces the mode on for this page load, for anyone, moderators
+ * included — the one way to see the public view without a rebuild or a role
+ * change. It deliberately only turns the mode ON: a parameter that could turn it
+ * off would be a public bypass of the whole feature, so `?leaders=off` does
+ * nothing.
+ */
+export const LEADERS_ONLY_FORCED = (() => {
+  if (typeof window === 'undefined') return false;
+  try {
+    const value = new URLSearchParams(window.location.search).get('leaders');
+    return value !== null && TRUTHY.has(value.trim().toLowerCase());
+  } catch {
+    return false;
+  }
+})();
+
+/**
  * Release-time switch. Off unless the build was given VITE_LEADERS_ONLY.
  * Read once at module load — it's baked into the bundle by Vite either way.
  */
-export const LEADERS_ONLY_ENABLED = TRUTHY.has(
+export const LEADERS_ONLY_ENABLED = LEADERS_ONLY_FORCED || TRUTHY.has(
   String(import.meta.env?.VITE_LEADERS_ONLY ?? '').trim().toLowerCase()
 );
 

@@ -81,6 +81,10 @@ Changing the variable does not change what is live — a variable only takes eff
 on the next build, so redeploy the current tag (Actions → Deploy, `ref` =
 `deployed-production` or the live version tag) to apply it.
 
+To see the Leaders Only view on a build that shipped without it — or as a
+moderator, who is otherwise exempt — append `?leaders=on` to any page. The
+parameter only turns the mode on, never off.
+
 ## The `production` environment
 
 Deploy runs against the `production` GitHub Environment, which is where to add
