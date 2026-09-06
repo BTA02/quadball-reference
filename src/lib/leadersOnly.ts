@@ -35,23 +35,7 @@ const TRUTHY = new Set(['1', 'true', 'on', 'yes']);
  * off would be a public bypass of the whole feature, so `?leaders=off` does
  * nothing.
  */
-// ─────────────────────────────────────────────────────────────────────────────
-// TEMPORARY — TESTING ONLY. REVERT THIS COMMIT BEFORE MERGING.
-//
-// Forces Leaders Only on everywhere: every build, every page, every role,
-// moderators included, ignoring VITE_LEADERS_ONLY entirely. It exists so the
-// mode can be seen locally with nothing but `npm run dev`.
-//
-//   git revert f7e194f..HEAD   # or just: git revert <this commit>
-//
-// With this on, the "View as public" toggle on the Create tab has no visible
-// effect — the mode is already on for everyone. Set it to false (or revert) to
-// test the real gating.
-const FORCE_LEADERS_ONLY_FOR_TESTING = true;
-// ─────────────────────────────────────────────────────────────────────────────
-
 export const LEADERS_ONLY_FORCED = (() => {
-  if (FORCE_LEADERS_ONLY_FOR_TESTING) return true;
   if (typeof window === 'undefined') return false;
   try {
     const value = new URLSearchParams(window.location.search).get('leaders');
