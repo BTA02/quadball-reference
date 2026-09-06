@@ -9,8 +9,9 @@
  *
  * Whether it's on is a deploy-time decision (VITE_LEADERS_ONLY) rather than a
  * viewer preference — a public toggle would defeat the point. Moderators are the
- * exception: they always get the full tables, and can opt into a preview of the
- * public view from the Create tab.
+ * exception: they always get the full tables, since they need the whole field to
+ * check tracking. The one way to look at the public view is `?leaders=on`, which
+ * only ever turns the mode on.
  */
 
 // Kept local rather than imported from the StatsTable component so this module
@@ -52,9 +53,6 @@ export const LEADERS_ONLY_FORCED = (() => {
 export const LEADERS_ONLY_ENABLED = LEADERS_ONLY_FORCED || TRUTHY.has(
   String(import.meta.env?.VITE_LEADERS_ONLY ?? '').trim().toLowerCase()
 );
-
-/** localStorage key for a moderator opting into the public (Leaders Only) view. */
-export const LEADERS_ONLY_PREVIEW_KEY = 'qr:leadersOnlyPreview';
 
 export type StatPolarity = 'higher' | 'lower' | 'neutral';
 

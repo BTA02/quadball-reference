@@ -48,20 +48,18 @@ also a public list of who is worst. Off by default; turned on per-release with t
 `LEADERS_ONLY` repository variable. Implementation and rationale live in
 [`src/lib/leadersOnly.ts`](src/lib/leadersOnly.ts).
 
-### Trying it locally
+### Trying it out
 
-Two things keep it invisible by default, and you usually have to clear both:
+`?leaders=on` on any URL (`http://localhost:3000/?leaders=on`) turns the mode on
+for that page load, whatever the build shipped with and whatever your role — which
+matters because moderators are otherwise exempt from it. It's the way to check the
+public view on a deployed build too. The parameter only ever turns the mode *on*;
+`?leaders=off` does nothing, on purpose, since a switch that could turn it off
+would be a public bypass of the whole feature.
 
-1. **It's off unless the build says otherwise.** Put `VITE_LEADERS_ONLY=true` in
-   `.env.local` and restart the dev server — Vite only reads env files at startup.
-2. **Moderators and admins are exempt**, so a signed-in moderator still sees the
-   full tables. Use the *View as public* toggle at the top of the Create tab, or
-   sign out.
-
-Or skip both with **`?leaders=on`** on any page (`http://localhost:3000/?leaders=on`).
-That forces the mode on for one page load whatever your role, which is also the way
-to check the public view on a deployed build. It only ever turns the mode *on* —
-`?leaders=off` does nothing, on purpose.
+To exercise the real release path instead, put `VITE_LEADERS_ONLY=true` in
+`.env.local` and restart the dev server — Vite reads env files only at startup —
+then sign out, since a signed-in moderator is exempt.
 
 The frosted panel only appears when players are actually being hidden: it needs
 more than 10 ranked players in the current filter (10 is the floor on published

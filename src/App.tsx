@@ -124,7 +124,7 @@ import ListsView from './components/ListsView';
 import GameBoxScoreView from './components/GameBoxScoreView';
 import StatsFilters from './components/StatsFilters';
 import {
-  LEADERS_ONLY_ENABLED, LEADERS_ONLY_FORCED, LEADERS_ONLY_PREVIEW_KEY,
+  LEADERS_ONLY_ENABLED, LEADERS_ONLY_FORCED,
   LEADERS_TOP_FRACTION, LEADERS_MIN_ROWS,
 } from './lib/leadersOnly';
 import LandingHero from './components/LandingHero';
@@ -5377,8 +5377,7 @@ function CreateView({
   onAddTeam, onAddPlayer, onAddPlayerToRoster, onRemovePlayerFromRoster,
   onCreateRoster, onDeleteRoster, onEditPlayer, onDeletePlayer,
   activeTab: activeTabProp,
-  setActiveTab: setActiveTabProp,
-  leadersOnlyPreview, onToggleLeadersOnlyPreview
+  setActiveTab: setActiveTabProp
 }: any) {
   const [localActiveTab, setLocalActiveTab] = useState<'rosters' | 'teams' | 'players' | 'games' | 'activity'>('rosters');
   const activeTab = activeTabProp || localActiveTab;
@@ -5460,38 +5459,21 @@ function CreateView({
         </div>
       </div>
 
-      {/* Leaders Only is on for this release, so the public Stats tables are trimmed
-          to the top of each column. Moderators see the whole field by default — this
-          is the switch into the public view, for checking what everyone else sees. */}
+      {/* Moderators are exempt from Leaders Only, so their Stats tables look
+          different from everyone else's. Say so, and point at the one way to
+          check the public view. */}
       {LEADERS_ONLY_ENABLED && (
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-amber-50/60 border border-amber-200/70 rounded-xl">
-          <div className="flex items-start gap-3">
-            <Trophy className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
-            <div>
-              <h3 className="text-sm font-bold text-gray-900">Leaders Only is on for this release</h3>
-              <p className="text-xs text-gray-600 mt-0.5">
-                The public Stats tables show the top {Math.round(LEADERS_TOP_FRACTION * 100)}% of each column
-                (at least {LEADERS_MIN_ROWS} rows) and can't be sorted worst-first. As a moderator you see the
-                full field — turn this on to browse Stats the way everyone else does.
-              </p>
-            </div>
+        <div className="flex items-start gap-3 p-4 bg-amber-50/60 border border-amber-200/70 rounded-xl">
+          <Trophy className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+          <div>
+            <h3 className="text-sm font-bold text-gray-900">Leaders Only is on for this release</h3>
+            <p className="text-xs text-gray-600 mt-0.5">
+              The public Stats tables show the top {Math.round(LEADERS_TOP_FRACTION * 100)}% of each column
+              (at least {LEADERS_MIN_ROWS} rows) and can't be sorted worst-first. As a moderator you're exempt
+              and see the full field — add <code className="px-1 py-0.5 bg-amber-100/70 rounded font-mono">?leaders=on</code> to
+              the URL to browse Stats the way everyone else does.
+            </p>
           </div>
-          <button
-            onClick={onToggleLeadersOnlyPreview}
-            role="switch"
-            aria-checked={!!leadersOnlyPreview}
-            className={cn(
-              'shrink-0 flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-bold border transition-all',
-              leadersOnlyPreview
-                ? 'bg-amber-500 border-amber-500 text-white shadow-sm'
-                : 'bg-white border-gray-200 text-gray-600 hover:border-gray-300'
-            )}
-          >
-            <span className={cn('w-8 h-4 rounded-full relative transition-colors', leadersOnlyPreview ? 'bg-white/40' : 'bg-gray-200')}>
-              <span className={cn('absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-all', leadersOnlyPreview ? 'left-4' : 'left-0.5')} />
-            </span>
-            {leadersOnlyPreview ? 'Viewing as public' : 'View as public'}
-          </button>
         </div>
       )}
 
@@ -6172,21 +6154,9 @@ export default function App() {
 
   // Leaders Only trims the public leaderboards to the top of each column (see
   // src/lib/leadersOnly.ts). Moderators are exempt — they need the whole field to
-  // check tracking — but can switch into the public view from the Create tab to
-  // see what everyone else sees.
-  const [leadersOnlyPreview, setLeadersOnlyPreview] = useState<boolean>(() => {
-    try { return localStorage.getItem(LEADERS_ONLY_PREVIEW_KEY) === 'true'; } catch { return false; }
-  });
-  const toggleLeadersOnlyPreview = () => {
-    setLeadersOnlyPreview(prev => {
-      const next = !prev;
-      try { localStorage.setItem(LEADERS_ONLY_PREVIEW_KEY, String(next)); } catch { /* private mode */ }
-      return next;
-    });
-  };
-  // `?leaders=on` overrides the moderator exemption too, so a moderator can check
-  // the public view without flipping the Create toggle for their whole session.
-  const leadersOnly = LEADERS_ONLY_FORCED || (LEADERS_ONLY_ENABLED && (!canModerate || leadersOnlyPreview));
+  // check tracking — and `?leaders=on` overrides that exemption, so a moderator can
+  // still check the public view without a rebuild or a role change.
+  const leadersOnly = LEADERS_ONLY_FORCED || (LEADERS_ONLY_ENABLED && !canModerate);
   // The Info page is long, so jump to the Leaders Only section rather than the top
   // of it. The timeout lets the view finish switching before we look for the anchor.
   const showLeadersOnlyInfo = () => {
@@ -10877,7 +10847,7 @@ export default function App() {
                 <p>Sorting only runs one way: <strong>best first</strong>. Every column knows which direction is the good one — most goals, but <em>fewest</em> turnovers — so clicking a header always puts the strongest performances on top. There's no way to flip a table over and read off the worst. A handful of columns have no good direction at all (average time to catch, for instance, where a seeker with no catches sits at zero); those still sort both ways, but they're still cut to the same top slice.</p>
                 <p>Everyone below the cut sits behind the frosted panel at the bottom of each table. It's there so you can tell a table is trimmed rather than complete — the bars behind the frost are placeholders, not blurred-out stat lines.</p>
                 <p>What this <em>doesn't</em> touch: your own <strong>player profile</strong>, a <strong>game's box score</strong>, and the <strong>team</strong> tables. Profiles and box scores are the full record of what happened, all stats good and bad, and teams are a public field of a dozen or so rather than individuals. Search on the Stats page only searches the players who made the cut, so a name that isn't showing up may simply be outside the top {Math.round(LEADERS_TOP_FRACTION * 100)}% for that column — try a different column, or open their profile directly.</p>
-                <p>Moderators always see the full tables, and can switch into the public view from the <strong>Create</strong> tab.</p>
+                <p>Moderators always see the full tables, since they need the whole field to check that games are tracked properly.</p>
               </div>
             </div>
             )}
@@ -11110,8 +11080,6 @@ export default function App() {
             onDeletePlayer={handleDeletePlayer}
             activeTab={createActiveTab}
             setActiveTab={setCreateActiveTab}
-            leadersOnlyPreview={leadersOnlyPreview}
-            onToggleLeadersOnlyPreview={toggleLeadersOnlyPreview}
           />
         ) : view === 'review' ? (
           <div className="-mx-4 px-4 -mt-8 pt-6 pb-8 min-h-[80vh]">
