@@ -338,6 +338,10 @@ service cloud.firestore {
       allow read: if true;
       // Public read is fine now that this holds uids and no addresses. Only the admin may
       // grant moderator access — a moderator promoting other moderators is not in the model.
+      //
+      // appConfig/hiddenPlayers lives here too: the ids of players who asked to be left off
+      // the public stat pages. Every client has to read it to apply the filter, and only the
+      // admin may add to or remove from it.
       allow create, update, delete: if isAdmin();
     }
 

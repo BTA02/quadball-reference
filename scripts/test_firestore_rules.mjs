@@ -240,6 +240,20 @@ await it('the admin may grant moderator access', async () => {
   await assertSucceeds(updateDoc(doc(asAdmin(), 'appConfig', 'roles'), { moderators: [MOD_UID, AUTHOR_UID] }));
 });
 
+console.log('\nplayer opt-out');
+
+await it('appConfig/hiddenPlayers is publicly readable (the front end filters on it)', async () => {
+  await assertSucceeds(getDoc(doc(testEnv.unauthenticatedContext().firestore(), 'appConfig', 'hiddenPlayers')));
+});
+
+await it('a moderator may NOT hide a player from the stat pages', async () => {
+  await assertFails(setDoc(doc(asModerator(), 'appConfig', 'hiddenPlayers'), { playerIds: ['p1'] }));
+});
+
+await it('the admin may hide a player from the stat pages', async () => {
+  await assertSucceeds(setDoc(doc(asAdmin(), 'appConfig', 'hiddenPlayers'), { playerIds: ['p1'] }));
+});
+
 console.log('\nteams');
 
 await it('a non-member may NOT edit a team', async () => {

@@ -21,6 +21,9 @@ interface Team { id: string; name: string; [k: string]: any; }
 interface Game { id: string; isVerified?: boolean; seasonId: string; homeTeamId: string; awayTeamId: string; [k: string]: any; }
 interface Season { id: string; name: string; [k: string]: any; }
 
+// Stable identity so the memos below don't re-run on every render when the prop is defaulted.
+const EMPTY_HIDDEN: Set<string> = new Set();
+
 interface ListsViewProps {
   players: Player[];
   events: GameEvent[];
@@ -28,6 +31,12 @@ interface ListsViewProps {
   games: Game[];
   seasons: Season[];
   statsFilter?: 'public' | 'full';
+  /**
+   * Players who opted out of the public stat pages. They are dropped from the lists after
+   * the archetypes are classified and ranked, so the z-score baselines every other player is
+   * measured against are the same as they were before anyone opted out. Empty for admins.
+   */
+  hiddenPlayerIds?: Set<string>;
   onPlayerSelect?: (playerId: string) => void;
   onBack?: () => void;
 }
@@ -61,6 +70,7 @@ function getQuadballOnlyPlayerIds(events: GameEvent[], players: Player[]): Set<s
 
 export default function ListsView({
   players, events, teams, games, seasons, statsFilter = 'public',
+  hiddenPlayerIds = EMPTY_HIDDEN,
   onPlayerSelect, onBack
 }: ListsViewProps) {
   const [groupKey, setGroupKey] = useState<GroupKey>('beater');
@@ -112,11 +122,13 @@ export default function ListsView({
       {groupKey === 'beater' ? (
         <BeaterArchetypeSection
           players={players} events={events} games={games} filters={filters} search={search}
+          hiddenPlayerIds={hiddenPlayerIds}
           onPlayerSelect={onPlayerSelect} showHelp={showHelp} setShowHelp={setShowHelp}
         />
       ) : (
         <QuadballArchetypeSection
           players={players} events={events} games={games} filters={filters} search={search}
+          hiddenPlayerIds={hiddenPlayerIds}
           onPlayerSelect={onPlayerSelect} showHelp={showHelp} setShowHelp={setShowHelp}
         />
       )}
@@ -127,9 +139,10 @@ export default function ListsView({
 // ─── Beater Archetypes ──────────────────────────────────────────────
 
 function BeaterArchetypeSection({
-  players, events, games, filters, search, onPlayerSelect, showHelp, setShowHelp
+  players, events, games, filters, search, hiddenPlayerIds = EMPTY_HIDDEN, onPlayerSelect, showHelp, setShowHelp
 }: {
   players: Player[]; events: GameEvent[]; games: Game[]; filters: any; search: string;
+  hiddenPlayerIds?: Set<string>;
   onPlayerSelect?: (id: string) => void; showHelp: boolean; setShowHelp: (v: boolean) => void;
 }) {
   const [listKey, setListKey] = useState<BeaterListKey>('aggressive');
@@ -157,13 +170,20 @@ function BeaterArchetypeSection({
     [qualified]
   );
 
+  // Opted-out players drop out here, after classification: classifyBeaterArchetypes z-scores
+  // the whole qualifying pool, so removing them earlier would move everyone else's score.
+  const listed = useMemo(
+    () => classified.filter(c => !hiddenPlayerIds.has(c.playerId)),
+    [classified, hiddenPlayerIds]
+  );
+
   const controlList = useMemo(
-    () => classified.filter(c => c.archetype === 'control').sort((a, b) => a.aggressionScore - b.aggressionScore),
-    [classified]
+    () => listed.filter(c => c.archetype === 'control').sort((a, b) => a.aggressionScore - b.aggressionScore),
+    [listed]
   );
   const aggressiveList = useMemo(
-    () => classified.filter(c => c.archetype === 'aggressive').sort((a, b) => b.aggressionScore - a.aggressionScore),
-    [classified]
+    () => listed.filter(c => c.archetype === 'aggressive').sort((a, b) => b.aggressionScore - a.aggressionScore),
+    [listed]
   );
 
   const activeList = listKey === 'control' ? controlList : aggressiveList;
@@ -180,8 +200,8 @@ function BeaterArchetypeSection({
   const lookupMatches = useMemo(() => {
     if (!search) return [];
     const q = search.toLowerCase();
-    return classified.filter(s => s.playerName.toLowerCase().includes(q));
-  }, [classified, search]);
+    return listed.filter(s => s.playerName.toLowerCase().includes(q));
+  }, [listed, search]);
 
   // League-average reference row — the same qualifying pool (`classified`)
   // that every aggression z-score is computed against, spelled out in raw
@@ -239,7 +259,7 @@ function BeaterArchetypeSection({
           />
         </div>
         <span className="text-xs text-gray-400 font-mono">
-          {qualified.length} qualified beaters &bull; {aggressiveList.length} aggressive &bull; {controlList.length} control &bull; {classified.length - controlList.length - aggressiveList.length} balanced
+          {listed.length} qualified beaters &bull; {aggressiveList.length} aggressive &bull; {controlList.length} control &bull; {listed.length - controlList.length - aggressiveList.length} balanced
         </span>
       </div>
 
@@ -359,9 +379,10 @@ function avgOf<T>(rows: T[], key: keyof T): number | null {
 }
 
 function QuadballArchetypeSection({
-  players, events, games, filters, search, onPlayerSelect, showHelp, setShowHelp
+  players, events, games, filters, search, hiddenPlayerIds = EMPTY_HIDDEN, onPlayerSelect, showHelp, setShowHelp
 }: {
   players: Player[]; events: GameEvent[]; games: Game[]; filters: any; search: string;
+  hiddenPlayerIds?: Set<string>;
   onPlayerSelect?: (id: string) => void; showHelp: boolean; setShowHelp: (v: boolean) => void;
 }) {
   const [archetype, setArchetype] = useState<QuadballArchetype>('scorer');
@@ -388,7 +409,12 @@ function QuadballArchetypeSection({
 
   const rankings = useMemo(() => computeQuadballArchetypeRankings(qualified, events), [qualified, events]);
 
-  const activeList = rankings[archetype] || [];
+  // Same as the beater lists: opted-out players come off the ranking, not out of the pool it
+  // was z-scored against, so the league-average row and everyone else's rank are unchanged.
+  const activeList = useMemo(
+    () => (rankings[archetype] || []).filter(s => !hiddenPlayerIds.has(s.playerId)),
+    [rankings, archetype, hiddenPlayerIds]
+  );
 
   const filteredList = useMemo(() => {
     let d = activeList;

@@ -128,6 +128,7 @@ import GameCastView from './components/GameCastView';
 import RecentEventsView from './components/RecentEventsView';
 import { StatsTabSelector, StatsTabButton } from './components/ui/StatsTable';
 import { enrichEventsWithGameTime, getScoreboardName } from './lib/statsComputations';
+import { fetchHiddenPlayerIds, setPlayerHidden } from './lib/hiddenPlayers';
 import TutorialOverlay from './components/tutorial/TutorialOverlay';
 import { useTutorial } from './lib/tutorial/useTutorial';
 import { TRACKER_STEPS } from './lib/tutorial/trackerSteps';
@@ -902,6 +903,9 @@ interface ManagementViewProps {
   onEditSeason: (id: string, newName: string, newLeagueId: string, newDivision: string | undefined, newYear: string, newDescription: string) => Promise<void>;
   onDeletePlayer: (id: string) => void;
   onEditPlayer: (id: string, newFirst: string, newLast: string, gender?: PlayerGender) => Promise<void>;
+  // Players opted out of the public stat pages, and the admin-only toggle for that list.
+  hiddenPlayerIds?: string[];
+  onToggleHiddenPlayer?: (id: string, hidden: boolean) => Promise<void> | void;
   onDeleteRoster: (id: string) => void;
   onSetLocalSimulation?: (data: any) => void;
   onRunMigration: () => Promise<void>;
@@ -1333,7 +1337,9 @@ function PlayerEditRow({
   onEditPlayer,
   onDeletePlayer,
   initialGender,
-  showGenderField = false
+  showGenderField = false,
+  hiddenFromStats = false,
+  onToggleHiddenFromStats
 }: {
   player: any;
   allRosterPlayers: any[];
@@ -1348,6 +1354,10 @@ function PlayerEditRow({
   // create flow, and never rendered as read-only text anywhere in this component.
   initialGender?: PlayerGender;
   showGenderField?: boolean;
+  // Opt-out state, and the admin-only toggle for it. Like the gender field above, both are
+  // only ever passed in from the Manage Players panel.
+  hiddenFromStats?: boolean;
+  onToggleHiddenFromStats?: (id: string, hidden: boolean) => Promise<void> | void;
 }) {
   const [firstName, setFirstName] = useState(p.firstName || '');
   const [lastName, setLastName] = useState(p.lastName || '');
@@ -1375,8 +1385,29 @@ function PlayerEditRow({
         <div className="flex items-center gap-2">
           <span className="font-mono text-[10px] bg-gray-100 px-2 py-1 rounded border border-gray-200 text-gray-600">ID: {p.id}</span>
           <span className="font-bold text-sm text-gray-900">{p.firstName} {p.lastName}</span>
+          {onToggleHiddenFromStats && hiddenFromStats && (
+            <span className="flex items-center gap-1 text-[10px] uppercase font-bold bg-amber-50 text-amber-700 border border-amber-200 px-2 py-1 rounded">
+              <EyeOff className="w-3 h-3" /> Hidden from stats
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
+          {onToggleHiddenFromStats && (
+            <button
+              onClick={() => onToggleHiddenFromStats(p.id, !hiddenFromStats)}
+              title={hiddenFromStats
+                ? 'Show this player on the public stat pages again.'
+                : 'Hide this player from the public stat pages. Their stats stay calculated — only the rows, profile and search results are hidden, and admins still see everything.'}
+              className={cn(
+                'px-2 py-1 rounded-md transition-all shadow-sm flex items-center gap-1 text-[10px] uppercase font-bold border',
+                hiddenFromStats
+                  ? 'bg-amber-50 border-amber-300 text-amber-700 hover:bg-amber-100'
+                  : 'bg-white border-gray-200 text-gray-400 hover:text-amber-600 hover:border-amber-400 hover:bg-amber-50'
+              )}
+            >
+              {hiddenFromStats ? <><Eye className="w-3 h-3" /> Unhide</> : <><EyeOff className="w-3 h-3" /> Hide</>}
+            </button>
+          )}
           {hasChanges && (
             <button
               onClick={async () => {
@@ -2496,6 +2527,8 @@ function ManagementView({
   onEditSeason,
   onDeletePlayer,
   onEditPlayer,
+  hiddenPlayerIds = [],
+  onToggleHiddenPlayer,
   onDeleteRoster,
   onRefreshData,
   onSetLocalSimulation,
@@ -2519,6 +2552,7 @@ function ManagementView({
   // Admin-only lookup of current gender per player id. Fetched directly from the players
   // collection (never from the aggregated/players blob) so this never reaches public views.
   const [playerGenderMap, setPlayerGenderMap] = useState<Record<string, PlayerGender | undefined>>({});
+  const hiddenPlayerIdSet = useMemo(() => new Set(hiddenPlayerIds), [hiddenPlayerIds]);
   useEffect(() => {
     if (activeTab !== 'players') return;
     let cancelled = false;
@@ -4679,6 +4713,8 @@ function ManagementView({
                         player={p}
                         initialGender={playerGenderMap[p.id]}
                         showGenderField
+                        hiddenFromStats={hiddenPlayerIdSet.has(p.id)}
+                        onToggleHiddenFromStats={onToggleHiddenPlayer}
                         allRosterPlayers={allRosterPlayers}
                         rosters={rosters}
                         teams={teams}
@@ -5900,6 +5936,8 @@ export default function App() {
 
   // Global Data
   const [allPlayers, setAllPlayers] = useState<Player[]>([]);
+  // Players who asked to be left off the public stat pages. Ids only — see lib/hiddenPlayers.
+  const [hiddenPlayerIds, setHiddenPlayerIds] = useState<string[]>([]);
   const [leagues, setLeagues] = useState<League[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [tournaments, setTournaments] = useState<Tournament[]>([]);
@@ -6192,6 +6230,14 @@ export default function App() {
 
   // Resolve which data to use for stats: demo data takes priority
   const statsPlayers = demoData ? demoData.players : allPlayers;
+
+  // Opted-out players are dropped from the public leaderboards, profiles and search — never
+  // from the stats themselves, which stay computed exactly as before. Nobody is hidden from
+  // an admin, and "View As" downgrades apply the filter, so the effect is checkable in place.
+  const hiddenStatsPlayerIds = useMemo(
+    () => (isAdmin ? new Set<string>() : new Set(hiddenPlayerIds)),
+    [isAdmin, hiddenPlayerIds]
+  );
   const statsEventsRaw = demoData ? demoData.events : allEvents;
   const statsGamesRaw = useMemo(() => {
     const rawGames = demoData ? demoData.games : games;
@@ -6419,7 +6465,7 @@ export default function App() {
 
   const loadGlobalData = useCallback(async () => {
     try {
-      const [playersSnap, teamsSnap, seasonsSnap, gamesSnap, videosSnap, rolesSnap, leaguesSnap, tournamentsSnap] = await Promise.all([
+      const [playersSnap, teamsSnap, seasonsSnap, gamesSnap, videosSnap, rolesSnap, leaguesSnap, tournamentsSnap, hiddenIds] = await Promise.all([
         getDoc(doc(db, 'aggregated', 'players')),
         getDoc(doc(db, 'aggregated', 'teams')),
         getDoc(doc(db, 'aggregated', 'seasons')),
@@ -6427,9 +6473,11 @@ export default function App() {
         getDoc(doc(db, 'aggregated', 'videos')),
         getDoc(doc(db, 'appConfig', 'roles')),
         getDoc(doc(db, 'aggregated', 'leagues')),
-        getDoc(doc(db, 'aggregated', 'tournaments'))
+        getDoc(doc(db, 'aggregated', 'tournaments')),
+        fetchHiddenPlayerIds().catch(() => [] as string[])
       ]);
       const pList = (playersSnap.data()?.data || []) as Player[];
+      setHiddenPlayerIds(hiddenIds);
       setAllPlayers(pList.sort((a, b) => String(a.firstName + ' ' + a.lastName).localeCompare(String(b.firstName + ' ' + b.lastName))));
 
       const lList = (leaguesSnap.data()?.data || []) as League[];
@@ -6938,6 +6986,7 @@ export default function App() {
     
     const matchedPlayers = statsPlayers
       .filter(p => {
+        if (hiddenStatsPlayerIds.has(p.id)) return false;
         const fullName = `${p.firstName} ${p.lastName}`.toLowerCase();
         return fullName.includes(query) || (p.nickname && p.nickname.toLowerCase().includes(query));
       })
@@ -6979,7 +7028,7 @@ export default function App() {
       });
 
     return [...matchedPlayers, ...matchedTeams, ...matchedGames].slice(0, 10);
-  }, [commandPaletteQuery, statsPlayers, statsTeams, statsGames]);
+  }, [commandPaletteQuery, statsPlayers, statsTeams, statsGames, hiddenStatsPlayerIds]);
 
   const handleSelectCommandPaletteItem = (item: { type: 'player' | 'team' | 'game'; id: string }) => {
     setIsCommandPaletteOpen(false);
@@ -8133,6 +8182,20 @@ export default function App() {
       setAllPlayers(prev => prev.map(p => p.id === id ? { ...p, firstName: newFirst, lastName: newLast } : p).sort((a, b) => String(a.firstName + ' ' + a.lastName).localeCompare(String(b.firstName + ' ' + b.lastName))));
       toast.success("Player updated successfully");
     } catch (error) { handleFirestoreError(error, OperationType.WRITE, 'players'); }
+  };
+
+  // Opt a player out of (or back into) the public stat pages. Admin only, in the UI and in
+  // firestore.rules — neither is sufficient alone. Nothing about their events changes.
+  const handleToggleHiddenPlayer = async (id: string, hidden: boolean) => {
+    if (!isAdmin) {
+      toast.error('Only an admin can hide a player from the stat pages.');
+      return;
+    }
+    try {
+      await setPlayerHidden(id, hidden);
+      setHiddenPlayerIds(prev => hidden ? (prev.includes(id) ? prev : [...prev, id]) : prev.filter(pid => pid !== id));
+      toast.success(hidden ? 'Player hidden from public stat pages' : 'Player restored to public stat pages');
+    } catch (error) { handleFirestoreError(error, OperationType.WRITE, 'appConfig/hiddenPlayers'); }
   };
 
   // Moderators are stored as uids, never emails — appConfig/roles is world-readable, so an
@@ -10813,6 +10876,14 @@ export default function App() {
             </div>
 
             <div className="mb-12">
+              <h2 className="text-3xl font-extrabold border-b pb-4 text-gray-900 mb-6">Keeping Your Stats Off the Site</h2>
+              <div className="space-y-4 text-gray-700 leading-relaxed text-sm">
+                <p>If you'd rather not be listed on the stat pages, we'll take you off them. Email <a href="mailto:quadballreference@gmail.com" className="text-red-600 font-bold hover:underline">quadballreference@gmail.com</a> or message <a href="https://www.reddit.com/user/quadballreference" target="_blank" rel="noopener noreferrer" className="text-red-600 font-bold hover:underline">u/quadballreference</a> on Reddit with the name you play under and the team you played for, so we take the right person off.</p>
+                <p>Once you're hidden, your name stops appearing on the leaderboards, in the Lists, and in search, and your player page is no longer viewable. Your events stay in the games they belong to, so box scores and every team and league total still read correctly — nothing has to be re-tracked, and asking to be put back is just as easy.</p>
+              </div>
+            </div>
+
+            <div className="mb-12">
               <h2 className="text-3xl font-extrabold border-b pb-4 text-gray-900 mb-6">Add A Game</h2>
               <div className="space-y-4 text-gray-700 leading-relaxed text-sm">
                 <p>After signing in, authors can add videos from the Watch tab. Adding a new video is the first step in tracking stats for a game. Once added, any author can start recording events — and you only have to do one team's worth: a moderator marks that team complete and its stats go live on their own.</p>
@@ -10987,6 +11058,8 @@ export default function App() {
             onEditSeason={handleEditSeason}
             onDeletePlayer={handleDeletePlayer}
             onEditPlayer={handleEditPlayer}
+            hiddenPlayerIds={hiddenPlayerIds}
+            onToggleHiddenPlayer={handleToggleHiddenPlayer}
             onDeleteRoster={handleDeleteRoster}
             onRefreshData={loadGlobalData}
             onRunMigration={handleRunMigration}
@@ -11148,6 +11221,7 @@ export default function App() {
             {statsSubView === 'quadball' ? (
               <QuadballStatsView
                 players={statsPlayers}
+                hiddenPlayerIds={hiddenStatsPlayerIds}
                 events={dashboardEvents}
                 teams={statsTeams}
                 games={dashboardGames}
@@ -11165,6 +11239,7 @@ export default function App() {
             ) : statsSubView === 'beaters' ? (
               <BeaterStatsView
                 players={statsPlayers}
+                hiddenPlayerIds={hiddenStatsPlayerIds}
                 events={dashboardEvents}
                 teams={statsTeams}
                 games={dashboardGames}
@@ -11183,6 +11258,7 @@ export default function App() {
             ) : statsSubView === 'seekers' ? (
               <SeekerStatsView
                 players={statsPlayers}
+                hiddenPlayerIds={hiddenStatsPlayerIds}
                 events={dashboardEvents}
                 teams={statsTeams}
                 games={dashboardGames}
@@ -11196,6 +11272,23 @@ export default function App() {
                 onPlayerSelect={handlePlayerProfileClick}
               />
             ) : null}
+          </div>
+        ) : view === 'playerProfile' && activePlayerId && hiddenStatsPlayerIds.has(activePlayerId) ? (
+          // Opting out has to cover the direct link too — the profile is one URL away from
+          // every box score, so filtering only the leaderboards would leave it wide open.
+          <div className="max-w-2xl mx-auto bg-white rounded-xl shadow-sm border p-8 text-center space-y-4">
+            <EyeOff className="w-8 h-8 text-gray-300 mx-auto" />
+            <h2 className="text-xl font-extrabold text-gray-900">This player's stats aren't public</h2>
+            <p className="text-sm text-gray-600 leading-relaxed">
+              At their request, this player is not listed on the stat pages. Their games are still tracked
+              and every team and league total still counts them — only their name is kept off the leaderboards.
+            </p>
+            <button
+              onClick={popProfile}
+              className="px-4 py-2 bg-gray-900 hover:bg-black text-white rounded-lg text-sm font-bold transition-all active:scale-95"
+            >
+              Go back
+            </button>
           </div>
         ) : view === 'playerProfile' && activePlayerId ? (
           <PlayerProfileView
@@ -11237,6 +11330,7 @@ export default function App() {
         ) : view === 'lists' ? (
           <ListsView
             players={statsPlayers}
+            hiddenPlayerIds={hiddenStatsPlayerIds}
             events={listsEvents}
             teams={statsTeams}
             games={listsGames}

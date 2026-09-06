@@ -31,6 +31,9 @@ function formatTime(seconds: number): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+// Stable identity so the memos below don't re-run on every render when the prop is defaulted.
+const EMPTY_HIDDEN: Set<string> = new Set();
+
 interface SeekerStatsViewProps {
   players: Player[];
   events: GameEvent[];
@@ -43,6 +46,11 @@ interface SeekerStatsViewProps {
   minGames?: number;
   bludgerControlMode?: 'all' | 'separate';
   flagFilter?: 'all' | 'on' | 'off';
+  /**
+   * Players who opted out of the public stat pages. Dropped from the rows below, never from
+   * the computation. Empty for admins.
+   */
+  hiddenPlayerIds?: Set<string>;
   onPlayerSelect?: (playerId: string) => void;
 }
 
@@ -50,6 +58,7 @@ export default function SeekerStatsView({
   players, events, teams, games, seasons, statsFilter = 'public',
   teamIds: teamFilterIds = [], search = '',
   minGames = 1, bludgerControlMode = 'all', flagFilter = 'all',
+  hiddenPlayerIds = EMPTY_HIDDEN,
   onPlayerSelect
 }: SeekerStatsViewProps) {
   const [page, setPage] = useState(1);
@@ -106,9 +115,9 @@ export default function SeekerStatsView({
   // Sorted (but not search-filtered) list establishes each player's ORIGINAL rank,
   // so a search doesn't renumber players relative to their un-searched standing.
   const sorted = useMemo(() => {
-    const d = seekerStats.filter(s => s.gamesPlayed >= minGames);
+    const d = seekerStats.filter(s => s.gamesPlayed >= minGames && !hiddenPlayerIds.has(s.playerId));
     return sortBy(d, sortKey as keyof SeekerStats, sortDir);
-  }, [seekerStats, minGames, sortKey, sortDir]);
+  }, [seekerStats, minGames, sortKey, sortDir, hiddenPlayerIds]);
 
   const rankMap = useMemo(() => new Map(sorted.map((s, i) => [s.playerId, i + 1])), [sorted]);
 
