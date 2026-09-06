@@ -25,6 +25,8 @@ import {
   cn, SortDir, sortBy, SortHeader, Cell, 
   StatsTabSelector, StatsTabButton, StatsPaginationFooter 
 } from './ui/StatsTable';
+import LeadersOnlyVeil from './ui/LeadersOnlyVeil';
+import { leadersSlice, resolveSortDir, bestFirstDir } from '../lib/leadersOnly';
 
 interface BeaterStatsViewProps {
   players: Player[];
@@ -42,6 +44,9 @@ interface BeaterStatsViewProps {
   onTeamSelect?: (teamId: string) => void;
   tab?: 'pairs' | 'solo' | 'team';
   onTabChange?: (tab: 'pairs' | 'solo' | 'team') => void;
+  /** Publish only the top slice of the field. See src/lib/leadersOnly.ts. */
+  leadersOnly?: boolean;
+  onShowInfo?: () => void;
 }
 
 export default function BeaterStatsView({ 
@@ -49,7 +54,8 @@ export default function BeaterStatsView({
   teamIds: teamFilterIds = [], search = '',
   minGames = 1, bludgerControlMode = 'all', flagFilter = 'all',
   onPlayerSelect, onTeamSelect,
-  tab: tabProp, onTabChange: onTabChangeProp
+  tab: tabProp, onTabChange: onTabChangeProp,
+  leadersOnly = false, onShowInfo
 }: BeaterStatsViewProps) {
   const [localTab, setLocalTab] = useState<'pairs' | 'solo' | 'team'>('pairs');
   const tab = tabProp || localTab;
@@ -59,14 +65,21 @@ export default function BeaterStatsView({
   };
   const [page, setPage] = useState(1);
   const [sortKey, setSortKey] = useState('plusMinus');
-  const [sortDir, setSortDir] = useState<SortDir>('desc');
+  const [sortDir, setSortDir] = useState<SortDir>(() => leadersOnly ? bestFirstDir('plusMinus') : 'desc');
   const perPage = 25;
 
   useEffect(() => { setPage(1); }, [search, teamFilterIds, minGames, bludgerControlMode, flagFilter]);
 
   const handleSort = (key: string) => {
-    if (key === sortKey) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
-    else { setSortKey(key); setSortDir('desc'); }
+    setSortKey(key);
+    setSortDir(resolveSortDir(key, sortKey, sortDir, leadersOnly));
+  };
+
+  // Switching tabs re-seeds the sort; in Leaders Only the seed has to be the
+  // column's good direction, not a blanket descending.
+  const resetSortTo = (key: string) => {
+    setSortKey(key);
+    setSortDir(leadersOnly ? bestFirstDir(key) : 'desc');
   };
   
   const filteredSeasons = useMemo(() => {
@@ -109,20 +122,27 @@ export default function BeaterStatsView({
 
   // Sorted (but not search-filtered) lists establish each row's ORIGINAL rank,
   // so a search doesn't renumber players relative to their un-searched standing.
-  const sortedSolo = useMemo(() => {
+  const rankedSolo = useMemo(() => {
     const d = soloStats.filter(s => s.gamesPlayed >= minGames);
     return sortBy(d, sortKey as keyof BeaterSoloStats, sortDir);
   }, [soloStats, minGames, sortKey, sortDir]);
 
-  const sortedPairs = useMemo(() => {
+  const rankedPairs = useMemo(() => {
     const d = pairStats.filter(s => s.gamesPlayed >= minGames);
     return sortBy(d, sortKey as keyof BeaterPairStats, sortDir);
   }, [pairStats, minGames, sortKey, sortDir]);
 
-  const sortedTeam = useMemo(() => {
+  const rankedTeam = useMemo(() => {
     const d = teamStats.filter(s => s.gamesPlayed >= minGames);
     return sortBy(d, sortKey as keyof TeamBeaterStats, sortDir);
   }, [teamStats, minGames, sortKey, sortDir]);
+
+  // Everyone below the cut is dropped here, before rank, search or paging — their
+  // numbers never reach the rendered table. Teams are a fixed, public field, so
+  // the Team tab is left whole.
+  const sortedSolo = useMemo(() => leadersSlice(rankedSolo, leadersOnly), [rankedSolo, leadersOnly]);
+  const sortedPairs = useMemo(() => leadersSlice(rankedPairs, leadersOnly), [rankedPairs, leadersOnly]);
+  const sortedTeam = rankedTeam;
 
   const soloRankMap = useMemo(() => new Map(sortedSolo.map((s, i) => [s.playerId, i + 1])), [sortedSolo]);
   const pairRankMap = useMemo(() => new Map(sortedPairs.map((s, i) => [s.pairKey, i + 1])), [sortedPairs]);
@@ -148,6 +168,9 @@ export default function BeaterStatsView({
 
   const data: any[] = tab === 'team' ? filteredTeam : tab === 'solo' ? filteredSolo : filteredPairs;
   const rankMap = tab === 'team' ? teamRankMap : tab === 'solo' ? soloRankMap : pairRankMap;
+  const hiddenCount = tab === 'solo'
+    ? rankedSolo.length - sortedSolo.length
+    : tab === 'pairs' ? rankedPairs.length - sortedPairs.length : 0;
   const totalPages = Math.ceil(data.length / perPage) || 1;
   const paged = data.slice((page - 1) * perPage, page * perPage);
 
@@ -175,9 +198,9 @@ export default function BeaterStatsView({
         </div>
         <div className="flex items-center gap-2">
           <StatsTabSelector>
-            <StatsTabButton isFirst active={tab === 'pairs'} onClick={() => { setTab('pairs'); setSortKey('plusMinus'); setSortDir('desc'); }} label="Pairs" activeClass="bg-purple-600 text-white" />
-            <StatsTabButton active={tab === 'solo'} onClick={() => { setTab('solo'); setSortKey('plusMinus'); setSortDir('desc'); }} label="Solo" activeClass="bg-purple-600 text-white" />
-            <StatsTabButton active={tab === 'team'} onClick={() => { setTab('team'); setSortKey('controlPct'); setSortDir('desc'); }} label="Team" activeClass="bg-purple-600 text-white" />
+            <StatsTabButton isFirst active={tab === 'pairs'} onClick={() => { setTab('pairs'); resetSortTo('plusMinus'); }} label="Pairs" activeClass="bg-purple-600 text-white" />
+            <StatsTabButton active={tab === 'solo'} onClick={() => { setTab('solo'); resetSortTo('plusMinus'); }} label="Solo" activeClass="bg-purple-600 text-white" />
+            <StatsTabButton active={tab === 'team'} onClick={() => { setTab('team'); resetSortTo('controlPct'); }} label="Team" activeClass="bg-purple-600 text-white" />
           </StatsTabSelector>
         </div>
       </div>
@@ -219,7 +242,9 @@ export default function BeaterStatsView({
             </thead>
             <tbody>
               {paged.length === 0 ? (
-                <tr><td colSpan={10} className="py-8 text-center text-gray-400 text-xs">No beater stats found</td></tr>
+                <tr><td colSpan={16} className="py-8 text-center text-gray-400 text-xs">
+                  {leadersOnly && search ? 'Nothing among the leaders matches that search' : 'No beater stats found'}
+                </td></tr>
               ) : paged.map((row: any) => {
                 const rank = rankMap.get(tab === 'team' ? row.teamId : tab === 'pairs' ? row.pairKey : row.playerId) ?? '-';
                 return (
@@ -268,6 +293,14 @@ export default function BeaterStatsView({
             </tbody>
           </table>
         </div>
+        {leadersOnly && page === totalPages && (
+          <LeadersOnlyVeil
+            hiddenCount={hiddenCount}
+            noun={tab === 'pairs' ? 'pairs' : 'beaters'}
+            onShowInfo={onShowInfo}
+            className="border-t border-gray-100"
+          />
+        )}
       </div>
 
       <StatsPaginationFooter

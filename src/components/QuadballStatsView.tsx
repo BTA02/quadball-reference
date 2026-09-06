@@ -23,6 +23,8 @@ import {
   cn, SortDir, sortBy, SortHeader, Cell, SplitHeader, SplitCell, 
   StatsTabSelector, StatsTabButton, StatsPaginationFooter 
 } from './ui/StatsTable';
+import LeadersOnlyVeil from './ui/LeadersOnlyVeil';
+import { leadersSlice, resolveSortDir, bestFirstDir } from '../lib/leadersOnly';
 
 // Tighter, grouped spacing for the mS / mAtt / mKO trio so they read as one wide "miss" column
 const MISS_GROUP_START = 'pl-2 pr-1 border-l border-gray-200';
@@ -44,26 +46,36 @@ interface QuadballStatsViewProps {
   positionFilter?: 'all' | 'chaser' | 'keeper';
   onPlayerSelect?: (playerId: string) => void;
   onTeamSelect?: (teamId: string) => void;
+  /** Publish only the top slice of the field. See src/lib/leadersOnly.ts. */
+  leadersOnly?: boolean;
+  onShowInfo?: () => void;
 }
 
 export default function QuadballStatsView({ 
   players, events, teams, games, seasons, statsFilter = 'public',
   teamIds: teamFilterIds = [], search = '',
   minGames = 1, bludgerControlMode = 'all', flagFilter = 'all', positionFilter = 'all',
-  onPlayerSelect, onTeamSelect
+  onPlayerSelect, onTeamSelect, leadersOnly = false, onShowInfo
 }: QuadballStatsViewProps) {
   const [tab, setTab] = useState<'boxscore' | 'rates' | 'advanced' | 'plusminus' | 'team'>('boxscore');
   const [page, setPage] = useState(1);
   const [sortKey, setSortKey] = useState('points');
-  const [sortDir, setSortDir] = useState<SortDir>('desc');
+  const [sortDir, setSortDir] = useState<SortDir>(() => leadersOnly ? bestFirstDir('points') : 'desc');
   const [showHelp, setShowHelp] = useState(false);
   const perPage = 25;
 
   useEffect(() => { setPage(1); }, [search, teamFilterIds, positionFilter, minGames, bludgerControlMode, flagFilter]);
 
   const handleSort = (key: string) => {
-    if (key === sortKey) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
-    else { setSortKey(key); setSortDir('desc'); }
+    setSortKey(key);
+    setSortDir(resolveSortDir(key, sortKey, sortDir, leadersOnly));
+  };
+
+  // Switching tabs re-seeds the sort; in Leaders Only the seed has to be the
+  // column's good direction, not a blanket descending.
+  const resetSortTo = (key: string) => {
+    setSortKey(key);
+    setSortDir(leadersOnly ? bestFirstDir(key) : 'desc');
   };
 
   const filteredSeasons = useMemo(() => {
@@ -161,10 +173,16 @@ export default function QuadballStatsView({
 
   // Sorted (but not search-filtered) lists establish each row's ORIGINAL rank,
   // so a search doesn't renumber players/teams relative to their un-searched standing.
-  const sortedPlayers = useMemo(() => {
+  const rankedPlayers = useMemo(() => {
     const d = mergedPlayers.filter(s => s.gamesPlayed >= minGames && validQuadballPlayerIds.has(s.playerId));
     return sortBy(d, sortKey as keyof ExtendedPlayerStats, sortDir);
   }, [mergedPlayers, minGames, sortKey, sortDir, validQuadballPlayerIds]);
+
+  // Everyone below the cut is dropped here, before rank, search or paging — their
+  // numbers never reach the rendered table. Teams are a public field of a dozen or
+  // so, not individuals, so the Team tab is left whole.
+  const sortedPlayers = useMemo(() => leadersSlice(rankedPlayers, leadersOnly), [rankedPlayers, leadersOnly]);
+  const hiddenPlayerCount = rankedPlayers.length - sortedPlayers.length;
 
   const sortedTeam = useMemo(() => {
     const d = mergedTeams.filter(s => s.gamesPlayed >= minGames);
@@ -188,6 +206,7 @@ export default function QuadballStatsView({
 
   const data = tab === 'team' ? filteredTeam : filteredPlayers;
   const rankMap = tab === 'team' ? teamRankMap : playerRankMap;
+  const hiddenCount = tab === 'team' ? 0 : hiddenPlayerCount;
   const totalPages = Math.ceil(data.length / perPage) || 1;
   const paged = data.slice((page - 1) * perPage, page * perPage);
 
@@ -217,11 +236,11 @@ export default function QuadballStatsView({
         </div>
         <div className="flex items-center gap-2">
           <StatsTabSelector>
-            <StatsTabButton isFirst active={tab === 'boxscore'} onClick={() => { setTab('boxscore'); setSortKey('goals'); setSortDir('desc'); }} label="Box Score" />
-            <StatsTabButton active={tab === 'rates'} onClick={() => { setTab('rates'); setSortKey('goalsPerGame'); setSortDir('desc'); }} label="Rate Score" />
-            <StatsTabButton active={tab === 'plusminus'} onClick={() => { setTab('plusminus'); setSortKey('plusMinus'); setSortDir('desc'); }} label="Plus/Minus" />
-            <StatsTabButton active={tab === 'advanced'} onClick={() => { setTab('advanced'); setSortKey('gameScore'); setSortDir('desc'); }} label="Advanced" />
-            <StatsTabButton active={tab === 'team'} onClick={() => { setTab('team'); setSortKey('netRtg'); setSortDir('desc'); }} label="Team" />
+            <StatsTabButton isFirst active={tab === 'boxscore'} onClick={() => { setTab('boxscore'); resetSortTo('goals'); }} label="Box Score" />
+            <StatsTabButton active={tab === 'rates'} onClick={() => { setTab('rates'); resetSortTo('goalsPerGame'); }} label="Rate Score" />
+            <StatsTabButton active={tab === 'plusminus'} onClick={() => { setTab('plusminus'); resetSortTo('plusMinus'); }} label="Plus/Minus" />
+            <StatsTabButton active={tab === 'advanced'} onClick={() => { setTab('advanced'); resetSortTo('gameScore'); }} label="Advanced" />
+            <StatsTabButton active={tab === 'team'} onClick={() => { setTab('team'); resetSortTo('netRtg'); }} label="Team" />
           </StatsTabSelector>
           <button onClick={() => setShowHelp(!showHelp)} className="p-1.5 text-gray-400 hover:text-red-600 transition-colors ml-1 bg-white border border-gray-200 rounded-md" title="How stats are calculated">
             <Info className="w-4 h-4" />
@@ -395,7 +414,9 @@ export default function QuadballStatsView({
             </thead>
             <tbody>
               {paged.length === 0 ? (
-                <tr><td colSpan={12} className="py-8 text-center text-slate-500 text-xs">No stats found</td></tr>
+                <tr><td colSpan={24} className="py-8 text-center text-slate-500 text-xs">
+                  {leadersOnly && search ? 'No players among the leaders match that search' : 'No stats found'}
+                </td></tr>
               ) : paged.map((row: any) => {
                 const rank = rankMap.get(tab === 'team' ? row.teamId : row.playerId) ?? '-';
                 const DataCell = ({ prop, fmt, bold, group }: { prop?: string, fmt?: (v: any, rowObj?: any) => string|number, bold?: boolean, group?: 'start' | 'mid' | 'end' }) => {
@@ -500,6 +521,9 @@ export default function QuadballStatsView({
             </tbody>
           </table>
         </div>
+        {leadersOnly && page === totalPages && (
+          <LeadersOnlyVeil hiddenCount={hiddenCount} noun="players" onShowInfo={onShowInfo} className="border-t border-gray-100" />
+        )}
       </div>
 
       {/* Pagination footer */}

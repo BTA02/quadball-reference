@@ -18,6 +18,8 @@ import {
   cn, SortDir, sortBy, SortHeader, Cell, 
   StatsPaginationFooter 
 } from './ui/StatsTable';
+import LeadersOnlyVeil from './ui/LeadersOnlyVeil';
+import { leadersSlice, resolveSortDir, bestFirstDir } from '../lib/leadersOnly';
 
 function formatMinutes(min: number): string {
   if (min <= 0) return '—';
@@ -44,24 +46,27 @@ interface SeekerStatsViewProps {
   bludgerControlMode?: 'all' | 'separate';
   flagFilter?: 'all' | 'on' | 'off';
   onPlayerSelect?: (playerId: string) => void;
+  /** Publish only the top slice of the field. See src/lib/leadersOnly.ts. */
+  leadersOnly?: boolean;
+  onShowInfo?: () => void;
 }
 
 export default function SeekerStatsView({ 
   players, events, teams, games, seasons, statsFilter = 'public',
   teamIds: teamFilterIds = [], search = '',
   minGames = 1, bludgerControlMode = 'all', flagFilter = 'all',
-  onPlayerSelect
+  onPlayerSelect, leadersOnly = false, onShowInfo
 }: SeekerStatsViewProps) {
   const [page, setPage] = useState(1);
   const [sortKey, setSortKey] = useState('catches');
-  const [sortDir, setSortDir] = useState<SortDir>('desc');
+  const [sortDir, setSortDir] = useState<SortDir>(() => leadersOnly ? bestFirstDir('catches') : 'desc');
   const perPage = 25;
 
   useEffect(() => { setPage(1); }, [search, teamFilterIds, minGames, bludgerControlMode, flagFilter]);
 
   const handleSort = (key: string) => {
-    if (key === sortKey) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
-    else { setSortKey(key); setSortDir('desc'); }
+    setSortKey(key);
+    setSortDir(resolveSortDir(key, sortKey, sortDir, leadersOnly));
   };
 
   const filteredSeasons = useMemo(() => {
@@ -105,10 +110,15 @@ export default function SeekerStatsView({
 
   // Sorted (but not search-filtered) list establishes each player's ORIGINAL rank,
   // so a search doesn't renumber players relative to their un-searched standing.
-  const sorted = useMemo(() => {
+  const ranked = useMemo(() => {
     const d = seekerStats.filter(s => s.gamesPlayed >= minGames);
     return sortBy(d, sortKey as keyof SeekerStats, sortDir);
   }, [seekerStats, minGames, sortKey, sortDir]);
+
+  // Everyone below the cut is dropped here, before rank, search or paging — their
+  // numbers never reach the rendered table.
+  const sorted = useMemo(() => leadersSlice(ranked, leadersOnly), [ranked, leadersOnly]);
+  const hiddenCount = ranked.length - sorted.length;
 
   const rankMap = useMemo(() => new Map(sorted.map((s, i) => [s.playerId, i + 1])), [sorted]);
 
@@ -158,7 +168,9 @@ export default function SeekerStatsView({
             </thead>
             <tbody>
               {paged.length === 0 ? (
-                <tr><td colSpan={10} className="py-8 text-center text-gray-400 text-xs">No seeker stats found</td></tr>
+                <tr><td colSpan={11} className="py-8 text-center text-gray-400 text-xs">
+                  {leadersOnly && search ? 'No seekers among the leaders match that search' : 'No seeker stats found'}
+                </td></tr>
               ) : paged.map((row) => {
                 const rank = rankMap.get(row.playerId) ?? '-';
                 return (
@@ -187,6 +199,9 @@ export default function SeekerStatsView({
             </tbody>
           </table>
         </div>
+        {leadersOnly && page === totalPages && (
+          <LeadersOnlyVeil hiddenCount={hiddenCount} noun="seekers" onShowInfo={onShowInfo} className="border-t border-gray-100" />
+        )}
       </div>
 
       <StatsPaginationFooter

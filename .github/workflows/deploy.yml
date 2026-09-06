@@ -1,0 +1,101 @@
+name: Deploy
+
+# The only path to production. Everything else (Release, Rollback) calls this
+# with a git ref, so a rollback is byte-for-byte the same operation as a release
+# — just pointed at an older tag.
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Tag, branch or SHA to build and deploy.
+        required: true
+        type: string
+      leaders_only:
+        description: Override the LEADERS_ONLY repository variable for this deploy ('true'/'false', blank to use the variable).
+        required: false
+        type: string
+        default: ''
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Tag, branch or SHA to deploy. Use an earlier vX.Y.Z to roll back.'
+        required: true
+        type: string
+      leaders_only:
+        description: Leaders Only stats mode for this deploy.
+        required: false
+        type: choice
+        default: ''
+        options: ['', 'true', 'false']
+
+# Production deploys queue rather than cancel — an interrupted deploy would leave
+# it ambiguous which build is actually live.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.ref }} to production
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://ai-studio-applet-webapp-742af.web.app
+    steps:
+      - name: Check out ${{ inputs.ref }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Identify the build
+        id: build_info
+        run: |
+          SHA="$(git rev-parse HEAD)"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Deploying \`${{ inputs.ref }}\`"
+            echo ""
+            echo "- commit: \`$SHA\`"
+            echo "- subject: $(git log -1 --pretty=%s)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run lint
+
+      - name: Build
+        env:
+          # Blank input falls through to the repository variable, so a routine
+          # release or rollback never silently flips the mode.
+          VITE_LEADERS_ONLY: ${{ inputs.leaders_only != '' && inputs.leaders_only || vars.LEADERS_ONLY }}
+          VITE_APP_VERSION: ${{ inputs.ref }}
+          VITE_APP_COMMIT: ${{ steps.build_info.outputs.short_sha }}
+        run: npm run build
+
+      - name: Deploy to Firebase Hosting
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          projectId: ai-studio-applet-webapp-742af
+          channelId: live
+
+      - name: Record what is live
+        run: |
+          # A moving tag so `git show deployed-production` answers "what's in
+          # production right now?", and so Rollback can find the release before it.
+          git tag -f deployed-production "${{ steps.build_info.outputs.sha }}"
+          git push -f origin refs/tags/deployed-production
