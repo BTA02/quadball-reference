@@ -6152,6 +6152,13 @@ export default function App() {
   const isAdmin = effectiveRole === 'admin';
   const canModerate = effectiveRole === 'admin' || effectiveRole === 'moderator';
 
+  // Where "View As" is offered. It used to be the Watch tab only, which left no way to check
+  // an admin-only difference on the pages that actually have one — the opted-out players of
+  // lib/hiddenPlayers are the whole point: an admin sees everyone, so the effect of hiding
+  // someone is invisible until you look as a plain viewer. Kept off /manage and /create,
+  // where downgrading your own role bounces you out of the page you are standing on.
+  const canSimulateRole = isAdminUser && (view === 'tracker' || view === 'stats' || view === 'lists' || view === 'playerProfile' || view === 'teamProfile' || view === 'gameProfile');
+
   // The Stats filter bar (league/year/team chips, position/control/flag selects, search) is
   // tall enough to push the actual table below the fold, especially for a signed-out viewer
   // who's just browsing. It defaults open for anyone who signs in — they're the ones actually
@@ -10622,7 +10629,7 @@ export default function App() {
               Info
             </button>
 
-            {view === 'tracker' && isAdminUser && (
+            {canSimulateRole && (
               <select
                 value={simulateRole}
                 onChange={e => setSimulateRole(e.target.value as any)}
@@ -10754,7 +10761,7 @@ export default function App() {
                   </button>
                 )}
 
-                {view === 'tracker' && isAdminUser && (
+                {canSimulateRole && (
                   <div className="px-4 py-2">
                     <select
                       value={simulateRole}
