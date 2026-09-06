@@ -44,13 +44,15 @@ interface QuadballStatsViewProps {
   positionFilter?: 'all' | 'chaser' | 'keeper';
   onPlayerSelect?: (playerId: string) => void;
   onTeamSelect?: (teamId: string) => void;
+  // Player ids opted out of public stat pages (undefined for admins, who see everyone).
+  hiddenPlayerIds?: Set<string>;
 }
 
-export default function QuadballStatsView({ 
+export default function QuadballStatsView({
   players, events, teams, games, seasons, statsFilter = 'public',
   teamIds: teamFilterIds = [], search = '',
   minGames = 1, bludgerControlMode = 'all', flagFilter = 'all', positionFilter = 'all',
-  onPlayerSelect, onTeamSelect
+  onPlayerSelect, onTeamSelect, hiddenPlayerIds
 }: QuadballStatsViewProps) {
   const [tab, setTab] = useState<'boxscore' | 'rates' | 'advanced' | 'plusminus' | 'team'>('boxscore');
   const [page, setPage] = useState(1);
@@ -162,9 +164,9 @@ export default function QuadballStatsView({
   // Sorted (but not search-filtered) lists establish each row's ORIGINAL rank,
   // so a search doesn't renumber players/teams relative to their un-searched standing.
   const sortedPlayers = useMemo(() => {
-    const d = mergedPlayers.filter(s => s.gamesPlayed >= minGames && validQuadballPlayerIds.has(s.playerId));
+    const d = mergedPlayers.filter(s => s.gamesPlayed >= minGames && validQuadballPlayerIds.has(s.playerId) && !hiddenPlayerIds?.has(s.playerId));
     return sortBy(d, sortKey as keyof ExtendedPlayerStats, sortDir);
-  }, [mergedPlayers, minGames, sortKey, sortDir, validQuadballPlayerIds]);
+  }, [mergedPlayers, minGames, sortKey, sortDir, validQuadballPlayerIds, hiddenPlayerIds]);
 
   const sortedTeam = useMemo(() => {
     const d = mergedTeams.filter(s => s.gamesPlayed >= minGames);

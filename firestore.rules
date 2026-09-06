@@ -209,6 +209,7 @@ service cloud.firestore {
              (data.preferredName == null || data.preferredName is string) &&
              (data.nickname == null || data.nickname is string) &&
              (data.gender == null || data.gender in ['M', 'W', 'NB']) &&
+             (data.hidden == null || data.hidden is bool) &&
              (data.createdAt == null || data.createdAt is timestamp);
     }
 

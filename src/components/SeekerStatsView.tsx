@@ -44,13 +44,15 @@ interface SeekerStatsViewProps {
   bludgerControlMode?: 'all' | 'separate';
   flagFilter?: 'all' | 'on' | 'off';
   onPlayerSelect?: (playerId: string) => void;
+  // Player ids opted out of public stat pages (undefined for admins, who see everyone).
+  hiddenPlayerIds?: Set<string>;
 }
 
-export default function SeekerStatsView({ 
+export default function SeekerStatsView({
   players, events, teams, games, seasons, statsFilter = 'public',
   teamIds: teamFilterIds = [], search = '',
   minGames = 1, bludgerControlMode = 'all', flagFilter = 'all',
-  onPlayerSelect
+  onPlayerSelect, hiddenPlayerIds
 }: SeekerStatsViewProps) {
   const [page, setPage] = useState(1);
   const [sortKey, setSortKey] = useState('catches');
@@ -106,9 +108,9 @@ export default function SeekerStatsView({
   // Sorted (but not search-filtered) list establishes each player's ORIGINAL rank,
   // so a search doesn't renumber players relative to their un-searched standing.
   const sorted = useMemo(() => {
-    const d = seekerStats.filter(s => s.gamesPlayed >= minGames);
+    const d = seekerStats.filter(s => s.gamesPlayed >= minGames && !hiddenPlayerIds?.has(s.playerId));
     return sortBy(d, sortKey as keyof SeekerStats, sortDir);
-  }, [seekerStats, minGames, sortKey, sortDir]);
+  }, [seekerStats, minGames, sortKey, sortDir, hiddenPlayerIds]);
 
   const rankMap = useMemo(() => new Map(sorted.map((s, i) => [s.playerId, i + 1])), [sorted]);
 

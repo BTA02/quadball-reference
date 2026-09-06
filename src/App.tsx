@@ -150,6 +150,10 @@ interface Player {
   // mixed-gender rules). Intentionally NOT surfaced in any stats/profile/public UI —
   // admin-only, used for roster gender-ratio checks.
   gender?: PlayerGender;
+  // Admin-only opt-out: excludes this player's rows from public stat aggregation pages
+  // (Quadball/Beater/Seeker leaderboards) while their events still feed team/teammate
+  // calculations. Never hidden from admins. See CreateView/ManagementView PlayerEditRow.
+  hidden?: boolean;
   createdAt: any;
 }
 
@@ -901,7 +905,7 @@ interface ManagementViewProps {
   onDeleteSeason: (id: string) => void;
   onEditSeason: (id: string, newName: string, newLeagueId: string, newDivision: string | undefined, newYear: string, newDescription: string) => Promise<void>;
   onDeletePlayer: (id: string) => void;
-  onEditPlayer: (id: string, newFirst: string, newLast: string, gender?: PlayerGender) => Promise<void>;
+  onEditPlayer: (id: string, newFirst: string, newLast: string, gender?: PlayerGender, hidden?: boolean) => Promise<void>;
   onDeleteRoster: (id: string) => void;
   onSetLocalSimulation?: (data: any) => void;
   onRunMigration: () => Promise<void>;
@@ -1333,7 +1337,8 @@ function PlayerEditRow({
   onEditPlayer,
   onDeletePlayer,
   initialGender,
-  showGenderField = false
+  showGenderField = false,
+  showHiddenField = false
 }: {
   player: any;
   allRosterPlayers: any[];
@@ -1341,17 +1346,21 @@ function PlayerEditRow({
   teams: any[];
   seasons: any[];
   leagues?: any[];
-  onEditPlayer: (id: string, f: string, l: string, gender?: PlayerGender) => void;
+  onEditPlayer: (id: string, f: string, l: string, gender?: PlayerGender, hidden?: boolean) => void;
   onDeletePlayer: (id: string) => void;
   // Roster-eligibility gender. Only ever passed in (and only ever editable) from the
   // admin-only Manage Players panel — never wired up in the public/contributor-facing
   // create flow, and never rendered as read-only text anywhere in this component.
   initialGender?: PlayerGender;
   showGenderField?: boolean;
+  // Opt-out-of-stats flag. Same admin-only gating as gender — never shown/editable from the
+  // moderator-facing create flow.
+  showHiddenField?: boolean;
 }) {
   const [firstName, setFirstName] = useState(p.firstName || '');
   const [lastName, setLastName] = useState(p.lastName || '');
   const [gender, setGender] = useState<PlayerGender | ''>(initialGender || '');
+  const [hidden, setHidden] = useState<boolean>(!!p.hidden);
   const [saving, setSaving] = useState(false);
 
   // initialGender arrives asynchronously (fetched separately from the players list itself,
@@ -1365,7 +1374,7 @@ function PlayerEditRow({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialGender]);
 
-  const hasChanges = firstName !== (p.firstName || '') || lastName !== (p.lastName || '') || (showGenderField && gender !== (initialGender || ''));
+  const hasChanges = firstName !== (p.firstName || '') || lastName !== (p.lastName || '') || (showGenderField && gender !== (initialGender || '')) || (showHiddenField && hidden !== !!p.hidden);
 
   const pRosters = allRosterPlayers.filter((rp: any) => rp.playerId === p.id);
 
@@ -1375,13 +1384,16 @@ function PlayerEditRow({
         <div className="flex items-center gap-2">
           <span className="font-mono text-[10px] bg-gray-100 px-2 py-1 rounded border border-gray-200 text-gray-600">ID: {p.id}</span>
           <span className="font-bold text-sm text-gray-900">{p.firstName} {p.lastName}</span>
+          {!!p.hidden && (
+            <span className="text-[10px] uppercase font-bold bg-red-50 text-red-600 border border-red-200 px-1.5 py-0.5 rounded">Hidden</span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {hasChanges && (
             <button
               onClick={async () => {
                 setSaving(true);
-                await onEditPlayer(p.id, firstName, lastName, showGenderField ? (gender || undefined) : undefined);
+                await onEditPlayer(p.id, firstName, lastName, showGenderField ? (gender || undefined) : undefined, showHiddenField ? hidden : undefined);
                 setSaving(false);
               }}
               disabled={saving}
@@ -1417,6 +1429,20 @@ function PlayerEditRow({
               <option value="W">Woman (W)</option>
               <option value="NB">Non-binary (NB)</option>
             </select>
+          </div>
+        )}
+        {showHiddenField && (
+          <div className="flex items-center gap-2 md:col-span-2">
+            <input
+              type="checkbox"
+              id={`hidden-${p.id}`}
+              checked={hidden}
+              onChange={(e) => setHidden(e.target.checked)}
+              className="w-3.5 h-3.5 accent-red-600"
+            />
+            <label htmlFor={`hidden-${p.id}`} className={cn("text-[10px] uppercase font-bold", hidden !== !!p.hidden ? 'text-amber-600' : 'text-gray-400')}>
+              Hide from public stat pages
+            </label>
           </div>
         )}
       </div>
@@ -4679,6 +4705,7 @@ function ManagementView({
                         player={p}
                         initialGender={playerGenderMap[p.id]}
                         showGenderField
+                        showHiddenField
                         allRosterPlayers={allRosterPlayers}
                         rosters={rosters}
                         teams={teams}
@@ -6192,6 +6219,12 @@ export default function App() {
 
   // Resolve which data to use for stats: demo data takes priority
   const statsPlayers = demoData ? demoData.players : allPlayers;
+  // Players opted out of public stat aggregation pages. Never applied for admins — see
+  // handleEditPlayer / PlayerEditRow's "Hide from public stat pages" checkbox.
+  const hiddenPlayerIds = useMemo(
+    () => isAdmin ? undefined : new Set(statsPlayers.filter(p => p.hidden).map(p => p.id)),
+    [statsPlayers, isAdmin]
+  );
   const statsEventsRaw = demoData ? demoData.events : allEvents;
   const statsGamesRaw = useMemo(() => {
     const rawGames = demoData ? demoData.games : games;
@@ -7902,10 +7935,12 @@ export default function App() {
     try {
       // NOTE: gender is intentionally written only to the source players/{id} doc, never to the
       // aggregated/players blob that feeds public stats/list views — it must never be displayed.
-      const docRef = await addDoc(collection(db, 'players'), { firstName, lastName, preferredName: preferredName || '', nickname: nickname || '', gender: gender || null, createdAt: serverTimestamp() });
-      const aggregatedData = { id: docRef.id, firstName: firstName || '', lastName: lastName || '', preferredName: preferredName || '', nickname: nickname || '' };
+      // `hidden` defaults to false and IS written to the aggregated blob, since it's the flag
+      // client-side stats views use to exclude this player from public leaderboards.
+      const docRef = await addDoc(collection(db, 'players'), { firstName, lastName, preferredName: preferredName || '', nickname: nickname || '', gender: gender || null, hidden: false, createdAt: serverTimestamp() });
+      const aggregatedData = { id: docRef.id, firstName: firstName || '', lastName: lastName || '', preferredName: preferredName || '', nickname: nickname || '', hidden: false };
       await updateDoc(doc(db, 'aggregated', 'players'), { data: arrayUnion(aggregatedData) });
-      setAllPlayers(prev => [...prev, { id: docRef.id, firstName, lastName, preferredName, nickname, createdAt: new Date() } as Player].sort((a, b) => String(a.firstName + ' ' + a.lastName).localeCompare(String(b.firstName + ' ' + b.lastName))));
+      setAllPlayers(prev => [...prev, { id: docRef.id, firstName, lastName, preferredName, nickname, hidden: false, createdAt: new Date() } as Player].sort((a, b) => String(a.firstName + ' ' + a.lastName).localeCompare(String(b.firstName + ' ' + b.lastName))));
       return docRef.id;
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'players');
@@ -8108,29 +8143,33 @@ export default function App() {
 
   const handleDeletePlayer = async (id: string) => {
     try {
-      const deletedPlayer = allPlayers.find(p => p.id === id);
       await deleteDoc(doc(db, 'players', id));
-      if (deletedPlayer) {
-        const aggregatedData = { id: deletedPlayer.id, firstName: deletedPlayer.firstName || '', lastName: deletedPlayer.lastName || '', preferredName: deletedPlayer.preferredName || '', nickname: deletedPlayer.nickname || '' };
-        await updateDoc(doc(db, 'aggregated', 'players'), { data: arrayRemove(aggregatedData) });
-      }
+      // Read-modify-write (rather than arrayRemove with a reconstructed object) since the
+      // aggregated entry's exact shape depends on when it was written (e.g. older entries
+      // predate the `hidden` field), so an exact-match remove could silently no-op.
+      const aggSnap = await getDoc(doc(db, 'aggregated', 'players'));
+      const currentData = (aggSnap.data()?.data || []) as any[];
+      await updateDoc(doc(db, 'aggregated', 'players'), { data: currentData.filter(p => p.id !== id) });
     } catch (error) { handleFirestoreError(error, OperationType.DELETE, 'players'); }
   };
 
-  const handleEditPlayer = async (id: string, newFirst: string, newLast: string, gender?: PlayerGender) => {
+  const handleEditPlayer = async (id: string, newFirst: string, newLast: string, gender?: PlayerGender, hidden?: boolean) => {
     try {
       const oldPlayer = allPlayers.find(p => p.id === id);
       if (!oldPlayer) return;
       // gender is only ever written to the source players/{id} doc — see handleAddGlobalPlayer note.
-      await updateDoc(doc(db, 'players', id), { firstName: newFirst, lastName: newLast, ...(gender !== undefined ? { gender: gender || null } : {}) });
+      await updateDoc(doc(db, 'players', id), { firstName: newFirst, lastName: newLast, ...(gender !== undefined ? { gender: gender || null } : {}), ...(hidden !== undefined ? { hidden } : {}) });
 
-      const oldAgg = { id: oldPlayer.id, firstName: oldPlayer.firstName || '', lastName: oldPlayer.lastName || '', preferredName: oldPlayer.preferredName || '', nickname: oldPlayer.nickname || '' };
-      const newAgg = { ...oldAgg, firstName: newFirst, lastName: newLast };
+      // Read-modify-write (see handleDeletePlayer) so this can't desync from older aggregated
+      // entries that were written before the `hidden` field existed.
+      const aggSnap = await getDoc(doc(db, 'aggregated', 'players'));
+      const currentData = (aggSnap.data()?.data || []) as any[];
+      const updatedData = currentData.map(p => p.id === id
+        ? { id, firstName: newFirst, lastName: newLast, preferredName: p.preferredName || '', nickname: p.nickname || '', hidden: hidden !== undefined ? hidden : !!p.hidden }
+        : p);
+      await updateDoc(doc(db, 'aggregated', 'players'), { data: updatedData });
 
-      await updateDoc(doc(db, 'aggregated', 'players'), { data: arrayRemove(oldAgg) }).catch(() => { });
-      await updateDoc(doc(db, 'aggregated', 'players'), { data: arrayUnion(newAgg) }).catch(() => { });
-
-      setAllPlayers(prev => prev.map(p => p.id === id ? { ...p, firstName: newFirst, lastName: newLast } : p).sort((a, b) => String(a.firstName + ' ' + a.lastName).localeCompare(String(b.firstName + ' ' + b.lastName))));
+      setAllPlayers(prev => prev.map(p => p.id === id ? { ...p, firstName: newFirst, lastName: newLast, ...(hidden !== undefined ? { hidden } : {}) } : p).sort((a, b) => String(a.firstName + ' ' + a.lastName).localeCompare(String(b.firstName + ' ' + b.lastName))));
       toast.success("Player updated successfully");
     } catch (error) { handleFirestoreError(error, OperationType.WRITE, 'players'); }
   };
@@ -10813,6 +10852,13 @@ export default function App() {
             </div>
 
             <div className="mb-12">
+              <h2 className="text-3xl font-extrabold border-b pb-4 text-gray-900 mb-6">Player Privacy</h2>
+              <div className="space-y-4 text-gray-700 leading-relaxed text-sm">
+                <p>If you're a player and would rather not appear on the public stat pages, we'll hide you from them — your stats stay recorded and correct behind the scenes, just not shown publicly. Email <a href="mailto:quadballreference@gmail.com" className="text-red-600 font-bold hover:underline">quadballreference@gmail.com</a> or message <a href="https://www.reddit.com/user/quadballreference" target="_blank" rel="noopener noreferrer" className="text-red-600 font-bold hover:underline">u/quadballreference</a> on Reddit to request it.</p>
+              </div>
+            </div>
+
+            <div className="mb-12">
               <h2 className="text-3xl font-extrabold border-b pb-4 text-gray-900 mb-6">Add A Game</h2>
               <div className="space-y-4 text-gray-700 leading-relaxed text-sm">
                 <p>After signing in, authors can add videos from the Watch tab. Adding a new video is the first step in tracking stats for a game. Once added, any author can start recording events — and you only have to do one team's worth: a moderator marks that team complete and its stats go live on their own.</p>
@@ -11161,6 +11207,7 @@ export default function App() {
                 positionFilter={statsPositionFilter}
                 onPlayerSelect={handlePlayerProfileClick}
                 onTeamSelect={handleTeamProfileClick}
+                hiddenPlayerIds={hiddenPlayerIds}
               />
             ) : statsSubView === 'beaters' ? (
               <BeaterStatsView
@@ -11179,6 +11226,7 @@ export default function App() {
                 onTeamSelect={handleTeamProfileClick}
                 tab={beaterStatsTab}
                 onTabChange={setBeaterStatsTab}
+                hiddenPlayerIds={hiddenPlayerIds}
               />
             ) : statsSubView === 'seekers' ? (
               <SeekerStatsView
@@ -11194,6 +11242,7 @@ export default function App() {
                 bludgerControlMode={bludgerControlMode}
                 flagFilter={statsFlagFilter}
                 onPlayerSelect={handlePlayerProfileClick}
+                hiddenPlayerIds={hiddenPlayerIds}
               />
             ) : null}
           </div>

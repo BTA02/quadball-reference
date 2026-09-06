@@ -42,14 +42,17 @@ interface BeaterStatsViewProps {
   onTeamSelect?: (teamId: string) => void;
   tab?: 'pairs' | 'solo' | 'team';
   onTabChange?: (tab: 'pairs' | 'solo' | 'team') => void;
+  // Player ids opted out of public stat pages (undefined for admins, who see everyone).
+  hiddenPlayerIds?: Set<string>;
 }
 
-export default function BeaterStatsView({ 
+export default function BeaterStatsView({
   players, events, teams, games, seasons, statsFilter = 'public',
   teamIds: teamFilterIds = [], search = '',
   minGames = 1, bludgerControlMode = 'all', flagFilter = 'all',
   onPlayerSelect, onTeamSelect,
-  tab: tabProp, onTabChange: onTabChangeProp
+  tab: tabProp, onTabChange: onTabChangeProp,
+  hiddenPlayerIds
 }: BeaterStatsViewProps) {
   const [localTab, setLocalTab] = useState<'pairs' | 'solo' | 'team'>('pairs');
   const tab = tabProp || localTab;
@@ -110,14 +113,14 @@ export default function BeaterStatsView({
   // Sorted (but not search-filtered) lists establish each row's ORIGINAL rank,
   // so a search doesn't renumber players relative to their un-searched standing.
   const sortedSolo = useMemo(() => {
-    const d = soloStats.filter(s => s.gamesPlayed >= minGames);
+    const d = soloStats.filter(s => s.gamesPlayed >= minGames && !hiddenPlayerIds?.has(s.playerId));
     return sortBy(d, sortKey as keyof BeaterSoloStats, sortDir);
-  }, [soloStats, minGames, sortKey, sortDir]);
+  }, [soloStats, minGames, sortKey, sortDir, hiddenPlayerIds]);
 
   const sortedPairs = useMemo(() => {
-    const d = pairStats.filter(s => s.gamesPlayed >= minGames);
+    const d = pairStats.filter(s => s.gamesPlayed >= minGames && !hiddenPlayerIds?.has(s.player1Id) && !hiddenPlayerIds?.has(s.player2Id));
     return sortBy(d, sortKey as keyof BeaterPairStats, sortDir);
-  }, [pairStats, minGames, sortKey, sortDir]);
+  }, [pairStats, minGames, sortKey, sortDir, hiddenPlayerIds]);
 
   const sortedTeam = useMemo(() => {
     const d = teamStats.filter(s => s.gamesPlayed >= minGames);
