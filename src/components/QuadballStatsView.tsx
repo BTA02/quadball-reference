@@ -31,6 +31,9 @@ const MISS_GROUP_START = 'pl-2 pr-1 border-l border-gray-200';
 const MISS_GROUP_MID = 'px-1';
 const MISS_GROUP_END = 'pr-2 pl-1 border-r border-gray-200';
 
+// Stable identity so the memos below don't re-run on every render when the prop is defaulted.
+const EMPTY_HIDDEN: Set<string> = new Set();
+
 interface QuadballStatsViewProps {
   players: Player[];
   events: GameEvent[];
@@ -44,6 +47,12 @@ interface QuadballStatsViewProps {
   bludgerControlMode?: 'all' | 'separate';
   flagFilter?: 'all' | 'on' | 'off';
   positionFilter?: 'all' | 'chaser' | 'keeper';
+  /**
+   * Players who opted out of the public stat pages. They are dropped from the rows below,
+   * never from the computation: league averages, team totals and every other player's
+   * on-field numbers still count them. Empty for admins, who see everyone.
+   */
+  hiddenPlayerIds?: Set<string>;
   onPlayerSelect?: (playerId: string) => void;
   onTeamSelect?: (teamId: string) => void;
   /** Publish only the top slice of the field. See src/lib/leadersOnly.ts. */
@@ -55,6 +64,7 @@ export default function QuadballStatsView({
   players, events, teams, games, seasons, statsFilter = 'public',
   teamIds: teamFilterIds = [], search = '',
   minGames = 1, bludgerControlMode = 'all', flagFilter = 'all', positionFilter = 'all',
+  hiddenPlayerIds = EMPTY_HIDDEN,
   onPlayerSelect, onTeamSelect, leadersOnly = false, onShowInfo
 }: QuadballStatsViewProps) {
   const [tab, setTab] = useState<'boxscore' | 'rates' | 'advanced' | 'plusminus' | 'team'>('boxscore');
@@ -174,9 +184,9 @@ export default function QuadballStatsView({
   // Sorted (but not search-filtered) lists establish each row's ORIGINAL rank,
   // so a search doesn't renumber players/teams relative to their un-searched standing.
   const rankedPlayers = useMemo(() => {
-    const d = mergedPlayers.filter(s => s.gamesPlayed >= minGames && validQuadballPlayerIds.has(s.playerId));
+    const d = mergedPlayers.filter(s => s.gamesPlayed >= minGames && validQuadballPlayerIds.has(s.playerId) && !hiddenPlayerIds.has(s.playerId));
     return sortBy(d, sortKey as keyof ExtendedPlayerStats, sortDir);
-  }, [mergedPlayers, minGames, sortKey, sortDir, validQuadballPlayerIds]);
+  }, [mergedPlayers, minGames, sortKey, sortDir, validQuadballPlayerIds, hiddenPlayerIds]);
 
   // Everyone below the cut is dropped here, before rank, search or paging — their
   // numbers never reach the rendered table. Teams are a public field of a dozen or

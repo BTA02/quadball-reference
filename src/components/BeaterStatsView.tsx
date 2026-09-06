@@ -28,6 +28,9 @@ import {
 import LeadersOnlyVeil from './ui/LeadersOnlyVeil';
 import { leadersSlice, resolveSortDir, bestFirstDir } from '../lib/leadersOnly';
 
+// Stable identity so the memos below don't re-run on every render when the prop is defaulted.
+const EMPTY_HIDDEN: Set<string> = new Set();
+
 interface BeaterStatsViewProps {
   players: Player[];
   events: GameEvent[];
@@ -40,6 +43,11 @@ interface BeaterStatsViewProps {
   minGames?: number;
   bludgerControlMode?: 'all' | 'separate';
   flagFilter?: 'all' | 'on' | 'off';
+  /**
+   * Players who opted out of the public stat pages. Dropped from the solo rows, and from any
+   * pair they are half of — never from the computation itself. Empty for admins.
+   */
+  hiddenPlayerIds?: Set<string>;
   onPlayerSelect?: (playerId: string) => void;
   onTeamSelect?: (teamId: string) => void;
   tab?: 'pairs' | 'solo' | 'team';
@@ -53,6 +61,7 @@ export default function BeaterStatsView({
   players, events, teams, games, seasons, statsFilter = 'public',
   teamIds: teamFilterIds = [], search = '',
   minGames = 1, bludgerControlMode = 'all', flagFilter = 'all',
+  hiddenPlayerIds = EMPTY_HIDDEN,
   onPlayerSelect, onTeamSelect,
   tab: tabProp, onTabChange: onTabChangeProp,
   leadersOnly = false, onShowInfo
@@ -123,14 +132,15 @@ export default function BeaterStatsView({
   // Sorted (but not search-filtered) lists establish each row's ORIGINAL rank,
   // so a search doesn't renumber players relative to their un-searched standing.
   const rankedSolo = useMemo(() => {
-    const d = soloStats.filter(s => s.gamesPlayed >= minGames);
+    const d = soloStats.filter(s => s.gamesPlayed >= minGames && !hiddenPlayerIds.has(s.playerId));
     return sortBy(d, sortKey as keyof BeaterSoloStats, sortDir);
-  }, [soloStats, minGames, sortKey, sortDir]);
+  }, [soloStats, minGames, sortKey, sortDir, hiddenPlayerIds]);
 
   const rankedPairs = useMemo(() => {
-    const d = pairStats.filter(s => s.gamesPlayed >= minGames);
+    // A pair row names both beaters, so either one opting out hides the row.
+    const d = pairStats.filter(s => s.gamesPlayed >= minGames && !hiddenPlayerIds.has(s.player1Id) && !hiddenPlayerIds.has(s.player2Id));
     return sortBy(d, sortKey as keyof BeaterPairStats, sortDir);
-  }, [pairStats, minGames, sortKey, sortDir]);
+  }, [pairStats, minGames, sortKey, sortDir, hiddenPlayerIds]);
 
   const rankedTeam = useMemo(() => {
     const d = teamStats.filter(s => s.gamesPlayed >= minGames);
