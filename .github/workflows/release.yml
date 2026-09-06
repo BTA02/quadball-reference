@@ -1,0 +1,144 @@
+name: Release
+
+# Cut a release from main: pick a bump, get a version tag, a GitHub Release with
+# generated notes, and a production deploy of exactly that tag.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Which part of the version to bump.
+        required: true
+        type: choice
+        default: patch
+        options: [patch, minor, major]
+      version:
+        description: 'Exact version instead of a bump (e.g. 1.4.0). Leave blank to use the bump.'
+        required: false
+        type: string
+        default: ''
+      deploy:
+        description: Deploy the new tag to production.
+        required: true
+        type: boolean
+        default: true
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    name: Tag and publish
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Releases only come from main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Run this workflow from main (got ${{ github.ref_name }})."
+          exit 1
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Work out the next version
+        id: version
+        run: |
+          set -euo pipefail
+          PREV="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)"
+          echo "previous=$PREV" >> "$GITHUB_OUTPUT"
+
+          EXPLICIT="${{ inputs.version }}"
+          if [ -n "$EXPLICIT" ]; then
+            NEXT="v${EXPLICIT#v}"
+          else
+            BASE="${PREV:-v0.0.0}"
+            IFS=. read -r MAJOR MINOR PATCH <<< "${BASE#v}"
+            case "${{ inputs.bump }}" in
+              major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+              minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+              patch) PATCH=$((PATCH + 1)) ;;
+            esac
+            NEXT="v${MAJOR}.${MINOR}.${PATCH}"
+          fi
+
+          if ! printf '%s' "$NEXT" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::'$NEXT' is not a vMAJOR.MINOR.PATCH version."
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/$NEXT" >/dev/null; then
+            echo "::error::Tag $NEXT already exists."
+            exit 1
+          fi
+
+          echo "version=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "Releasing $NEXT (previous: ${PREV:-none})"
+
+      - name: Write the release notes
+        id: notes
+        env:
+          PREV: ${{ steps.version.outputs.previous }}
+        run: |
+          set -euo pipefail
+          RANGE="${PREV:+$PREV..}HEAD"
+          {
+            echo "## What changed"
+            echo ""
+            git log --no-merges --pretty=format:'- %s (%h)' "$RANGE" || true
+            echo ""
+            echo ""
+            if [ -n "$PREV" ]; then
+              echo "**Full diff:** https://github.com/${{ github.repository }}/compare/$PREV...${{ steps.version.outputs.version }}"
+            fi
+          } > release-notes.md
+          cat release-notes.md
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # Tag only what actually builds — a broken tag is worse than a failed run.
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm run lint
+      - name: Build
+        run: npm run build
+
+      - name: Commit the version bump and tag it
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Updates package.json and package-lock.json without re-resolving the
+          # dependency tree, so a release never smuggles in a dependency change.
+          npm version "${VERSION#v}" --no-git-tag-version --allow-same-version
+          git add package.json package-lock.json
+          git commit -m "chore(release): $VERSION"
+          git tag -a "$VERSION" -m "$VERSION"
+          git push origin HEAD:main
+          git push origin "refs/tags/$VERSION"
+
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: gh release create "$VERSION" --title "$VERSION" --notes-file release-notes.md
+
+  deploy:
+    name: Deploy
+    needs: tag
+    if: ${{ inputs.deploy }}
+    uses: ./.github/workflows/deploy.yml
+    with:
+      ref: ${{ needs.tag.outputs.version }}
+    secrets: inherit

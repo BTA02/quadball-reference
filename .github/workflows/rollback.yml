@@ -1,0 +1,84 @@
+name: Rollback
+
+# Put production back on an earlier release. Leave the version blank and it picks
+# the release immediately before whatever is live now; that is the whole procedure.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release tag to roll back to (e.g. v1.3.0). Blank = the release before the one now live.'
+        required: false
+        type: string
+        default: ''
+
+# No workflow-level concurrency here on purpose: the reusable Deploy workflow
+# already serialises on `deploy-production`, and a caller holding the same group
+# would deadlock waiting on the job it called.
+
+permissions:
+  contents: write
+
+jobs:
+  resolve:
+    name: Pick the target release
+    runs-on: ubuntu-latest
+    outputs:
+      target: ${{ steps.pick.outputs.target }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Pick the target release
+        id: pick
+        run: |
+          set -euo pipefail
+          REQUESTED="${{ inputs.version }}"
+
+          if [ -n "$REQUESTED" ]; then
+            TARGET="v${REQUESTED#v}"
+            if ! git rev-parse -q --verify "refs/tags/$TARGET" >/dev/null; then
+              echo "::error::No such release tag: $TARGET"
+              exit 1
+            fi
+          else
+            # Newest first. Find what's live, then take the next one down.
+            mapfile -t TAGS < <(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname)
+            if [ "${#TAGS[@]}" -lt 2 ]; then
+              echo "::error::Need at least two releases to roll back automatically. Pass a version explicitly."
+              exit 1
+            fi
+
+            LIVE_SHA="$(git rev-parse -q --verify refs/tags/deployed-production^{commit} || true)"
+            CURRENT_INDEX=0
+            if [ -n "$LIVE_SHA" ]; then
+              for i in "${!TAGS[@]}"; do
+                if [ "$(git rev-parse "${TAGS[$i]}^{commit}")" = "$LIVE_SHA" ]; then
+                  CURRENT_INDEX="$i"
+                  break
+                fi
+              done
+            else
+              echo "::warning::No deployed-production tag found; assuming the newest release is live."
+            fi
+
+            NEXT_INDEX=$((CURRENT_INDEX + 1))
+            if [ "$NEXT_INDEX" -ge "${#TAGS[@]}" ]; then
+              echo "::error::${TAGS[$CURRENT_INDEX]} is the oldest release — nothing to roll back to."
+              exit 1
+            fi
+            TARGET="${TAGS[$NEXT_INDEX]}"
+            echo "Live: ${TAGS[$CURRENT_INDEX]} → rolling back to $TARGET"
+          fi
+
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "### Rolling production back to \`$TARGET\`" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: Deploy
+    needs: resolve
+    uses: ./.github/workflows/deploy.yml
+    with:
+      ref: ${{ needs.resolve.outputs.target }}
+    secrets: inherit
