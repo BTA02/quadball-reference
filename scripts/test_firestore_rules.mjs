@@ -10,7 +10,7 @@ import {
   assertSucceeds,
   assertFails,
 } from '@firebase/rules-unit-testing';
-import { doc, setDoc, updateDoc, deleteDoc, getDoc } from 'firebase/firestore';
+import { doc, setDoc, updateDoc, deleteDoc, getDoc, deleteField } from 'firebase/firestore';
 
 const PROJECT_ID = 'demo-rules-check';
 const ADMIN_EMAIL = 'andrew.axtell@gmail.com';
@@ -219,6 +219,68 @@ await it('a game may NOT carry an unknown completion value', async () => {
   await assertFails(setDoc(doc(asModerator(), 'games', 'completion-bad'), {
     id: 'completion-bad', seasonId: 's1', homeTeamId: 'team1', awayTeamId: 'team2', authorTeamId: null,
     isVerified: false, homeCompletion: 'mostly', awayCompletion: 'none', createdAt: null,
+  }));
+});
+
+// Marking a side complete is an *update*, and on an update request.resource.data is the whole
+// merged document — so isValidGame() sees fields the patch never touched, including ones the
+// stored game may simply not have. Reading an absent key is an evaluation error in rules, so
+// these games were unwritable by anyone, admin included, until isValidGame() switched to
+// get(key, null). Each shape below is one that really occurs: imports predate authorTeamId,
+// and a game moved to a tournament has its seasonId deleted.
+const PARTIAL_GAME_SHAPES = [
+  ['a fully-populated game', { id: 'g', seasonId: 's1', homeTeamId: 'team1', awayTeamId: 'team2', authorTeamId: null, isVerified: false, createdAt: null }],
+  ['a game with no authorTeamId', { id: 'g', seasonId: 's1', homeTeamId: 'team1', awayTeamId: 'team2', isVerified: false }],
+  ['a tournament game with no seasonId', { id: 'g', homeTeamId: 'team1', awayTeamId: 'team2', tournamentId: 'tour1' }],
+  ['a legacy game with no id field', { seasonId: 's1', homeTeamId: 'team1', awayTeamId: 'team2' }],
+];
+
+for (const [label, stored] of PARTIAL_GAME_SHAPES) {
+  for (const [who, db] of [['an admin', asAdmin], ['a moderator', asModerator]]) {
+    await it(`${who} may mark a side complete on ${label}`, async () => {
+      const id = `complete-${label.replace(/\W+/g, '-')}-${who.replace(/\W+/g, '-')}`;
+      await testEnv.withSecurityRulesDisabled(async ctx => {
+        await setDoc(doc(ctx.firestore(), 'games', id), stored);
+      });
+      await assertSucceeds(updateDoc(doc(db(), 'games', id), {
+        homeCompletion: 'complete', isVerified: false,
+      }));
+    });
+  }
+}
+
+await it('an author may NOT mark a side complete', async () => {
+  await testEnv.withSecurityRulesDisabled(async ctx => {
+    await setDoc(doc(ctx.firestore(), 'games', 'completion-author'), { id: 'completion-author', seasonId: 's1' });
+  });
+  await assertFails(updateDoc(doc(asAuthor(), 'games', 'completion-author'), { homeCompletion: 'complete' }));
+});
+
+await it('moving a game to a tournament may delete its seasonId', async () => {
+  await testEnv.withSecurityRulesDisabled(async ctx => {
+    await setDoc(doc(ctx.firestore(), 'games', 'to-tournament'), {
+      id: 'to-tournament', seasonId: 's1', homeTeamId: 'team1', awayTeamId: 'team2',
+    });
+  });
+  await assertSucceeds(updateDoc(doc(asModerator(), 'games', 'to-tournament'), {
+    tournamentId: 'tour1', seasonId: deleteField(),
+  }));
+});
+
+await it('a game field may NOT be updated to the wrong type', async () => {
+  await testEnv.withSecurityRulesDisabled(async ctx => {
+    await setDoc(doc(ctx.firestore(), 'games', 'wrong-type'), { id: 'wrong-type', seasonId: 's1' });
+  });
+  await assertFails(updateDoc(doc(asModerator(), 'games', 'wrong-type'), { seasonId: 42 }));
+  await assertFails(updateDoc(doc(asModerator(), 'games', 'wrong-type'), { isVerified: 'yes' }));
+});
+
+await it('a game may NOT be created without an id', async () => {
+  await assertFails(setDoc(doc(asModerator(), 'games', 'no-id'), {
+    seasonId: 's1', homeTeamId: 'team1', awayTeamId: 'team2',
+  }));
+  await assertFails(setDoc(doc(asModerator(), 'games', 'empty-id'), {
+    id: '', seasonId: 's1', homeTeamId: 'team1', awayTeamId: 'team2',
   }));
 });
 
