@@ -168,20 +168,34 @@ service cloud.firestore {
                : !('reason' in data));
     }
 
+    // Shape only — every field is optional here, and `id` is required separately on create.
+    //
+    // Optional fields must be read with `get(key, null)`, never `data.key`: reading a key that
+    // isn't on the map is an evaluation *error*, which denies the write. Since
+    // `request.resource.data` on an update is the whole merged document rather than the patch,
+    // `data.authorTeamId` denied every write to a game that never got an authorTeamId (most
+    // imported games), and `data.seasonId` denied every write to a tournament game, whose
+    // seasonId is deleted. Marking a team complete is an update, so it failed for everyone,
+    // admin included.
     function isValidGame(data) {
-      return data.id is string && data.id.size() > 0 &&
-             (data.seasonId == null || data.seasonId is string) &&
-             (data.homeTeamId == null || data.homeTeamId is string) &&
-             (data.awayTeamId == null || data.awayTeamId is string) &&
-             (data.authorTeamId == null || data.authorTeamId is string) &&
-             (data.isVerified == null || data.isVerified is bool) &&
+      return (data.get('id', null) == null || (data.id is string && data.id.size() > 0)) &&
+             (data.get('seasonId', null) == null || data.seasonId is string) &&
+             (data.get('homeTeamId', null) == null || data.homeTeamId is string) &&
+             (data.get('awayTeamId', null) == null || data.awayTeamId is string) &&
+             (data.get('authorTeamId', null) == null || data.authorTeamId is string) &&
+             (data.get('isVerified', null) == null || data.isVerified is bool) &&
              // Per-team tracking completion. `isVerified` is the legacy whole-game flag,
              // now written as a mirror of "both sides complete".
-             (!('homeCompletion' in data) || data.homeCompletion == null ||
+             (data.get('homeCompletion', null) == null ||
                 data.homeCompletion in ['none', 'complete', 'complete_no_subs']) &&
-             (!('awayCompletion' in data) || data.awayCompletion == null ||
+             (data.get('awayCompletion', null) == null ||
                 data.awayCompletion in ['none', 'complete', 'complete_no_subs']) &&
-             (data.createdAt == null || data.createdAt is timestamp);
+             (data.get('createdAt', null) == null || data.createdAt is timestamp);
+    }
+
+    // A new game must name itself; an existing one is only reshaped, never re-identified.
+    function hasGameId(data) {
+      return data.get('id', null) is string && data.id.size() > 0;
     }
 
     function isValidVideo(data) {
@@ -255,7 +269,7 @@ service cloud.firestore {
     // Games
     match /games/{gameId} {
       allow read: if true;
-      allow create: if isModerator() && isValidGame(request.resource.data);
+      allow create: if isModerator() && hasGameId(request.resource.data) && isValidGame(request.resource.data);
       allow update: if isModerator() && isValidGame(request.resource.data);
       allow delete: if isAdmin();
     }
