@@ -5495,19 +5495,19 @@ function CreateView({
         </div>
       </div>
 
-      {/* Moderators are exempt from Leaders Only, so their Stats tables look
-          different from everyone else's. Say so, and point at the one way to
-          check the public view. */}
+      {/* Signed-in accounts (moderators included) are exempt from Leaders Only, so their
+          Stats tables look different from a signed-out visitor's. Say so, and point at the
+          one way to check the public view without signing out. */}
       {LEADERS_ONLY_ENABLED && (
         <div className="flex items-start gap-3 p-4 bg-amber-50/60 border border-amber-200/70 rounded-xl">
           <Trophy className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
           <div>
             <h3 className="text-sm font-bold text-gray-900">Leaders Only is on for this release</h3>
             <p className="text-xs text-gray-600 mt-0.5">
-              The public Stats tables show the top {Math.round(LEADERS_TOP_FRACTION * 100)}% of each column
-              (at least {LEADERS_MIN_ROWS} rows) and can't be sorted worst-first. As a moderator you're exempt
-              and see the full field — add <code className="px-1 py-0.5 bg-amber-100/70 rounded font-mono">?leaders=on</code> to
-              the URL to browse Stats the way everyone else does.
+              Signed-out visitors get public Stats tables trimmed to the top {Math.round(LEADERS_TOP_FRACTION * 100)}% of each
+              column (at least {LEADERS_MIN_ROWS} rows), sortable best-first only, with filters limited to League and Year.
+              As a signed-in moderator you're exempt and see the full field with every filter — add <code className="px-1 py-0.5 bg-amber-100/70 rounded font-mono">?leaders=on</code> to
+              the URL to preview Stats the way a signed-out visitor sees them.
             </p>
           </div>
         </div>
@@ -6198,11 +6198,26 @@ export default function App() {
   };
 
   // Leaders Only trims the public leaderboards to the top of each column (see
-  // src/lib/leadersOnly.ts). Moderators are exempt — they need the whole field to
-  // check tracking — and `?leaders=on` overrides that exemption, so a moderator can
-  // still check the public view. (An admin can also just use "View As: User", which
-  // downgrades effectiveRole and so drops the exemption the same way.)
-  const leadersOnly = LEADERS_ONLY_FORCED || (LEADERS_ONLY_ENABLED && !canModerate);
+  // src/lib/leadersOnly.ts). It's the only option for a signed-out viewer; signing in
+  // (with a real Google account, not the silent anonymous session) is the opt-out and
+  // unlocks the full tables for everyone from a plain author up through moderators and
+  // admins. `?leaders=on` still overrides that, so a signed-in reviewer can preview the
+  // public view — "View As: User" doesn't, since that only simulates effectiveRole and
+  // leaders-only now keys off sign-in state rather than role.
+  const leadersOnly = LEADERS_ONLY_FORCED || (LEADERS_ONLY_ENABLED && !isSignedIn);
+  // Team/event/position/control/flag/min-GP all narrow the pool the leaders slice is taken
+  // from, so a specific-enough combination (a single small team, say) can surface nearly
+  // everyone on it — the filter bar hides these controls under Leaders Only, but that alone
+  // doesn't stop a value left over from before sign-out, or one passed straight in the URL
+  // (see the `initialParams` reads above), from still reaching the stats computation. So the
+  // values actually handed to the stats views are forced back to neutral here too.
+  const effectiveStatsTeamIds = leadersOnly ? [] : statsTeamIds;
+  const effectiveStatsTournamentIds = leadersOnly ? [] : statsTournamentIds;
+  const effectiveStatsSearch = leadersOnly ? '' : statsSearch;
+  const effectiveStatsMinGames = leadersOnly ? 1 : statsMinGames;
+  const effectiveBludgerControlMode = leadersOnly ? 'all' : bludgerControlMode;
+  const effectiveStatsFlagFilter = leadersOnly ? 'all' : statsFlagFilter;
+  const effectiveStatsPositionFilter = leadersOnly ? 'all' : statsPositionFilter;
   // The Info page is long, so jump to the Leaders Only section rather than the top
   // of it. The timeout lets the view finish switching before we look for the anchor.
   const showLeadersOnlyInfo = () => {
@@ -6392,14 +6407,14 @@ export default function App() {
       filtered = filtered.filter(g => validSeasonIds.has(g.seasonId) || (g.date && statsSelectedYears.some(y => g.date?.startsWith(y))));
     }
 
-    // Tournament filtering (multi-select)
-    if (statsTournamentIds.length > 0) {
-      const tSet = new Set(statsTournamentIds);
+    // Tournament filtering (multi-select) — withheld under Leaders Only, see effectiveStatsTournamentIds above
+    if (effectiveStatsTournamentIds.length > 0) {
+      const tSet = new Set(effectiveStatsTournamentIds);
       filtered = filtered.filter(g => g.tournamentId && tSet.has(g.tournamentId));
     }
 
     return filtered;
-  }, [statsGames, statsFilter, currentSeasonId, user, currentUserTeamId, statsLeagueDivs, statsSelectedYears, statsTournamentIds, statsSeasons]);
+  }, [statsGames, statsFilter, currentSeasonId, user, currentUserTeamId, statsLeagueDivs, statsSelectedYears, effectiveStatsTournamentIds, statsSeasons]);
 
   // True if the user can see at least SOME current-season data (hides the warning banner)
   const hasPrivilegedStatsAccess = useMemo(() => {
@@ -10914,11 +10929,13 @@ export default function App() {
             <div className="mb-12" id="leaders-only">
               <h2 className="text-3xl font-extrabold border-b pb-4 text-gray-900 mb-6">Leaders Only</h2>
               <div className="space-y-4 text-gray-700 leading-relaxed text-sm">
-                <p>Quadball is a casual sport. A leaderboard that ranks everybody also ranks somebody last, and being the worst name on a public table isn't why anyone shows up to play. So the Stats tables run in <strong>Leaders Only</strong>: they publish the top {Math.round(LEADERS_TOP_FRACTION * 100)}% of the field for whichever column you're sorting by, and never fewer than {LEADERS_MIN_ROWS} rows — ten percent of a small pool is a podium, not a leaderboard.</p>
+                <p>Quadball is a casual sport. A leaderboard that ranks everybody also ranks somebody last, and being the worst name on a public table isn't why anyone shows up to play. So if you're browsing without an account, the Stats tables run in <strong>Leaders Only</strong>: they publish the top {Math.round(LEADERS_TOP_FRACTION * 100)}% of the field for whichever column you're sorting by, and never fewer than {LEADERS_MIN_ROWS} rows — ten percent of a small pool is a podium, not a leaderboard.</p>
+                <p><strong>Sign in and you'll see the full tables</strong> — every player, not just the top slice. That's the opt-out: Leaders Only is the only option for a signed-out visitor, but signing in with your Google account switches every Stats table over immediately, no separate setting to dig for.</p>
                 <p>Sorting only runs one way: <strong>best first</strong>. Every column knows which direction is the good one — most goals, but <em>fewest</em> turnovers — so clicking a header always puts the strongest performances on top. There's no way to flip a table over and read off the worst. A handful of columns have no good direction at all (average time to catch, for instance, where a seeker with no catches sits at zero); those still sort both ways, but they're still cut to the same top slice.</p>
+                <p>While Leaders Only is active, the filter bar only offers <strong>League</strong> and <strong>Year</strong> — narrowing any further (one team, one event, one position, a name search) can shrink the field down to the point where the top slice is most or all of it, which defeats the purpose. Sign in and the rest of the filters, including search, come back.</p>
                 <p>Everyone below the cut sits behind the frosted panel at the bottom of each table. It's there so you can tell a table is trimmed rather than complete — the bars behind the frost are placeholders, not blurred-out stat lines.</p>
-                <p>What this <em>doesn't</em> touch: your own <strong>player profile</strong>, a <strong>game's box score</strong>, and the <strong>team</strong> tables. Profiles and box scores are the full record of what happened, all stats good and bad, and teams are a public field of a dozen or so rather than individuals. Search on the Stats page only searches the players who made the cut, so a name that isn't showing up may simply be outside the top {Math.round(LEADERS_TOP_FRACTION * 100)}% for that column — try a different column, or open their profile directly.</p>
-                <p>Moderators always see the full tables, since they need the whole field to check that games are tracked properly.</p>
+                <p>What this <em>doesn't</em> touch: your own <strong>player profile</strong>, a <strong>game's box score</strong>, and the <strong>team</strong> tables. Profiles and box scores are the full record of what happened, all stats good and bad, and teams are a public field of a dozen or so rather than individuals.</p>
+                <p>Signing in is the opt-out for everyone, not just moderators — but moderators and admins see the full tables either way, since they need the whole field to check that games are tracked properly.</p>
               </div>
             </div>
             )}
@@ -11232,9 +11249,10 @@ export default function App() {
                 ))}
               </div>
               {(() => {
-                const activeFilterCount = statsLeagueDivs.length + statsSelectedYears.length + statsTournamentIds.length + statsTeamIds.length
+                const activeFilterCount = statsLeagueDivs.length + statsSelectedYears.length + (leadersOnly ? 0 :
+                  statsTournamentIds.length + statsTeamIds.length
                   + (statsPositionFilter !== 'all' ? 1 : 0) + (bludgerControlMode !== 'all' ? 1 : 0) + (statsFlagFilter !== 'all' ? 1 : 0)
-                  + (statsMinGames > 1 ? 1 : 0) + (statsSearch ? 1 : 0);
+                  + (statsMinGames > 1 ? 1 : 0) + (statsSearch ? 1 : 0));
                 return (
                   <button
                     onClick={toggleStatsFiltersExpanded}
@@ -11261,6 +11279,7 @@ export default function App() {
             {statsFiltersExpanded && (
               <StatsFilters
                 viewType={statsSubView as 'quadball' | 'beaters' | 'seekers'}
+                leadersOnly={leadersOnly}
                 leagueDivisions={statsLeagueDivs} onLeagueDivisionChange={setStatsLeagueDivs}
                 leagues={leagues}
                 years={statsSelectedYears} onYearChange={setStatsSelectedYears}
@@ -11294,12 +11313,12 @@ export default function App() {
                 games={dashboardGames}
                 seasons={statsSeasons}
                 statsFilter={statsFilter}
-                teamIds={statsTeamIds}
-                search={statsSearch}
-                minGames={statsMinGames}
-                bludgerControlMode={bludgerControlMode}
-                flagFilter={statsFlagFilter}
-                positionFilter={statsPositionFilter}
+                teamIds={effectiveStatsTeamIds}
+                search={effectiveStatsSearch}
+                minGames={effectiveStatsMinGames}
+                bludgerControlMode={effectiveBludgerControlMode}
+                flagFilter={effectiveStatsFlagFilter}
+                positionFilter={effectiveStatsPositionFilter}
                 onPlayerSelect={handlePlayerProfileClick}
                 onTeamSelect={handleTeamProfileClick}
                 leadersOnly={leadersOnly}
@@ -11314,11 +11333,11 @@ export default function App() {
                 games={dashboardGames}
                 seasons={statsSeasons}
                 statsFilter={statsFilter}
-                teamIds={statsTeamIds}
-                search={statsSearch}
-                minGames={statsMinGames}
-                bludgerControlMode={bludgerControlMode}
-                flagFilter={statsFlagFilter}
+                teamIds={effectiveStatsTeamIds}
+                search={effectiveStatsSearch}
+                minGames={effectiveStatsMinGames}
+                bludgerControlMode={effectiveBludgerControlMode}
+                flagFilter={effectiveStatsFlagFilter}
                 onPlayerSelect={handlePlayerProfileClick}
                 onTeamSelect={handleTeamProfileClick}
                 tab={beaterStatsTab}
@@ -11335,11 +11354,11 @@ export default function App() {
                 games={dashboardGames}
                 seasons={statsSeasons}
                 statsFilter={statsFilter}
-                teamIds={statsTeamIds}
-                search={statsSearch}
-                minGames={statsMinGames}
-                bludgerControlMode={bludgerControlMode}
-                flagFilter={statsFlagFilter}
+                teamIds={effectiveStatsTeamIds}
+                search={effectiveStatsSearch}
+                minGames={effectiveStatsMinGames}
+                bludgerControlMode={effectiveBludgerControlMode}
+                flagFilter={effectiveStatsFlagFilter}
                 onPlayerSelect={handlePlayerProfileClick}
                 leadersOnly={leadersOnly}
                 onShowInfo={showLeadersOnlyInfo}

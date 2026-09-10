@@ -33,9 +33,16 @@ export interface StatsFiltersProps {
   tournaments?: { id: string; name: string; leagueId?: string; year?: string; division?: string }[];
   availableYears: string[];
   teams: { id: string; name: string; division?: string }[];
-  
+
   // View identifier to customize options if needed
   viewType: 'quadball' | 'beaters' | 'seekers';
+
+  // Leaders Only narrows the visible tables to a small top slice of whatever pool the
+  // filters produce. Team/event/position/flag/min-GP/search all narrow that pool *before*
+  // the slice happens, so a specific-enough combination (e.g. one small team) can surface
+  // nearly the whole team's individual lines — the opposite of the point. League and year
+  // are broad enough to leave a real leaderboard, so those are all that's offered here.
+  leadersOnly?: boolean;
 }
 
 const selectBase = 'appearance-none pl-3 pr-7 py-1.5 rounded-lg text-xs font-medium outline-none cursor-pointer transition-all duration-150 bg-white text-gray-700 border border-gray-200 hover:border-gray-300 focus:ring-1 focus:ring-red-500/50 focus:border-red-500/50';
@@ -142,7 +149,8 @@ export default function StatsFilters({
   search, onSearchChange,
   minGames, onMinGamesChange,
   leagues = [], tournaments = [], availableYears, teams,
-  viewType
+  viewType,
+  leadersOnly = false,
 }: StatsFiltersProps) {
   const svgArrow = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%2394a3b8' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E")`;
   const arrowStyle = { backgroundImage: svgArrow, backgroundRepeat: 'no-repeat' as const, backgroundPosition: 'right 0.5rem center' };
@@ -203,8 +211,11 @@ export default function StatsFilters({
           chipColor="bg-amber-50 text-amber-700 border-amber-200"
         />
 
-        {/* Tournament — multi-select chips */}
-        {tournamentOptions.length > 0 && (
+        {/* Tournament, team, position, control, flag, min-GP, and search all narrow the
+            underlying pool before the Leaders Only slice runs, so they're withheld while
+            it's active — league and year are the only filters broad enough not to leak
+            individual players. See src/App.tsx's `leadersOnly` for who this applies to. */}
+        {!leadersOnly && tournamentOptions.length > 0 && (
           <ChipFilter
             label="Event"
             selectedValues={tournamentIds}
@@ -214,65 +225,69 @@ export default function StatsFilters({
           />
         )}
 
-        {/* Separator */}
-        <div className="h-5 w-px bg-gray-200 mx-0.5" />
+        {!leadersOnly && (
+          <>
+            {/* Separator */}
+            <div className="h-5 w-px bg-gray-200 mx-0.5" />
 
-        {/* Team — multi-select chips */}
-        <ChipFilter
-          label="Team"
-          selectedValues={teamIds}
-          options={teamOptions}
-          onChange={vals => onTeamChange?.(vals)}
-          chipColor="bg-sky-50 text-sky-700 border-sky-200"
-        />
+            {/* Team — multi-select chips */}
+            <ChipFilter
+              label="Team"
+              selectedValues={teamIds}
+              options={teamOptions}
+              onChange={vals => onTeamChange?.(vals)}
+              chipColor="bg-sky-50 text-sky-700 border-sky-200"
+            />
 
-        {/* Separator */}
-        <div className="h-5 w-px bg-gray-200 mx-0.5" />
+            {/* Separator */}
+            <div className="h-5 w-px bg-gray-200 mx-0.5" />
 
-        {/* Mode toggles — stay as simple selects */}
-        {viewType === 'quadball' && onPositionFilterChange && (
-          <div className="relative">
-            <select value={positionFilter} onChange={e => onPositionFilterChange(e.target.value as any)}
-              className={selectBase} style={arrowStyle}>
-              <option value="all">All Positions</option>
-              <option value="chaser">Chaser Only</option>
-              <option value="keeper">Keeper Only</option>
-            </select>
-          </div>
+            {/* Mode toggles — stay as simple selects */}
+            {viewType === 'quadball' && onPositionFilterChange && (
+              <div className="relative">
+                <select value={positionFilter} onChange={e => onPositionFilterChange(e.target.value as any)}
+                  className={selectBase} style={arrowStyle}>
+                  <option value="all">All Positions</option>
+                  <option value="chaser">Chaser Only</option>
+                  <option value="keeper">Keeper Only</option>
+                </select>
+              </div>
+            )}
+
+            {onBludgerControlModeChange && (
+              <div className="relative">
+                <select value={bludgerControlMode} onChange={e => onBludgerControlModeChange(e.target.value as any)}
+                  className={selectBase} style={arrowStyle}>
+                  <option value="all">All Bludger Control</option>
+                  <option value="separate">Separate Control</option>
+                </select>
+              </div>
+            )}
+
+            {onFlagFilterChange && (
+              <div className="relative">
+                <select value={flagFilter} onChange={e => onFlagFilterChange(e.target.value as any)}
+                  className={selectBase} style={arrowStyle}>
+                  <option value="all">Any Flag State</option>
+                  <option value="off">Off Pitch</option>
+                  <option value="on">On Pitch</option>
+                </select>
+              </div>
+            )}
+
+            <div className="flex items-center gap-1 rounded-lg px-3 py-1.5 bg-white border border-gray-200">
+              <span className="text-xs text-gray-400 font-medium">Min GP:</span>
+              <input type="number" min="0" value={minGames || ''} onChange={e => onMinGamesChange(parseInt(e.target.value) || 0)}
+                className={`w-12 p-0.5 bg-transparent border-none text-xs text-gray-700 outline-none`} />
+            </div>
+
+            <div className="relative flex-1 min-w-[120px] max-w-[200px]">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-400" />
+              <input type="text" placeholder="Search..." value={search || ''} onChange={e => onSearchChange?.(e.target.value)}
+                className={`w-full pl-7 pr-3 py-1.5 ${inputBase}`} />
+            </div>
+          </>
         )}
-
-        {onBludgerControlModeChange && (
-          <div className="relative">
-            <select value={bludgerControlMode} onChange={e => onBludgerControlModeChange(e.target.value as any)}
-              className={selectBase} style={arrowStyle}>
-              <option value="all">All Bludger Control</option>
-              <option value="separate">Separate Control</option>
-            </select>
-          </div>
-        )}
-
-        {onFlagFilterChange && (
-          <div className="relative">
-            <select value={flagFilter} onChange={e => onFlagFilterChange(e.target.value as any)}
-              className={selectBase} style={arrowStyle}>
-              <option value="all">Any Flag State</option>
-              <option value="off">Off Pitch</option>
-              <option value="on">On Pitch</option>
-            </select>
-          </div>
-        )}
-
-        <div className="flex items-center gap-1 rounded-lg px-3 py-1.5 bg-white border border-gray-200">
-          <span className="text-xs text-gray-400 font-medium">Min GP:</span>
-          <input type="number" min="0" value={minGames || ''} onChange={e => onMinGamesChange(parseInt(e.target.value) || 0)}
-            className={`w-12 p-0.5 bg-transparent border-none text-xs text-gray-700 outline-none`} />
-        </div>
-
-        <div className="relative flex-1 min-w-[120px] max-w-[200px]">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-400" />
-          <input type="text" placeholder="Search..." value={search || ''} onChange={e => onSearchChange?.(e.target.value)}
-            className={`w-full pl-7 pr-3 py-1.5 ${inputBase}`} />
-        </div>
       </div>
     </div>
   );
